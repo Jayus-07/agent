@@ -364,3 +364,9 @@
 - 将最新 `origin/main`（`0841387`）合入本分支，生成合并提交 `316d4c0`。两分支只共同修改 `.github/workflows/rag_smoke.yml`，合并树预检无冲突；保留了双方不同的测试项。本工作树的 `.playwright-mcp/` 仍未跟踪、未提交。
 - 在整合后的分支复跑：SQL 评测/预检/Golden/Prompt 134 passed；Reporter 提示契约 20 passed；会话、RAG、引用和 Trace 后端 104 passed；前端 8 个定向文件 113 passed；`git diff --check` 通过。
 - 当前企业助手分支自己的 PR 尚未创建/合并。在线 SQL v5、真实 RAG 召回与引用、浏览器体验、完整 Conversation-first 流程仍为 UNVERIFIED；PR #471 的合并不替代这些验收。
+
+## 2026-11-16：修复 PR #472 Review 意见
+
+- Review 指出 Reporter 多步引用和 SQL 摘要契约测试没有进入 RAG Smoke 定向清单；已加入 `test_reporter_multi_rag_citations.py` 和 `test_reporter_prompt_contract.py`。
+- Review 复现了单步 RAG 正文保留 `[E3]`、SSE `done.sources` 却重编号为 1 的错位。Reporter 现在复用单步快速路径判定，并让来源提取保留原编号；新增回归断言正文、来源卡及 `done.sources` 都对应编号 3。
+- 修复后的 Reporter 相关测试 38 passed，RAG Smoke 路径/工作流契约测试 28 passed，Python `py_compile` 与 `git diff --check` 通过。修复提交推送后仍需复核 PR #472 最新 HEAD 的 CI 和 Review；真实 API/运行验收仍为 UNVERIFIED。

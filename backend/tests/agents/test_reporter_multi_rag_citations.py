@@ -226,6 +226,32 @@ def test_single_rag_output_keeps_citations_with_parseable_sources():
     assert "引用来源未能对应" not in answer
 
 
+def test_single_rag_passthrough_keeps_body_and_source_card_indexes_aligned():
+    step_results = {
+        "rag": _rag_step(
+            "制度规定的报销范围见第 4 页 [E3]，申请流程需要按章节材料核对。"
+            "\n\n---\n\n### 参考文献\n\n"
+            "3. **报销制度.pdf** (制度规范) — 第 4 页 · 申请流程 "
+            "<!--doc:manual-v1-->\n"
+        ),
+    }
+
+    answer = generate_final_answer(
+        "报销流程是什么？",
+        step_results,
+        context_filter=False,
+        allow_llm=False,
+    )
+    sources = _extract_sources_from_steps(step_results)
+    done = make_done_event(answer, step_results, start_time=time.time())
+
+    assert "第 4 页 [E3]" in answer
+    assert [(source["index"], source["filename"]) for source in sources] == [
+        (3, "报销制度.pdf"),
+    ]
+    assert done["data"]["sources"] == sources
+
+
 def test_llm_reporter_receives_renumbered_rag_evidence(monkeypatch):
     from types import SimpleNamespace
 

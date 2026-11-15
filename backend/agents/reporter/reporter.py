@@ -65,6 +65,26 @@ def strip_rag_meta(text: str) -> str:
     return text
 
 
+def _single_rag_passthrough_step(step_results: dict) -> dict | None:
+    """返回唯一实质 RAG 步骤，条件与答案快速路径保持一致。"""
+    rag_steps = {
+        sid: sr for sid, sr in step_results.items()
+        if sr.get("capability") == "rag.search" and sr.get("status") == "success"
+        and sr.get("output") and len(str(sr.get("output", ""))) > 50
+    }
+    other_meaningful = [
+        sid for sid, sr in step_results.items()
+        if sr.get("capability") != "rag.search"
+        and sr.get("output")
+        and len(str(sr.get("output", "")).strip()) > 30
+        and "无结果" not in str(sr.get("output", ""))
+        and "未找到" not in str(sr.get("output", ""))
+    ]
+    if len(rag_steps) == 1 and not other_meaningful:
+        return next(iter(rag_steps.values()))
+    return None
+
+
 # =====================================================
 # LangGraph 节点适配器
 # =====================================================
@@ -313,21 +333,8 @@ def generate_final_answer(
         step_results = filter_step_results(step_results, question)
 
     # —— 快速路径：RAG 有结果且其他步骤无实质输出时，直接透传 ——
-    rag_steps = {
-        sid: sr for sid, sr in step_results.items()
-        if sr.get("capability") == "rag.search" and sr.get("status") == "success"
-        and sr.get("output") and len(str(sr.get("output", ""))) > 50
-    }
-    other_meaningful = [
-        sid for sid, sr in step_results.items()
-        if sr.get("capability") != "rag.search"
-        and sr.get("output")
-        and len(str(sr.get("output", "")).strip()) > 30
-        and "无结果" not in str(sr.get("output", ""))
-        and "未找到" not in str(sr.get("output", ""))
-    ]
-    if rag_steps and len(rag_steps) == 1 and not other_meaningful:
-        rag_step = next(iter(rag_steps.values()))
+    rag_step = _single_rag_passthrough_step(step_results)
+    if rag_step:
         rag_output = rag_step.get("output", "")
         if rag_output:
             if isinstance(rag_output, str):
@@ -1138,6 +1145,14 @@ def _extract_rag_references(step_results: dict) -> str:
 def _extract_sources_from_steps(step_results: dict) -> list[dict]:
     """从 RAG step_results 中提取结构化来源"""
     from backend.agents.reporter.context_filter import parse_sources_from_text
+
+    passthrough_step = _single_rag_passthrough_step(step_results)
+    if passthrough_step:
+        # 单步透传保留工具正文中的原始编号，来源卡也必须保留该编号。
+        passthrough_output = str(passthrough_step.get("output", ""))
+        passthrough_sources = parse_sources_from_text(passthrough_output)
+        if passthrough_sources:
+            return passthrough_sources
 
     sources = _build_rag_citation_context(step_results)["sources"]
     if sources:

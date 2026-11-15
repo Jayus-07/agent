@@ -292,6 +292,8 @@ jobs:
             backend/tests/rag/test_chain.py \
             backend/tests/rag/test_rag_answer_status.py \
             backend/tests/agents/test_reporter_result_kind.py \
+            backend/tests/agents/test_reporter_multi_rag_citations.py \
+            backend/tests/test_reporter_prompt_contract.py \
             backend/tests/orchestration/graph/test_sql_result_cards.py \
             backend/tests/memory/test_message_codec.py \
             backend/tests/rag/test_chunk_pages_locality.py \
