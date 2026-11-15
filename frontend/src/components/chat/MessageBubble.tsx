@@ -124,6 +124,7 @@ function MessageBubbleImpl({ message, isLast, sessionId, question, budgetBlocked
                   <RagAnswerHint
                     answerStatus={message.answerStatus}
                     confidence={message.confidence}
+                    hasSources={Boolean(message.sources?.length)}
                   />
                 )}
                 {/* 参考来源置于正文之下（浅色卡片） */}

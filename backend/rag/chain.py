@@ -1015,11 +1015,31 @@ class RAGChain:
         else:
             self._record_rag_metric("hit")
 
-        if any(
+        partial_retrieval = any(
             (doc.metadata or {}).get("_mq_partial")
             or (doc.metadata or {}).get("_retrieval_partial")
             for doc in result.get("context", [])
-        ):
+        )
+        if partial_retrieval:
+            from backend.rag.evidence_gate.models import (
+                ANSWER_STATUS_RETRIEVAL_DEGRADED,
+            )
+
+            # 正文已经说明检索不完整；同时把同一终态带给 SSE/History 和 Trace，
+            # 让用户提示、会话恢复与排障记录不再只靠解析回答文案。
+            try:
+                get_context().meta["answer_status"] = (
+                    ANSWER_STATUS_RETRIEVAL_DEGRADED
+                )
+            except Exception:  # noqa: BLE001 — 状态留痕不能丢弃已有证据答案
+                logger.debug("RAG 部分检索状态写入请求上下文失败", exc_info=True)
+            try:
+                trace.metadata["answer_status"] = (
+                    ANSWER_STATUS_RETRIEVAL_DEGRADED
+                )
+            except Exception:  # noqa: BLE001 — Trace 留痕不能丢弃已有证据答案
+                logger.debug("RAG 部分检索状态写入 Trace 失败", exc_info=True)
+
             answer = (
                 "提示：部分知识库检索路径未能完成，以下内容仅依据已检索到的资料，"
                 "可能不完整。\n\n"

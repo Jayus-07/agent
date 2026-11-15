@@ -9,6 +9,7 @@ from backend.agents.reporter.reporter import (
     _append_degraded_disclosure,
     _failure_text,
     _result_kind,
+    generate_final_answer,
 )
 
 
@@ -60,3 +61,29 @@ def test_disclosure_still_appended_for_real_degradation():
     out = _append_degraded_disclosure(
         "正常答案", {"direct_1": _sr(degraded=True)})
     assert "降级" in out and out != "正常答案"
+
+
+def test_sql_table_keeps_delimited_and_multiline_values_in_one_cell():
+    output = {
+        "columns": ["商品", "备注", "金额"],
+        "rows": [{
+            "商品": "A|B",
+            "备注": "第一行\n第二行 *重点* <标签>",
+            "金额": None,
+        }],
+        "row_count": 1,
+    }
+    rendered = generate_final_answer(
+        "查询商品结果",
+        {"s1": {
+            "capability": "sql.query",
+            "description": "查询结果",
+            "status": "success",
+            "output": output,
+        }},
+        context_filter=False,
+        allow_llm=False,
+    )
+
+    assert "查询成功，共 1 行。" in rendered
+    assert "| A\\|B | 第一行 / 第二行 \\*重点\\* &lt;标签&gt; | — |" in rendered

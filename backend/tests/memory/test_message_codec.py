@@ -1,6 +1,7 @@
 """L2 持久化与恢复 LangChain 文本消息的契约。"""
 
 import asyncio
+import json
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -10,6 +11,7 @@ from backend.context_budget.auto_compact import _format_conversation
 from backend.memory.message_codec import restore_message, role_label, serialize_message
 from backend.memory.models.session import ChatMessage, ChatSession
 from backend.memory.repository.session_repo import SessionRepository
+from backend.memory.service import _history_message_payload
 from backend.memory.session import SessionMemory
 
 
@@ -99,8 +101,28 @@ def test_session_repository_save_turn_uses_typed_l2_messages():
             async with factory() as db:
                 repository = SessionRepository(db)
                 await repository.get_or_create("l2-runner-turn", "user-2")
+                sql_results = [{
+                    "title": "本月销售额",
+                    "columns": ["月份", "销售额"],
+                    "rows": [["2026-11", 12345]],
+                    "total_rows": 1,
+                    "total_rows_known": True,
+                    "omitted_columns": 0,
+                }]
+                answer_metadata = {
+                    "sql_results": sql_results,
+                    "sources": [{
+                        "index": 1, "filename": "员工手册.pdf", "doc_type": "policy",
+                        "type_label": "制度", "score": 0.8, "pages": [4],
+                        "section": "请假制度", "doc_id": "policy-doc",
+                    }],
+                    "answer_status": "rag_retrieval_degraded",
+                    "confidence": 0.42,
+                    "reply_source": "knowledge_base",
+                }
                 question_row, answer_row = await repository.save_turn(
                     "l2-runner-turn", "用户问题", "最终回答",
+                    assistant_metadata=answer_metadata,
                 )
                 await db.commit()
 
@@ -121,6 +143,9 @@ def test_session_repository_save_turn_uses_typed_l2_messages():
                 assert [message.content for message in restored] == [
                     "用户问题", "最终回答",
                 ]
+                assert answer_row.message_metadata["response_metadata"]["sql_results"] == sql_results
+                assert answer_row.message_metadata["response_metadata"] == answer_metadata
+                assert restored[1].response_metadata == answer_metadata
         finally:
             await engine.dispose()
 
@@ -153,3 +178,153 @@ def test_message_codec_rejects_unsupported_or_inconsistent_payloads():
     })()
     with pytest.raises(ValueError, match="role 与 message_type"):
         restore_message(bad_row)
+
+
+def test_history_api_payload_only_exposes_allowlisted_assistant_metadata():
+    from datetime import datetime, timezone
+
+    row = type("HistoryRow", (), {
+        "id": 9,
+        "role": "assistant",
+        "content": "销售额为 12,345。",
+        "created_at": datetime(2026, 11, 15, tzinfo=timezone.utc),
+        "message_metadata": {
+            "response_metadata": {
+                "sql_results": [{
+                    "title": "销售额", "columns": ["金额（元）"],
+                    "rows": [[12345]], "total_rows": 1, "omitted_columns": 0,
+                    "total_rows_known": True,
+                    "sql": "SELECT secret_column FROM private_table",
+                }],
+                "sources": [{
+                    "index": 1, "filename": "员工手册.pdf", "doc_type": "policy",
+                    "type_label": "制度", "score": 0.9, "pages": [4, 0, True, "5"],
+                    "section": "请假制度", "doc_id": "policy-doc",
+                    "version_id": "v2", "effective_from": "2026-01-01",
+                    "effective_to": "2026-12-31",
+                    "supersedes_version_id": "internal-only",
+                    "private_text": "不要返回原文内容",
+                }],
+                "answer_status": "rag_retrieval_degraded",
+                "confidence": 0.42,
+                "reply_source": "knowledge_base",
+                "private_internal": "do not expose",
+            },
+            "other_metadata": "do not expose",
+        },
+    })()
+    payload = _history_message_payload(row)
+
+    assert payload["sql_results"] == [{
+        "title": "销售额", "columns": ["金额（元）"],
+        "rows": [[12345]], "total_rows": 1, "total_rows_known": True,
+        "omitted_columns": 0,
+    }]
+    assert payload["sources"] == [{
+        "index": 1, "filename": "员工手册.pdf", "doc_type": "policy",
+        "type_label": "制度", "score": 0.9, "pages": [4],
+        "section": "请假制度", "doc_id": "policy-doc",
+        "version_id": "v2", "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+    }]
+    assert payload["answer_status"] == "rag_retrieval_degraded"
+    assert payload["confidence"] == 0.42
+    assert payload["reply_source"] == "knowledge_base"
+    assert "private_internal" not in str(payload)
+    assert "other_metadata" not in str(payload)
+    assert "private_text" not in str(payload)
+    assert "supersedes_version_id" not in str(payload)
+    assert "secret_column" not in str(payload)
+
+
+def test_history_api_marks_legacy_sql_total_unknown():
+    from datetime import datetime, timezone
+
+    row = type("HistoryRow", (), {
+        "id": 12,
+        "role": "assistant",
+        "content": "查询结果",
+        "created_at": datetime(2026, 11, 15, tzinfo=timezone.utc),
+        "message_metadata": {
+            "response_metadata": {
+                "sql_results": [{
+                    "title": "订单查询", "columns": ["订单号"],
+                    "rows": [], "total_rows": 0, "omitted_columns": 0,
+                }],
+            },
+        },
+    })()
+
+    sql_result = _history_message_payload(row)["sql_results"][0]
+
+    assert sql_result["total_rows"] == 0
+    assert sql_result["total_rows_known"] is False
+
+
+def test_history_api_bounds_sql_result_sets_rows_cells_and_payload_size():
+    from datetime import datetime, timezone
+
+    columns = [f"列{i}" for i in range(15)]
+    rows = [["值" * 200 for _ in columns] for _ in range(25)]
+    row = type("HistoryRow", (), {
+        "id": 10,
+        "role": "assistant",
+        "content": "查询结果",
+        "created_at": datetime(2026, 11, 15, tzinfo=timezone.utc),
+        "message_metadata": {
+            "response_metadata": {
+                "sql_results": [{
+                    "title": "T" * 200,
+                    "columns": columns,
+                    "rows": rows,
+                    "total_rows": 100,
+                    "omitted_columns": 0,
+                    "internal": "不应返回",
+                } for _ in range(4)],
+            },
+        },
+    })()
+
+    sql_results = _history_message_payload(row)["sql_results"]
+
+    assert len(sql_results) <= 3
+    assert len(sql_results[0]["title"]) <= 120
+    assert len(sql_results[0]["columns"]) == 12
+    assert sql_results[0]["omitted_columns"] == 3
+    assert len(sql_results[0]["rows"]) <= 20
+    assert all(len(cell) <= 160 for row_values in sql_results[0]["rows"]
+               for cell in row_values if isinstance(cell, str))
+    assert len(json.dumps(sql_results, ensure_ascii=False).encode("utf-8")) <= 48 * 1024
+    assert all("internal" not in result for result in sql_results)
+    assert any(result.get("payload_truncated") for result in sql_results)
+
+
+def test_history_api_replaces_nested_sql_cell_with_safe_placeholder():
+    from datetime import datetime, timezone
+
+    row = type("HistoryRow", (), {
+        "id": 11,
+        "role": "assistant",
+        "content": "查询结果",
+        "created_at": datetime(2026, 11, 15, tzinfo=timezone.utc),
+        "message_metadata": {
+            "response_metadata": {
+                "sql_results": [{
+                    "title": "明细", "columns": ["值"],
+                    "rows": [[{"private_text": "internal payload"}]],
+                    "total_rows": 1, "omitted_columns": 0,
+                }],
+            },
+        },
+    })()
+
+    sql_result = _history_message_payload(row)["sql_results"][0]
+
+    assert sql_result["rows"] == [[None]]
+    assert sql_result["truncated_cells"] is True
+    assert "internal payload" not in str(sql_result)
+
+    row.role = "user"
+    user_payload = _history_message_payload(row)
+    assert "sources" not in user_payload
+    assert "answer_status" not in user_payload

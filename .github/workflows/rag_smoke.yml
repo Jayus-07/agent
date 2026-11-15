@@ -292,6 +292,11 @@ jobs:
             backend/tests/rag/test_chain.py \
             backend/tests/rag/test_rag_answer_status.py \
             backend/tests/agents/test_reporter_result_kind.py \
+            backend/tests/agents/test_reporter_multi_rag_citations.py \
+            backend/tests/test_reporter_prompt_contract.py \
+            backend/tests/orchestration/graph/test_sql_result_cards.py \
+            backend/tests/memory/test_message_codec.py \
+            backend/tests/rag/test_chunk_pages_locality.py \
             backend/tests/test_citation_formatter.py \
             backend/tests/api/test_evaluation_runs_list.py \
             backend/tests/api/test_cs_knowledge_search_rag.py \
@@ -348,6 +353,8 @@ jobs:
             backend/tests/test_mcp_returnfix_acceptance.py \
             backend/tests/sql/test_sql_production_closure.py \
             backend/tests/sql/test_sql_scope_subquery.py \
+            backend/tests/sql/test_sql_router_examples.py \
+            backend/tests/evaluation/test_sql_eval.py \
             backend/tests/rag/test_parser_resource_budgets.py \
             backend/tests/rag/test_lifecycle_publication_guard.py \
             backend/tests/api/test_cs_dashboard_knowledge.py \

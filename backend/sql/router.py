@@ -47,6 +47,10 @@ def _build_keyword_map() -> None:
             "采购": ["inventory.purchase_orders"],
             "仓库": ["inventory.warehouses", "inventory.inventory"],
             "退款": ["order.refunds", "order.orders", "product.products"],
+            "退款率": [
+                "order.refunds", "order.order_items", "order.orders",
+                "product.products",
+            ],
             "退货": ["order.refunds"],
             "利润": ["finance.daily_profit", "order.order_items", "product.products"],
             "财务": ["finance.expenses", "finance.daily_profit"],
@@ -86,9 +90,20 @@ def _keyword_match(question: str) -> list[str]:
     _build_keyword_map()
     matched: set[str] = set()
     q_lower = question.lower()
-    for kw, tables in _KEYWORD_TABLE_MAP.items():
-        if kw in q_lower:
-            matched.update(tables)
+    matched_keywords = [
+        (kw, tables)
+        for kw, tables in _KEYWORD_TABLE_MAP.items()
+        if kw in q_lower
+    ]
+    for keyword, tables in matched_keywords:
+        # 更具体的业务词（如“退款率”）覆盖其子串泛词（“退款”），
+        # 避免泛词覆盖具体指标所需的完整候选表集合。
+        if any(
+            keyword != specific_keyword and keyword in specific_keyword
+            for specific_keyword, _ in matched_keywords
+        ):
+            continue
+        matched.update(tables)
     return list(matched)
 
 

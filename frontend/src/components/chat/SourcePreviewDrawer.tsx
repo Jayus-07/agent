@@ -9,6 +9,7 @@
  * 实现要点：
  * - 二进制端点带 Authorization，<iframe>/<embed> 无法自定义头 →
  *   fetch blob → pdfjs getDocument({ data }) 直接喂字节；
+ * - Markdown、文本、CSV、JSON、XML 和 HTML 以纯文本显示，避免执行文件内容；
  * - pdfjs 动态 import（避免 SSR 拉起 worker，也缩小首屏包体）；
  * - 初始页 = 引用页 pages[0]，页脚可翻页；bbox 页内高亮属 P2（元数据已有）。
  */
@@ -17,6 +18,7 @@ import { ChevronLeft, ChevronRight, FileText, Loader2, X } from 'lucide-react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { bearerHeaders } from '@/lib/auth'
 import { formatSourcePages } from '@/lib/ragAnswer'
+import { getSourcePreviewKind } from './sourcePreview'
 
 interface SourcePreviewDrawerProps {
   docId: string
@@ -27,6 +29,9 @@ interface SourcePreviewDrawerProps {
 }
 
 export default function SourcePreviewDrawer({ docId, filename, pages, onClose }: SourcePreviewDrawerProps) {
+  const previewKind = getSourcePreviewKind(filename)
+  const [textContent, setTextContent] = useState<string | null>(null)
+  const [textTruncated, setTextTruncated] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   // v6 语义：销毁走 loadingTask.destroy()（会连带释放文档），doc 实例单独持有用于翻页
   const taskRef = useRef<{ destroy: () => void } | null>(null)
@@ -47,14 +52,30 @@ export default function SourcePreviewDrawer({ docId, filename, pages, onClose }:
     setLoading(true)
     setError('')
     setNumPages(0)
+    setTextContent(null)
+    setTextTruncated(false)
     ;(async () => {
       try {
+        if (!previewKind) {
+          setError('此文件格式暂不支持在线预览')
+          setLoading(false)
+          return
+        }
         const resp = await fetch(`/api/rag/documents/${docId}/file`, {
           headers: bearerHeaders(),
         })
         if (cancelled) return
         if (!resp.ok) {
           setError(resp.status === 404 ? '原文不存在或无权限查看' : '原文服务暂不可用，请稍后重试')
+          setLoading(false)
+          return
+        }
+        if (previewKind === 'text') {
+          const text = await resp.text()
+          if (cancelled) return
+          const maxChars = 200_000
+          setTextContent(text.slice(0, maxChars))
+          setTextTruncated(text.length > maxChars)
           setLoading(false)
           return
         }
@@ -89,7 +110,7 @@ export default function SourcePreviewDrawer({ docId, filename, pages, onClose }:
       }
       pdfRef.current = null
     }
-  }, [docId])
+  }, [docId, filename, previewKind])
 
   // 渲染当前页到 canvas（序号守卫防快速翻页的乱序回写）
   useEffect(() => {
@@ -158,7 +179,22 @@ export default function SourcePreviewDrawer({ docId, filename, pages, onClose }:
           {!loading && error && (
             <div className="flex h-full items-center justify-center text-sm text-text-muted">{error}</div>
           )}
-          <canvas ref={canvasRef} className={`mx-auto block bg-white shadow-card ${loading || error ? 'hidden' : ''}`} />
+          {!loading && !error && previewKind === 'text' && textContent !== null && (
+            <div className="mx-auto max-w-3xl rounded-lg bg-white p-5 shadow-card">
+              <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-6 text-text-primary">
+                {textContent}
+              </pre>
+              {textTruncated && (
+                <p className="mt-4 border-t border-border-subtle pt-3 text-xs text-text-muted">
+                  原文较长，仅显示开头 20 万个字符。
+                </p>
+              )}
+            </div>
+          )}
+          <canvas
+            ref={canvasRef}
+            className={`mx-auto block bg-white shadow-card ${loading || error || previewKind !== 'pdf' ? 'hidden' : ''}`}
+          />
         </div>
 
         {!loading && !error && numPages > 0 && (

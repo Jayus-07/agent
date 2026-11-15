@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--dataset", type=str, default=None, metavar="FILE",
-        help="自定义评测集文件名（如 custom.json），用 rag runner 跑该评测集",
+        help="自定义评测集（相对 datasets/）；默认按 RAG 运行，搭配 --module sql 可做 SQL 结果评测",
     )
     parser.add_argument(
         "--selection", type=str, default=None, metavar="NAME",
