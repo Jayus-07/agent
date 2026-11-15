@@ -357,3 +357,10 @@
 - 组合测试暴露出 Prompt Registry 会优先使用数据库里的已发布版本；只更新 YAML 默认模板不能保证运行中的旧版摘要模板包含用户问题及 SQL 事实约束。旧模板模拟此前未覆盖这一情况。
 - Reporter 现在在调用层保证用户问题进入摘要提示，并追加不会被已发布模板覆盖的事实边界：只根据核实数据作答、不推算数值或范围、预览不用于全量排名、空明细不能冒充零条记录、省略数据不得猜测。没有写入或更新共享 Prompt 数据。
 - 新增旧模板兼容回归；Reporter 定向测试 20 passed，SQL 评测/预检/Golden/Prompt 组合 134 passed，SQL 结果卡片 39 passed。离线回归证明调用契约；共享数据库里当前启用的 Prompt 版本、真实 SQL 结果和浏览器回复仍为 UNVERIFIED。
+
+## 2026-11-15：PR #471 合并后对齐验收分支
+
+- 资料链路会话的 PR #471（`codex/file-quality-main-followup-20261114`）已合并，merge SHA 为 `08413877d0b44fa3701fe06066261f59871df380`。复核该会话的工作树仍停在 `cad34bb`，仅保留未跟踪 `.playwright-mcp/`；当前会话未修改或同步该工作树。其最新记录说明 CI 和安全检查通过，但没有部署、真实 API 验收或写共享知识库。
+- 将最新 `origin/main`（`0841387`）合入本分支，生成合并提交 `316d4c0`。两分支只共同修改 `.github/workflows/rag_smoke.yml`，合并树预检无冲突；保留了双方不同的测试项。本工作树的 `.playwright-mcp/` 仍未跟踪、未提交。
+- 在整合后的分支复跑：SQL 评测/预检/Golden/Prompt 134 passed；Reporter 提示契约 20 passed；会话、RAG、引用和 Trace 后端 104 passed；前端 8 个定向文件 113 passed；`git diff --check` 通过。
+- 当前企业助手分支自己的 PR 尚未创建/合并。在线 SQL v5、真实 RAG 召回与引用、浏览器体验、完整 Conversation-first 流程仍为 UNVERIFIED；PR #471 的合并不替代这些验收。
