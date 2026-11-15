@@ -431,7 +431,7 @@ class CitationFormatter:
 
         cited = self._extract_cited_indexes(answer)
 
-        seen: dict[object, dict] = {}
+        seen: dict[tuple[str, str], dict] = {}
         for doc in docs:
             idx = doc.metadata.get("index")
             fname = doc.metadata.get("source_file", doc.metadata.get("source", ""))
@@ -440,8 +440,10 @@ class CitationFormatter:
             # 有引用标注时仅保留文中实际引用的来源；无引用时兜底展示全部
             if cited and idx not in cited:
                 continue
-            # 显式引用逐编号保留页码；无引用兜底按文件去重，避免重复候选来源卡。
-            identity = idx if cited else fname
+            doc_id = str(doc.metadata.get("doc_id", "") or "").strip()
+            version_id = _display_version_id(doc.metadata)
+            # SourceCard 按文档版本去重；具体引用编号和章节由参考文献/证据单独保留。
+            identity = (doc_id or str(fname), version_id)
             if identity not in seen:
                 doc_type = doc.metadata.get("doc_type", "")
                 score = doc.metadata.get("score",
@@ -468,12 +470,10 @@ class CitationFormatter:
                 if section:
                     source["section"] = section
                 # 原文预览钥匙（P1）：doc_id → /rag/documents/{doc_id}/file
-                doc_id = str(doc.metadata.get("doc_id", "") or "").strip()
                 if doc_id:
                     source["doc_id"] = doc_id
                 # 版本快照（A3）：REST 与 chat SourceCard 都必须能回答
                 # 「这条答案使用的是哪一版」，不能只依赖 detail 端点补查。
-                version_id = _display_version_id(doc.metadata)
                 if version_id:
                     source["version_id"] = version_id
                 for field in ("effective_from", "effective_to"):

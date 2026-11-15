@@ -370,3 +370,9 @@
 - Review 指出 Reporter 多步引用和 SQL 摘要契约测试没有进入 RAG Smoke 定向清单；已加入 `test_reporter_multi_rag_citations.py` 和 `test_reporter_prompt_contract.py`。
 - Review 复现了单步 RAG 正文保留 `[E3]`、SSE `done.sources` 却重编号为 1 的错位。Reporter 现在复用单步快速路径判定，并让来源提取保留原编号；新增回归断言正文、来源卡及 `done.sources` 都对应编号 3。
 - 修复后的 Reporter 相关测试 38 passed，RAG Smoke 路径/工作流契约测试 28 passed，Python `py_compile` 与 `git diff --check` 通过。修复提交推送后仍需复核 PR #472 最新 HEAD 的 CI 和 Review；真实 API/运行验收仍为 UNVERIFIED。
+
+## 2026-11-16：处理 PR #472 离线 CI 回归
+
+- PR #472 的 `acb9df9` 离线预检失败于两个既有契约：同一文档的不同章节应合并成一张 SourceCard，而不同文档版本仍需分别显示。问题来自引用时按引用编号去重，与来源卡片按文档聚合的既有行为冲突；章节级引用证据仍由独立证据提取逻辑保留。
+- `extract_sources()` 已改为按文档 ID（缺失时按文件名）和版本 ID 去重；增加同一文档两个版本分别保留来源卡的回归测试。来源卡片、章节引用证据的职责保持分开。
+- 本地运行 `test_citation_formatter.py` 与 `test_cs_eval_kb_contract.py`：59 passed。该修复尚未推送，需提交至 PR #472 并等待最新 HEAD 的离线 CI 通过；真实 API/运行验收仍为 UNVERIFIED。

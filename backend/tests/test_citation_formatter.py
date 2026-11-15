@@ -185,6 +185,19 @@ class TestExtractSources:
         assert len(result) == 1
         assert result[0]["index"] == 1  # 第一个
 
+    def test_same_document_different_versions_keeps_both_source_cards(self, f):
+        d1 = _doc(1, "same.txt", rerank_score=0.8)
+        d2 = _doc(2, "same.txt", rerank_score=0.7)
+        d1.metadata.update(doc_id="policy", version_id="v1")
+        d2.metadata.update(doc_id="policy", version_id="v2")
+
+        result = f.extract_sources([d1, d2], "[1] [2]")
+
+        assert [(source["index"], source["version_id"]) for source in result] == [
+            (1, "v1"),
+            (2, "v2"),
+        ]
+
     def test_unknown_type_uses_raw(self, f):
         d = _doc(1, "a.txt", doc_type="custom_type")
         result = f.extract_sources([d], "")
