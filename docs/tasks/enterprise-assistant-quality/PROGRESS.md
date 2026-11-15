@@ -374,5 +374,5 @@
 ## 2026-11-16：处理 PR #472 离线 CI 回归
 
 - PR #472 的 `acb9df9` 离线预检失败于两个既有契约：同一文档的不同章节应合并成一张 SourceCard，而不同文档版本仍需分别显示。问题来自引用时按引用编号去重，与来源卡片按文档聚合的既有行为冲突；章节级引用证据仍由独立证据提取逻辑保留。
-- `extract_sources()` 已改为按文档 ID（缺失时按文件名）和版本 ID 去重；增加同一文档两个版本分别保留来源卡的回归测试。来源卡片、章节引用证据的职责保持分开。
-- 本地运行 `test_citation_formatter.py` 与 `test_cs_eval_kb_contract.py`：59 passed。该修复尚未推送，需提交至 PR #472 并等待最新 HEAD 的离线 CI 通过；真实 API/运行验收仍为 UNVERIFIED。
+- 提交 `fe14a27` 首次按文档 ID（缺失时按文件名）和版本 ID 去重，并增加跨版本来源卡回归。本地 `test_citation_formatter.py` 与 `test_cs_eval_kb_contract.py` 共 59 passed；新 HEAD 离线 CI 为 2369 passed、1 failed，唯一失败是同文档不同页的显式引用必须分别保留页码来源卡。
+- 当前修正仅在回答显式引用来源时将页码纳入去重键：不同页的引用定位分别显示；没有正文引用时仍按文档版本合并候选卡。章节级事实证据仍由独立提取逻辑保留。三个引用相关测试文件 84 passed，Reporter 多步引用/提示契约/结果类型 38 passed；修正尚待提交并重新等待 PR #472 CI；真实 API/运行验收仍为 UNVERIFIED。

@@ -431,7 +431,7 @@ class CitationFormatter:
 
         cited = self._extract_cited_indexes(answer)
 
-        seen: dict[tuple[str, str], dict] = {}
+        seen: dict[tuple[str, str, tuple[int, ...]], dict] = {}
         for doc in docs:
             idx = doc.metadata.get("index")
             fname = doc.metadata.get("source_file", doc.metadata.get("source", ""))
@@ -442,8 +442,10 @@ class CitationFormatter:
                 continue
             doc_id = str(doc.metadata.get("doc_id", "") or "").strip()
             version_id = _display_version_id(doc.metadata)
-            # SourceCard 按文档版本去重；具体引用编号和章节由参考文献/证据单独保留。
-            identity = (doc_id or str(fname), version_id)
+            pages = _parse_pages_raw(str(doc.metadata.get("pages", "") or ""))
+            # 显式引用时按页区分定位；无引用兜底按文档版本合并候选卡。
+            cited_pages = tuple(pages) if cited else ()
+            identity = (doc_id or str(fname), version_id, cited_pages)
             if identity not in seen:
                 doc_type = doc.metadata.get("doc_type", "")
                 score = doc.metadata.get("score",
@@ -463,7 +465,6 @@ class CitationFormatter:
                     source["department"] = department
                 # 原文定位（P0）：页码（切分层回映射的标量逗号串）+ 章节标题；
                 # 坏数据（非数字段）跳过该页，宁缺勿错
-                pages = _parse_pages_raw(str(doc.metadata.get("pages", "") or ""))
                 if pages:
                     source["pages"] = pages
                 section = str(doc.metadata.get("section_title", "") or "").strip()
