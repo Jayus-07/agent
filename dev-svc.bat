@@ -100,10 +100,20 @@ set "TARGET="
 set "YES=0"
 for %%a in (%*) do (
     set "TOK=%%~a"
-    if /i "!TOK!"=="/y" set "YES=1"
-    if /i "!TOK!"=="-y" set "YES=1"
-    if /i "!TOK!"=="--yes" set "YES=1"
-    if not "!TOK:~0,1!"=="/" (
+    set "IS_CONFIRM_FLAG=0"
+    if /i "!TOK!"=="/y" (
+        set "YES=1"
+        set "IS_CONFIRM_FLAG=1"
+    )
+    if /i "!TOK!"=="-y" (
+        set "YES=1"
+        set "IS_CONFIRM_FLAG=1"
+    )
+    if /i "!TOK!"=="--yes" (
+        set "YES=1"
+        set "IS_CONFIRM_FLAG=1"
+    )
+    if "!IS_CONFIRM_FLAG!"=="0" if not "!TOK:~0,1!"=="/" (
         if "!ACTION!"=="" (
             set "ACTION=!TOK!"
         ) else (
