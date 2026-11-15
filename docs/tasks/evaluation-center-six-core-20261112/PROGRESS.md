@@ -426,3 +426,175 @@
 
 - 普通重索引代次、候选 Trace 正式文件名、Chunk 来源元数据、PDF 预算硬停止相关后端定向测试 `8 passed`；管理端重索引状态 helper `3 passed`。对应共享测试库试点的 131 个 Chunk、23 Parent/108 Leaf、向量、原件哈希和 Trace 已在上节记录。
 - `git diff --check` 通过。重索引提示修复尚未在默认管理端重新构建和浏览器实测；42 份旧旅游资料仍未做生产批量重建，原件、历史 Trace 与质量警告的全量对齐仍未验收。
+
+## 2026-11-14 — 异常关机后继续资料质量验收
+
+- 资料质量工作树为 codex/file-quality-main-followup-20261114，HEAD 19eecf2（与当前 origin/main 一致）；追加本记录前跟踪文件无未提交改动；本轮只新增本进度文件。保留现有未跟踪 .playwright-mcp/ 验收产物。
+- 共享开发栈有 21 个容器运行；Backend /health 返回 ok，RAG、PostgreSQL、Redis 与主要 Worker 健康。Docker Desktop 与 Redis 的恢复记录见此前交接，不在本轮再次改动共享栈。
+- 原文件目录 生产文件/旅游业务资料/旅游知识库原文副本_待生产核验 仍有 42 个旅游原件；候选 福州-城市-福州.md SHA-256 为 4E3D2410A0B98CC55EF7C7552B3C12479ECD5CA1790E3D7119BAC2BB34FA9F1A。数据库里旧旅游文档的分块缺解析/切分版本和父子关系问题，沿用前面只读核对结果，尚未批量处理。
+- 本机 dev-local-models.bat status 显示本地 BGE 服务未运行，/healthz 连接被拒；宿主可用内存约 1.56 GB。按本机资源规则，本轮没有启动模型、没有重建/上传/重索引，也没有写知识库或向量数据。旧旅游资料的单文档真实重建暂时 BLOCKED，不把离线分析当作上传验收。
+- 本轮实际验证：代码树/分支状态、文件数与样本 SHA、Docker 健康和 Backend /health。本轮没有新增浏览器验收；此前管理端证据仍以各节保存的截图/YAML为准。
+- 下一步：宿主可用内存回到 2 GB 以上后，先按脚本状态检查启动现有 BGE 服务并确认真实预热成功；再选一份旧旅游原件放入隔离或版本化测试库，经过管理端上传/重建，核对分类、原件 SHA、Chunk/父子关系与版本元数据、向量/BM25、Trace 和实际检索。单份全链通过并留存前像后，才评估余下资料的批量修复；不直接批量改生产式 travel 库。
+
+## 2026-11-14 — 文件质量任务收尾与下会话交接口径
+
+- 用户问“测试文件覆盖测试面、生产文件覆盖业务、切分和 Trace 是否都没问题”：结论是否定的。已有部分原件哈希、入库样本、切分关系和管理端页面通过核验，不等于资料覆盖完整或全库验收通过。
+- 本机资料根目录：C:\Users\wh\Desktop\企业ai平台。测试资料在“测试文件”，生产候选资料在“生产文件”；项目数据库/向量库存放在共享 Docker/PostgreSQL/Chroma 服务，不在这个桌面目录。不可把本地副本数量当作项目库数量。
+- 28 份 RAG 上传样本位于 测试文件\RAG上传解析测试\testset\backend\evaluation\fixtures\rag_eval_kb\files；28 份原件 SHA 与清单相符。此前共享开发库记录为 23 份 active、4 份 failed、1 份未登记，尚未全部通过上传解析验收。百文档压力资料在 测试文件\检索问答测试资料\百文档压力测试库；旅游公开测试资料在 测试文件\旅游公开资料测试\维基百科来源文档；客服及业务夹具在 测试文件\客服与业务测试夹具。
+- 生产候选资料根目录为 生产文件。旧旅游候选在 生产文件\旅游业务资料\旅游知识库原文副本_待生产核验（42 份）；静态旅游资料在 生产文件\生成业务资料\旅游助手（6 份）；制度副本在 生产文件\企业制度与内部资料\公共制度知识库副本_待生产核验；生产目录还包含待确认合同/案例、失败员工手册和停用知识库资料。客服正式业务政策目前不足；不能把虚构客服演练资料或演示种子政策当作生产事实。
+- 关键资料说明：C:\Users\wh\Desktop\企业ai平台\README.md；知识库映射：C:\Users\wh\Desktop\企业ai平台\知识库与文件位置映射.md；验收和缺件记录在 测试文件\测试计划与验收文档\资料评审，包括 RAG评测资料充分性与生产资料缺口交接_2026-11-13.md、文件阶段验收_2026-11-13.md、生产资料验收_2026-11-13.md 和两份入库状态 CSV。README 中的开发库统计是 11/13 快照；后续数据库记录已变化，新的验收必须先只读重对账，不能照抄旧数字。
+- 已知切分与 Trace 边界：62 份抽样中原件、分块、向量可对应；旧旅游资料仍有解析/切分版本及父子关系缺口。管理端新分块详情和部分新 Trace 已验证；历史 Trace 有缺失，不能说全部可追溯。当前可见管理端/Registry 数量和 README 旧快照不一致，需重对账。
+- 新会话验收顺序：先只读重对账文件目录、SHA、项目 Registry 与管理端数量；按类型判定可复用/需重核/需补资料；逐项检查测试文件的上传解析和生产业务覆盖；资源允许后先在隔离/版本化测试库重建一份旧旅游文件，核对分类、切分、元数据、向量/BM25、Trace 和实际检索，再决定批量修复。不得直接批量重传生产式 travel 库。
+- 当前环境门槛仍是可用内存约 1.56 GB、本地 BGE 未运行。恢复到安全资源且模型健康前不启动新上传/索引；已有共享服务可用不代表 BGE 可用。本轮不提交进度文档改动。
+
+## 2026-11-14 — 本轮验收复核（本机资料、当前开发库、管理端 Trace）
+
+- 继续使用工作树 `C:\Users\wh\.codex\worktrees\evaluation-center-ui\agent`、分支 `codex/file-quality-main-followup-20261114`、HEAD `19eecf2`。保留开始前已有的 PROGRESS 未提交内容和 `.playwright-mcp/`；本轮只追加本段记录，并修改管理端 Trace 对缺失计数的显示。未提交、合并或部署。
+- 本机文件和项目库分开核对。测试样本 SHA：RAG 上传夹具 28/28 与 manifest 相同；项目 `rag_eval_kb` 当前 23 active（20 pass、3 soft_warning）、4 failed、`scanned_partial_fail.pdf` 未登记。4 份失败文件为 `doc_cn.pdf`、`progit_en_501p.pdf`、`progit_zh.pdf`、`report.pdf`；当前登记没有保存失败原因，不能推断根因。故 28 份样本覆盖了测试面，但不是 28/28 上传通过。
+- 94 份百文档压力资料的 SHA 均能匹配项目 `rag_100_docs` 的 94 个 active 文档；当前均为 success/soft_warning。它们能支撑压力/解析覆盖检查，不代表生产业务正确。
+- 旅游公开测试目录的 106 份正文是测试材料；与项目 `travel` 没有同 SHA 的原件，不能当成生产来源。客服专用语料 15 份正文中 13 份与当前客服 KB 同 SHA；`cs_eval_kb` 为空，夹具及虚构演练材料不能据此认定为正式客服政策。虚构物流 SOP 当前仍在 `policy_general` active/soft_warning，数据治理问题未修复。
+- 生产候选：旧旅游目录 42 份原件 SHA 均与 `travel` 记录匹配，其中 41 active、1 pending_review；静态旅游 6 份均匹配 active/pass。`travel` 当前 47 active 中有 41 soft_warning、6 pass，另有 1 pending_review。六份公共制度副本与 `policy_general` 同 SHA，但均为 soft_warning；失败员工手册、待确认合同/案例、停用库候选不能视为已核准业务来源。合同/案例目录没有在本轮查询的非 deleted 项目记录中找到匹配原件 SHA。当前 auth KB 状态为 15 active、5 inactive；inactive `biz_product`、`policy_finance`、`policy_hr` 下仍有 18 条 active registry 记录，管理端 active 列表不显示；桌面对应副本只有 16 份，HR 本机副本比库记录少 2 份。
+- 生产资料整体仍不足。缺件依据桌面《生产资料缺件清单》：正式制度及生效版本、经批准的客服服务规则/SLA、实际旅游服务范围/供应商/合同、生产 SQL schema 与数据/访问矩阵、角色及测试账号等。不能用测试问答、演示种子、虚构协议或本机副本补造事实。
+- 切分抽查：测试 KB `travel_eval_kb` 的 `厦门-城市-厦门.md` 原件 SHA 与 Registry 一致，状态 success/pass；解析输出 145 段，语义切分保留 131 块；Registry 与 chunk_store 数量一致，23 Parent/108 Leaf、无孤儿 Leaf、空元数据为 0；版本为 parser `v2` / `StructureChunkStrategy:v3`。DB 有 131 条 `chroma` 向量记录，处理步骤记载 embedding、vector_write、bm25_write 均 131/131；本轮没有做实际 BM25/向量检索查询，故只验了索引写入记录与向量数量，不验检索效果。
+- 旧旅游抽样 `福州-城市-福州.md` 本机 SHA `4E3D2410A0B98CC55EF7C7552B3C12479ECD5CA1790E3D7119BAC2BB34FA9F1A` 与交接记录一致；DB 111 个块（36 Parent/75 Leaf），数量吻合且无孤儿 Leaf，但 parser/chunk policy 版本均为空、质量为 soft_warning。当前 47 个 active travel 文档有 41 个缺 parser 或 chunk policy 版本；1 个文档没有 Parent 块，0 个 Leaf 缺 parent 指针。不能将少数结构通过外推为旧库全量通过。
+- Trace 持久化重新计数：active KB 中管理端可见 213 份 active 文档；22 份没有非空 Trace ID，174 份有 ID 但 `trace_store` 无详情，17 份有持久化 Trace 详情。更正此前交接口径中的 16/191 旧计数；以上是当前 DB 快照，内存缓存可能使个别记录仍可打开，但未逐一打开 213 条，不能说全量可追溯。
+- 已登录管理端此前实际打开 `travel_eval_kb` 的新 Trace `da4d80d49636`，文件名 `厦门-城市-厦门.md`、状态 SUCCESS、131 chunks、15 spans；Trace 与 run ID `d6eeb608-023d-4815-816d-cf865f8ce1f5` 对应。页面的 embedding 计数显示 0/0，但处理步骤及 131 条向量记录均为 131。根因是前端将 Trace 中缺失的 `attempted/succeeded` 当成数字 0。本轮已修正为缺字段时显示“Trace 未记录计数”，真实记录的零仍显示 0；这避免误报，但没有补造 Trace 缺失的计数。
+- 修复验证：`frontend-admin` 的 Trace 指标定向测试 10 passed；匹配 `page.test.tsx` 的 10 个页面测试 54 passed；`npm exec tsc -- --noEmit --pretty false` 通过；`git diff --check` 通过。当前 Playwright 默认会话打开管理端被重定向到登录页，匿名 Trace API 返回 401，因此**没有**在本轮修复后用已登录浏览器确认新文案；页面运行态验收仍为 UNVERIFIED。此前成功打开的浏览器 Trace 是修复前证据。
+- 本轮没有上传、重建、重索引、写数据库或改线上生产。模型服务上次状态检查为本地 BGE 未运行；曾见宿主内存低于 2 GB，后续检查回升，但没有启动模型。当前也没有对旧旅游库做批量修复或对隔离库重建。
+- 本轮结论：测试文件可复用作上传/压力测试素材，但上传结果未全通过；生产资料不足；新样本结构抽查通过、旧旅游版本元数据不足；新 Trace 单样本可追溯，历史 Trace 不完整。后续需先补齐并核准业务原件，再在资源和模型健康、可回滚隔离 KB 满足条件时做单份重建/检索验收；Trace 页面修复需在已登录管理端复验。当前验收总体为 PARTIAL / UNVERIFIED，不得报告全库 PASS。
+
+## 2026-11-14 — 跨类别样本与逐文件 Trace 复核
+
+- 对五类文件再次逐一对了本机原件 SHA 与当前 Registry：RAG 测试 PDF `contract_gf2017_0201_cn.pdf`=`7FAA2DF1B4B2BB05501CB5E003F3F7110152F1F5A87C8C3E71F8983FC86B0E96`；压力 PDF `contract_办公室租赁合同.pdf`=`244121407CCB4882C5F21B990CB53D510CDB07DF6F89002F76B8C86DE086843D`；客服夹具 `aftersales-details.md`=`8077E1CBC8240B3076B7DA43CE046BF7962BA6267AF9B2085E2786621D9A4168`；虚构夹具 `logistics_物流SOP.docx`=`497939550A9192E40B9D4774EF5D6E16415956698712F6B5041C4EC6F8CE102A`；静态旅游候选 `厦门-鼓浪屿历史背景.md`=`6F6DE59DFF9F9A14A358B5FD738977C90DBCBD8CD25F302190AF205DCB225994`。五份本机 SHA 均与对应项目记录相同。
+- RAG PDF 当前 active/soft_warning，parser v3、切分策略 v3，511 Registry 块=511 chunk_store=511 Chroma 向量；95 Parent/416 Leaf、无孤儿 Leaf、BM25 写入步骤 511/511。解析 629 段、OCR 9 页；元数据抽取为 fallback。该文件 Registry 行没有可供管理端文件按钮使用的非空 Trace ID；run 中虽有 Trace ID，但没有持久化 Trace 详情。
+- 百文档压力 PDF 当前 active/soft_warning，1 个 Registry 块=1 chunk=1 向量，BM25 步骤 1/1；parser/chunk 版本为空。单块没有 Parent 属于该样本结构。Trace ID `4acab375ffee` 在 Registry 操作记录中存在，但 `trace_store` 无详情。
+- 客服夹具 `aftersales-details.md` 当前误存在 `cs_policy` active/pass：33 块（8 Parent/25 Leaf）、33 向量，块和向量均有文件来源字段；Trace `f61d76481b0f` 已持久化，详情文件名准确，Trace 阶段均为 success。当前处理步骤未记录 BM25 写入阶段，BM25 实际条目未验；这仍是测试夹具，不证明正式客服政策覆盖。
+- 虚构物流 SOP 当前在 `policy_general` active/soft_warning：5 块（1 Parent/4 Leaf）、5 向量、BM25 步骤 5/5，但 parser/chunk 版本为空；Trace `430745d71a7e` 没有持久化详情。它仍误留在制度库，本轮未改库：按任务约束，修复前要备份并在隔离/版本化测试库先跑通；本地 BGE 未运行，当前不做重处理。
+- 静态旅游候选 `厦门-鼓浪屿历史背景.md` 当前 `travel` active/pass：parser v2、切分策略 v3，10 块（4 Parent/6 Leaf）、10 向量、BM25 写入 10/10；Trace `a79c91d92d59` 已持久化，Trace 标签文档名与 Registry 文件名相同，阶段均为 success。此处结构与处理通过不构成旅游业务事实审批。
+- 旧旅游样本 `福州-城市-福州.md` 当前 Trace ID `fd7a2d2d172e`，但 `trace_store` 无详情；详情页无法依靠持久化记录打开。旧旅游版本元数据问题仍待隔离重建验收。
+- 本轮生成逐文件 Trace ledger：`D:\tmp\evaluation-center-trace-ledger-20261114-225450441.csv`，共 213 行，对应当前 active KB 的每份 active 文档，列出 KB、文件名、doc_id、最近非空 Trace ID、持久化详情状态及 Trace 名称匹配结果。汇总为无 Trace ID 22、ID 无持久化详情 174、详情已存 17。17 条详情的 Trace `tags.doc_id` 全部匹配当前 Registry；其中 13 条标题文件名匹配、4 条 `travel` 标题是上传时生成的临时名（`厦门-鼓浪屿建筑风格.md`、`杭州-世界遗产主题.md`、`杭州-西湖与西溪主题线路参考.md`、`福州-城市文化主题.md`）。这四条 Trace 阶段成功且 doc_id 正确，但页面标题不对应当前文件名。
+- 已修正文件列表的 Trace 跳转：附带该行 Registry 文件名，详情页优先显示它；直接从通用 Trace 列表打开且没有文件名参数时仍显示 Trace 自身标题。指标修正与文件名修正的定向测试 11 passed，TypeScript `--noEmit` 通过。
+- 管理端仍未完成修复后浏览器验收。当前 `mcp__playwright` 会话进入 `/login`，匿名 Trace API 返回 401；本机用户已登录的浏览器标签不在当前可控浏览器会话中。共享 `agent` 栈已按 7.57 GB 预检恢复，当前 21 容器健康；宿主可用内存降至约 2.18 GB。仓库 `docs/operations/commands.md` 要求共享环境不擅自重建服务；因此不重建共享 `frontend-admin` 镜像，也不把工作树源代码改动说成已上线。浏览器运行态仍 UNVERIFIED。
+- 当前可完成项：跨类别样本 SHA/切分/向量和处理步骤抽查、213 条 Trace 持久化台账、Trace 标题和缺计数的前端修正及定向测试。仍不能通过安全写入解决的项：缺失的正式业务原件、旧旅游库版本/切分修复（需健康模型和隔离试点）、Trace 历史详情缺失（不从摘要伪造完整历史）、共享管理端修复后浏览器验收。
+
+## 2026-11-14 — 总目标收口前资源门槛复查
+
+- 用户重申总目标仅为本机资料覆盖、项目知识库切分质量、管理端 Trace 详情，本轮按此收口。
+- 最后资源复查：宿主可用内存 1.56 GB；既有 `agent` 共享栈 21 个容器运行；本地 BGE 显示 not running。按任务门槛，不启动模型、不重建/索引、不重建共享管理端服务。
+- 当前验收结论仍为 PARTIAL / UNVERIFIED：本机 SHA、项目 DB、跨类切分样本和 213 行 Trace 台账已核对；前端缺计数/错标题修正仅在工作树，定向测试 11 passed、TypeScript 检查通过，但当前 Playwright 会话仍跳登录，修复后的管理端运行态未验。正式业务资料、历史 Trace 持久化缺口不能由本机样本或摘要补造。
+
+## 2026-11-15 — 浏览器续验、生产政策补齐与验收收口
+
+- 工作树仍为 `C:\Users\wh\.codex\worktrees\evaluation-center-ui\agent`，分支 `codex/file-quality-main-followup-20261114`，HEAD `19eecf2`。保留了既有进度内容和 `.playwright-mcp/`；本次仅追加本记录与本任务的 Trace 页面改动，不提交、不合并、不部署。
+- 按用户授权生成四份可直接作为生产运行规则使用的政策文件：知识库准入与事实答复、客服答复与升级、旅游动态信息核验、内部知识访问与敏感资料发布。四份正文均有版本、生效日期、执行规则和发布检查，不含虚构的企业专属制度、退款数字、SLA、供应商、SQL Schema 或交易事实。桌面生产目录现有 95 个文件；登记表 12 行，逐行相对路径均存在且 SHA-256 全匹配。四份新增政策 SHA 分别为 `4dba63a6dd1f8e3a8b3cff1f473377b1b8e60932ec9d92d2a9a7a8fd44a32de8`、`dcb3256af9c524666314054e0589ba0473973585fe47c42ee1aa7eb7f84ee14a`、`f24773817bb372f842f8b7ccdcd96b79b6008bd2bfda84c2b76054e7aacd9e59`、`c4699546860de878acdee40f5ef6932528271f5bac2eec567403a1ba2add7960`。当前项目 Registry 对这四个哈希均无记录；本机源文件可用不等于项目库已覆盖。
+- 测试资料复核结论不变：28 份 RAG 原件 SHA 均与清单相符；项目 `rag_eval_kb` 为 23 active（20 pass、3 soft_warning）、4 failed、1 未登记，因此覆盖了上传测试素材面，但不是 28/28 通过。94 份压力资料均能匹配项目记录，状态全为 soft_warning。测试旅游文章、客服夹具和虚构演练材料仍不作为生产业务原文。
+- 生产候选仍不足以覆盖项目业务事实：42 份旧旅游候选中 41 active/soft_warning、1 pending_review；6 份静态旅游资料为 active/pass。新政策补齐了助手行为规则，但正式 HR/财务制度、实际商家合同与 SLA、退款/配送/退改条件、旅游服务范围与供应商、生产 SQL Schema/指标口径/访问矩阵仍缺。线上生产库未访问、未写入。
+- 切分仍是分层结论：测试 `travel_eval_kb` 厦门样本为 131 chunks（23 Parent、108 Leaf），无孤儿 Leaf；131 向量记录，BM25 写入步骤 131/131。旧 `travel` 库最近一次成功数据库快照为 1483 chunks（383 Parent、1100 Leaf），1058 Leaf 没有 parent 指针，358 Parent 没有子块，0 个带非空 parent 指针的孤儿 Leaf；47 active 文档中 41 份缺解析器或切分版本元数据。快照来自前一节记录的 2026-11-14 数据库只读核对；本次无数据库写入。
+- 真实浏览器在本工作树单独启动的管理端开发实例 `http://127.0.0.1:3201` 上验证；没有重建挂有多个工作树配置的共享 Compose 管理端。Trace `666de09032f8` 打开后，详情页正确显示文件 `杭州-世界遗产主题.md`，文件 doc_id 与 Trace tags 匹配，状态 SUCCESS、17 spans、11 chunks，向量嵌入 11/11；原 Trace 的 question 是临时上传名，页面使用文件列表传入的真实文件名。浏览器快照为 `.playwright-mcp/page-2026-11-14T15-56-17-088Z.yml`。
+- 逐文件浏览器/API 盘点见 `.playwright-mcp/trace-entry-audit-ops-admin-2026-11-14.json`：当前本机 `ops_admin` 按权限可见 94 份文件、8 个业务 KB；其中 4 个 Trace API 详情能打开并匹配文件身份，90 个返回 404；其余 90 个里 75 份能打开 doc_id/run_id 均匹配的真实处理运行记录，15 份没有可用运行记录。文件 `厦门-鼓浪屿历史背景.md` 的 Trace `a79c91d92d59` 在数据库存在且 doc_id 匹配，但缺 tenant_id，管理员 Trace API 按既有租户规则返回 404；页面正确转为“处理运行记录（非 Trace）”，显示匹配的运行 ID、文件 SHA 和 11 个已保存阶段，截图见 `.playwright-mcp/page-2026-11-14T15-49-05-373Z.yml`。不可把这 75 份运行记录称为完整 Trace，也不补造历史归属。该 API 盘点只覆盖此账号可见的 94 份，不代表测试库或其他租户可见。
+- Trace 页面修复补上了三项核验：文件入口同时传文件名、doc_id、run_id；Trace 的文档身份缺失或不匹配时不把它绑定到当前文件；Trace 不存在时只展示经 API 按 doc_id/run_id 校验的实际处理运行记录，并清楚标为“非 Trace”。Trace 计数缺失显示“未记录”，不再当成 0。定向测试 15 passed，`npm exec tsc -- --noEmit --pretty false` 退出码 0，`git diff --check` 通过。
+- 未执行任何上传、重建、重索引或数据库写入。备份 `D:\tmp\rag-policy-pilot-backup-20261114-232740\agent_memory.dump`（432,736,719 bytes，SHA-256 `F10AD5E64AE6D3BD63303731BD02EC9488EC2DFD134176BF095AC30696B7B371`）已在此前创建并通过 `pg_restore --list` 校验；本次没有使用它回滚，因为没有写入。上传试点仍未完成：本机账号为 `ops_admin`，创建隔离 KB 的项目 API 明确要求 `super_admin`；现有 `cs_eval_kb` 是 audience=test，也不能由该账号绕过权限上传。资源复查时宿主空闲内存约 3.25 GB，本地 BGE 未运行；未启动模型。后续 Docker 环境更新后 Docker named pipe 不可用，本次没有尝试启动共享栈。
+- 总体结论保持 PARTIAL / UNVERIFIED：政策源文件和管理端可访问的 Trace/运行记录已按用户角度实测；测试上传并非全通过，生产事实缺件仍在，旧旅游切分存在大量父子关系缺口，15 份管理端可见文件无可打开的历史 Trace 或运行阶段，新增政策尚未入项目库。下一步必须由具备本机 super_admin 权限的受控会话创建隔离/版本化试点 KB，并在重新确认资源与 BGE 健康后用一份已生成政策文件上传验解析、切分、向量/BM25、检索和新 Trace；未完成此项前不批量修复 travel，也不把生产政策源文件说成项目运行时已覆盖。
+
+## 2026-11-15 — 规则优先与 LLM 切分兜底设计
+
+- 用户确认的方向是：已识别结构优先使用确定性切分规则；只有原文已可解析但结构无法识别或规则质量不足时，才使用 LLM 提供切分边界。LLM 兜底频率需按格式、路由原因和策略版本统计；同类问题反复出现或超过按风险设定的预算时，进入解析器/规则升级与回归验证，不能长期把模型兜底当常规路径。
+- 已将设计目标写入 `docs/domains/rag.md`，并明确标记“当前尚未实现”。设计包含原文边界引用、覆盖/父子/来源定位门禁、失败不得发布、独立 Trace 与版本/用量字段，以及按分类型基线驱动的升级闭环。没有设未经验证的通用兜底率阈值。
+- 该设计没有更改切分实现、模型配置或数据库；没有上传或启动模型。企业文档参考了结构识别后再分块的布局管线、逐文件调试/复验及索引运行错误和告警监控做法。当前项目的 LLM 切分兜底仍未实现，需后续在隔离测试 KB 完成单文件试点后再评估启用。
+
+## 2026-11-15 — 规则优先兜底实现、统计和管理端复验
+
+- 本节更新上一节“仅设计、尚未实现”的历史结论：当前工作树已实现规则优先的 LLM 边界兜底。只有路由未识别结构，或规则切分覆盖审计发现缺口时才尝试 LLM；LLM 只分组解析器已有 AST 节点 ID，不生成或改写正文；分组必须保持原顺序、无缺漏重复且不跨章节，失败时保留规则结果。Parent/Leaf 仍由确定性规则代码生成。
+- 处理阶段 `chunking_llm_fallback` 会记录格式、触发原因、规则策略/版本、解析器版本、调用/采用/失败/跳过和输出块数。管理员统计接口按账号可见的租户、知识库、权限范围和部门汇总最近 30 天及每日趋势；默认同类调用达到 5 次只提示评估升级规则，可由 `RAG_LLM_CHUNK_RULE_REVIEW_THRESHOLD` 调整，不自动修改规则。管理端已增加“规则切分后的 LLM 兜底记录”面板。
+- 真实浏览器复验使用本工作树源码版前端 `http://127.0.0.1:3201` 和源码版 API。临时本机适配器仅允许 GET/HEAD；它先用既有共享网关验证当前 super_admin Bearer，再向源码 API 注入其可信身份，直接读取当前开发数据库；没有写数据库、上传、索引或重建。页面统计接口 `GET /api/rag/chunking/llm-fallback-stats?days=30` 和手动刷新均返回 200；响应为候选/调用/采用/失败/跳过/输出块全 0，`by_type`、`daily` 为空，与数据库 `chunking_llm_fallback` 阶段 0 条一致。没有实际调用模型，所以真实 LLM 输出、Provider 故障和阈值告警仍未验收。
+- 共享管理端 `http://127.0.0.1:3200` 以真实登录态请求同一统计接口返回 404“请求的资源不存在”，证明共享后端尚未加载本工作树代码。本轮未重建共享 Compose。源码版页面和 API 验证不等于共享版已部署。
+- Trace 入口真实浏览器复验两类记录：`厦门-城市-厦门.md` 的入口带入文件名、doc_id、SHA 和 run_id，详情显示 SUCCESS、131 块和 15 spans；页面将未写入的计数显示为“Trace 未记录计数”。`faq-exchange-repair.md` 的历史 Trace 详情不存在，页面明确标为“处理运行记录（非 Trace）”，用相同 SHA 找到 run `95bf4228-6f9f-4c9b-9ec9-1f32cd98d99f` 和 11 个阶段，并说明不能还原缺失 Span。浏览器证据已追加到 `.playwright-mcp/`：`page-2026-11-14T23-35-35-628Z.yml`、`page-2026-11-14T23-40-15-012Z.yml`、`page-2026-11-14T23-41-10-823Z.yml`、`page-2026-11-14T23-48-08-885Z.yml`、`source-stats-api-response-20261115.json`、`source-stats-network-20261115.txt`、`source-trace-network-20261115.txt`、`source-policy-registry-check-20261115.json`、`shared-stats-runtime-check-20261115.json`。旧 `.playwright-mcp/` 产物均未覆盖。
+- 生产资料事实核对：已生成的六份静态旅游资料所引用的福州政府、杭州市政府、杭州市文广旅游局线路 PDF、UNESCO 来源与正文关键事实相符。它们只支持列出的历史/文化/主题线路事实，不证明本平台服务、供应商、价格或实时运营覆盖。权威来源：[福州城市文化资料](https://www.fuzhou.gov.cn/zgfzzt/lswhmcgwh/zwgk/ztzl/bhqy/202403/t20240315_4792675.htm)、[三坊七巷官方介绍](https://www.fuzhou.gov.cn/zgfzzt/zjrc/mdfc/lswh/202508/t20250806_5058387.htm)、[杭州世界遗产政策](https://zfgb.hangzhou.gov.cn/10/107220263/t110220263074/530579.shtml)、[杭州西湖与西溪官方线路 PDF](https://wgly.hangzhou.gov.cn/module/download/downfile.jsp?classid=0&filename=c3ccb4250d3143a09047ee20fbe1170c.pdf)、[UNESCO 鼓浪屿页面](https://whc.unesco.org/en/list/1541/)。
+- 为使授权生成的客服政策可安全使用，发现 v1.0 在“无规则”场景默认声称“已转交人工核实”，与真实转接结果未确认时不得承诺的规则冲突。保留原件，生成并登记 v1.1 `客服知识答复与工单升级政策_v1.1.md`（SHA-256 `402d382778ecc87190bf88b17bccbd16dfe0c259ec4eafb3c73f950b91829591`）：只有接口确认成功时才报告已转接；状态未知时标为未知。桌面 `资料登记表.csv` 13/13 路径存在且哈希匹配，映射文件补充了 v1.1 当前版本及 v1.0 历史版本关系；两份登记文件的写前备份在 `D:\tmp\资料登记表-before-policy-v1.1-20261115.csv` 和 `D:\tmp\知识库与文件位置映射-before-policy-v1.1-20261115.md`。
+- 源码版管理端按文件名查询四类现行政策及客服 v1.0，5 次 API 请求均为 200、结果均为 0；新生成的政策文件仍不在项目 Registry。桌面生产目录现有 96 个文件；42 份旧旅游候选和 6 份静态旅游资料的数据库状态沿用前文只读对账：旧资料 41 active/soft_warning、1 pending_review，静态资料 6 active/pass。测试资料对账不变：28 份 RAG 原件 SHA 全匹配，但项目 `rag_eval_kb` 是 23 active（20 pass、3 soft_warning）、4 failed、1 未登记；94 份压力文件均匹配项目记录且全为 soft_warning。正式 HR/财务制度、适用商家的合同/SLA、真实退款配送/退改条件、旅游服务范围与供应商、生产 SQL Schema/指标口径/权限矩阵仍缺，生成的行为政策不能替代这些事实资料。
+- 切分与索引结论不变：`travel_eval_kb` 厦门样本的 131 块（23 Parent、108 Leaf）结构和父子关系通过；该次 131 条向量及 BM25 写入计数通过，但没有实际向量/BM25 检索。旧 `travel` 库仍有大量 Leaf/Parent 关联缺口和 41 份活动文档缺解析/切分版本；没有批量修复。
+- 实现的定向验证此前已实际执行：后端相关测试 74 passed、前端相关测试 66 passed、TypeScript `--noEmit`、`py_compile` 和 `git diff --check` 通过。本轮没有改运行时代码；最后仍会对新增记录复跑 `git diff --check`。开发浏览器、源码 API 和本地只读适配器均已停止。
+- 资源复核：可用内存约 2.92 GB；本地 BGE `127.0.0.1:8088/health` 不可达；共享 `agent` 栈的 app/worker healthy，但 Redis 容器正在重启。没有启动 BGE、上传、重建或写数据库。下一步只有在模型健康且资源重新核对后，才可用备份和隔离/版本化测试 KB 对一份政策文件跑完整解析、切分、向量/BM25、检索和新 Trace。当前总体仍为 `PARTIAL / UNVERIFIED`：规则兜底代码和统计页面源码已验，真实 LLM 兜底、共享运行时统计、生产业务事实覆盖和历史 Trace 补齐仍未通过；不批量改 `travel`，不把本机政策说成项目已发布。
+
+## 2026-11-15 — LLM 兜底真实调用失败定位与重复调用修复
+
+- 补充上一节记录后的运行验证：只用 6 段虚构设备故障文本在临时目录调用当前工作树 `parse_and_chunk_full`，未上传文档、未写知识库或向量索引。路由确认为 `RecursiveChunkStrategy`，触发 `no_recognized_structure`；解析器产出 6 个原文节点。真实调用前执行 `registry_store.refresh_registry()` 成功，切分角色继承已登记的 `doubao-seed-2.0-mini`；权限上下文使用本机真实 super_admin 登录身份。模型健康端点返回 healthy。
+- LLM 请求失败后，原规则结果安全保留：2 块（1 Parent、1 Leaf），覆盖缺口 0；本次没有 `chunking_llm_fallback` 持久化阶段，当前数据库此阶段总记录仍为 0，不能把临时内存记录冒充管理端累计数据。
+- 失败账务明细出现同一 request 的两条 `primary` 记录，均为 `error:APIConnectionError`，无 HTTP 状态码；预算日志对两次失败均按 `call_failed_possibly_billed` 保守结算，预留金额各 0.5（项目预算口径），实际供应商是否计费无法从本机证据确认。主机与 worker 容器到该 HTTPS Provider 的 TCP 443 均可达；这不能证明 API 层请求成功。为避免继续产生可能费用，本轮不再发真实模型请求。
+- 已定位重复请求原因：`invoke_metadata_llm` 原来把 `invoke()` 放在 thinking 能力检查的 `try/except` 内；对于当前模型，能力检查确实返回 thinking 可关闭参数。Provider 异常被错误当作能力检查异常捕获，随后又用普通参数再次请求。现已将调用移出该捕获范围，只有能力解析异常才改走普通参数；Provider 错误直接向上抛，由切分兜底保留规则结果。新增回归测试锁定“第一次 Provider 错误只调用一次，不发第二个请求”。定向测试 `backend/tests/infra/test_llm_role_resolution.py`：7 passed；`py_compile` 通过；代码修复后及本节文档追加后的 `git diff --check` 均通过。
+- 调用前数据库备份：`D:\tmp\rag-llm-fallback-live-test-backup-20261115\agent_memory.dump`，366,902,659 bytes，SHA-256 `29E39C3A6C6AB5929ECDF7C6FA2199FFB8F292D8E89D26ABAB7EEC9073290730`，`pg_restore --list` 列出 1,378 项。备份早于本次自动账务记录；没有恢复它，以免抹掉模型调用的真实账务留痕。
+- 统计功能仍是源码版通过、共享管理端未上线：源码 API 与页面先前只读复验为 200、当前 0 条；共享管理端接口为 404。LLM 调用没有生成或伪造统计阶段。
+- 最新资源检查：可用内存约 3.46 GB，本地 BGE 仍不可达；共享 `agent-redis-1` 仍在 Restarting，app 与 RAG worker healthy。本轮不上传、不重建、不索引、不改共享运行服务。全目标仍为 `PARTIAL / UNVERIFIED`；后续真实模型成功路径需在获授权的当前代码运行环境内用隔离单文件再验，完整索引试点还需 BGE 健康且 Redis 稳定；正式企业业务事实和历史 Trace 缺口仍需真实来源，不能生成虚构事实补齐。
+## 2026-11-15 — 当前库复核与验收结论更正
+
+- 本节以当前只读数据库、桌面文件 SHA、管理端浏览器/API 重新对账；它更正此前计数，不覆盖历史记录。工作树仍为 codex/file-quality-main-followup-20261114，HEAD 19eecf23302103f8431b9f2d59df43f6d9a0d202。
+- 上传夹具：桌面 RAG 28 份原件与仓库 manifest 为 28/28 SHA 匹配。当前 rag_eval_kb 有 27 个同名且哈希匹配的登记：23 active/success（20 pass、3 soft_warning）、4 failed；scanned_partial_fail.pdf 有一条处理运行但未进 Registry，运行错误为 request token budget 超限。4 个失败文件是 doc_cn.pdf、progit_en_501p.pdf、progit_zh.pdf、report.pdf；失败阶段和门禁错误见当前 rag_processing_runs。英文 ProGit 原件的 Poppler 只读检查报无效 XRef、缺失 endstream/trailer；本轮没有替换或重传。故测试文件覆盖了 PDF、DOCX、Markdown、TXT、CSV、XLSX 等上传类型，但 28 份处理结果并非全部通过，且这 5 份失败没有在 Registry 形成 5 个可用文档。
+- 压力样本：桌面 94/94 SHA 匹配 rag_100_docs 的 94 个 active 文档；94 个全为 soft_warning，94 个缺 parser 或 chunk policy 版本。不能按登记存在推成压力测试通过。
+- 旅游公开测试目录含 106 份文章正文和 1 份 资料说明.md（共 107 个 Markdown）；只用于测试。客服/制度虚构夹具也按测试资料处理，不得作为正式业务政策。
+- 生产候选：42 份旧旅游候选加 6 份静态旅游资料共 48 份，SHA 全部匹配当前开发库 travel。其中旧候选 41 active/soft_warning、1 pending_review；6 份静态资料 active/pass，静态资料处理版本为 parser v2 / StructureChunkStrategy:v3。这 6 份在 travel，不在 travel_eval_kb；travel_eval_kb 的 131 块厦门城市样本是另一份测试文件。桌面目前有 5 份授权生成的生产行为政策文件（客服 v1.1 为当前版，v1.0 保留历史），它们均未进入项目 Registry；它们可规定答复和升级行为，但不能补造正式 HR/财务制度、真实客服 SLA/退款配送条件、旅游服务范围/供应商/合同或 SQL 指标与权限事实。
+- 本节更正旧库父子关系结论：之前记录称福州旧样本无孤儿 Leaf，与当前 chunk_store.parent_chunk_id 原始行不符。现在 travel 共 1,614 块（406 Parent、1,208 Leaf），1,058 个 Leaf 的父块指针为空，358 个 Parent 没有任何 Leaf 指向；福州-城市-福州.md 的 111 块含 36 Parent、75 Leaf，75 个 Leaf 的父块指针和 chunk metadata 中的父块指针均为空。数据库里的块数和向量数相等不代表父子结构可靠。travel 47 个 active 文档中 41 个仍缺 parser 或 chunk policy 版本；本轮没有改写旧库。
+- 新样本结构仍有正向证据：travel_eval_kb/厦门-城市-厦门.md 为 131 块（23 Parent、108 Leaf、无空父指针 Leaf）、131 条 Chroma 向量，处理步骤记录 embedding/vector_write/BM25 为 131/131；上传测试 PDF contract_gf2017_0201_cn.pdf 为 511 块（95 Parent、416 Leaf、无空父指针 Leaf）、511 条向量、BM25 写入步骤 511/511。上述是解析/结构/索引写入证据，没有执行实际向量或 BM25 检索，不能据此宣称召回质量通过。
+- Trace 逐文件 API ledger .playwright-mcp/trace-entry-audit-superadmin-all-213-20261115.json 覆盖管理端可见的 213 份文件、3 页列表：191 份有 Trace ID；17 个 Trace API 详情返回 200 且 doc_id/kb_id 对应，其中 13 个标题文件名相符、4 个原始 question 仍是上传临时文件名；其余 196 份有 doc_id 和文件 SHA 匹配的持久化处理运行记录，未解析出 Trace Span；ledger unresolved 为 0。此结论是 17 份可看完整 Trace、196 份只能看处理运行记录，不是 213 份完整 Trace。
+- 已登录 super_admin 浏览器在源码前端 127.0.0.1:3201 实际打开了 杭州-世界遗产主题.md Trace：页面文件名正确、SUCCESS、11 chunks、17 spans；同时打开 help_center_mixed.md 的运行详情，显示 11 个阶段并标为 处理运行记录（非 Trace）。共享管理端仍使用旧运行代码，文件 Trace 03ff220fd5ed 返回 404 后可由匹配的 run fbe58d24-1a34-4d38-b2fb-c7ca148fe70c 打开非 Trace 运行详情。没有逐一用浏览器导航 213 个页面；全量是 API 对账，页面只对代表性成功 Trace 与运行记录做了真实点击/打开验证。
+- 规则优先、LLM 兜底的源码实现及统计口径已定向测试：每个 processing run 统计候选、调用、采用、Provider 失败、边界校验拒绝、未采用、跳过、输出块及格式/原因/版本和每日趋势；重复处理同一文件会重复计 run。LLM 只分组既有 AST 节点，规则仍生成 Parent/Leaf；同类次数达到阈值只提示人工升级规则，不自动改规则。当前 DB 兜底阶段 0 条。管理端源码对共享 API 请求 /api/rag/chunking/llm-fallback-stats?days=30 返回 404，因为共享后端未运行本工作树版本；本轮没有部署或重建共享服务。之前真实模型调用失败为 APIConnectionError，Provider 重复请求已修复；为避免重复产生可能费用，没有再次调用。
+- 最近一次资源复核：宿主可用内存约 3.29 GB；本地 BGE 127.0.0.1:8088 不可达；共享 app/worker healthy，但 Redis 容器正在重启。本轮只读，没有上传、重建、重索引、启动模型或写数据库。已有数据库备份仍可供后续受控回滚；完整单文件隔离试点需待模型/索引服务健康后再做。
+- 代码复验（本节之前已实际运行）：后端 LLM 兜底/统计相关 19 passed；管理端文件面板测试 6 passed；TypeScript --noEmit 通过。当前总体仍为 PARTIAL / UNVERIFIED：上传样本有失败、生产运行库未收录新生成政策、旧 travel 父子指针有大量缺失、没有真实检索验收、共享管理端统计接口未更新、历史完整 Trace 仅 17/213；不报告全目标 PASS。
+- 统计接口运行态补充：源码前端启动初期曾有一次请求返回 200；热更新后及后续重复请求多次返回 404，最终状态未稳定通过。根因尚未定位；不能以单次 200 宣称管理端持续统计可用。
+
+## 2026-11-15 — 统计漏记修复与当前管理端复验
+
+- 本轮重新检查宿主内存为 1.96 GB，低于既定 2 GB 门槛；Docker 仍是共享 `agent` 栈（20 个 running、1 个 restarting），BGE `/healthz` 为 200。没有重试模型或索引任务，也没有启动或重建服务。
+- 定位并修复统计漏记：原 SQL 通过 `EXISTS doc_registry` 限制处理记录，失败/未发布文档没有登记行时会从统计中消失。现改为按处理阶段保存的 tenant、KB、permission_scope、department 快照过滤，并由当前请求的 KB 授权、用户权限及部门范围收窄；不再要求 Registry 已发布。这样失败的 LLM 切分调用也进入规则升级统计，同时不展示文档名或正文。
+- 定向验证 `backend/tests/api/test_rag_processing_lineage_api.py`、`backend/tests/rag/test_processing_lineage_pg.py`、`backend/tests/rag/test_llm_fallback_chunking.py`：12 passed；相关文件 `py_compile` 和 `git diff --check` 通过。使用真实开发库和本工作树 API 路由的只读 TestClient 请求返回 200：最近 30 天候选 1、LLM 调用 1、Provider 失败 1、采用 0；分类为 `txt / no_recognized_structure / RecursiveChunkStrategy v2 / parser v1`，阈值 5 尚未提示升级。该记录来自真实失败试点，不是模拟统计。
+- 隔离试点运行 `llm-pilot-1016f26d450e4773b36d1a1008f636b0` 曾因进程内覆盖 embedding URL 导致 `INDEX_EMBEDDING_MISMATCH`，处理阶段虽成功并记录了真实 LLM Provider 失败，但索引未发布。已用试点专属状态门禁把遗留 `indexing` 标为 `failed/publish_guard`，避免管理端误显示仍在执行。项目 Registry 和 chunk_store 仍为 0；该试点的两个候选向量集合为 0 行；Trace `7708a4b7b978` 未持久化，管理端 Trace API 为 404，文档处理详情因没有 Registry 行返回“文档不存在”。没有伪造完整 Trace 或已发布文件。
+- 写入状态前复核备份 `D:\tmp\rag-llm-fallback-pilot-backup-20261115T0215\agent_memory.dump`，SHA-256 `9FD0D9113EB66525A0B4E5114586DE0026B5F0155783EAE6A06F123750A6B2AE`，`pg_restore --list` 1,378 项。已修复候选 BM25 路径计算与清理不一致的问题；新回归测试 `test_cleanup_candidate_by_generation_removes_bm25_sibling_stage` 通过。仅归档本次试点生成的 staging 到 `D:\tmp\rag-llm-fallback-pilot-20261115\archive-staging-d48e671f1ddf413c`，活动 BM25 `PUBLISHED.json` 保留。
+- 当前真实 super_admin 浏览器/API 证据：刷新会话 200；隔离 KB 文档查询 200、0 份文件；共享管理端 `/api/rag/chunking/llm-fallback-stats?days=30` 为 404，页面也没有“规则切分后的 LLM 兜底记录”面板，说明 3200 运行栈仍不是本工作树代码。此环境未获部署授权，未更新共享栈。当前源码 API 路由配真实 DB 的进程内验证是 200，不能等同于已上线页面。
+- Trace 实际页面复验：现有 `666de09032f8` 的管理端 Trace API 为 200，doc_id `e5d81e77f9`、KB `travel`、18 spans；数据库 Registry 文件名是 `杭州-世界遗产主题.md`。共享管理端页面仍显示临时名 `f8a045c71621.822e90b3aec84c7c.md`，即使 URL 带入 `documentName`、doc_id、SHA 和 run_id，证实文件名修复尚未进入 3200。试点 Trace 返回 404。浏览器快照为 `.playwright-mcp/page-2026-11-15T08-56-47-763Z.yml`、`.playwright-mcp/page-2026-11-15T08-57-38-114Z.yml`、`.playwright-mcp/page-2026-11-15T08-57-58-303Z.yml`；均保留。
+- 当前阶段结论仍为 `PARTIAL / UNVERIFIED`。可确认统计代码已能按失败调用/类型/每日趋势统计，但共享管理端尚未运行它；全程索引隔离试点未发布且没有持久 Trace；试点重试需可用内存至少达到 2 GB 后保持 DB embedding 配置不变，只用 socket 别名修正本机容器主机名。生产候选业务缺口、旧 `travel` 父子指针及历史 Trace 详情缺失仍按前节处理，不因本轮统计修复而改变。
+
+## 2026-11-15 — 持续统计、候选切分运行态和 Trace 复核
+
+- 继续在工作树 `C:\Users\wh\.codex\worktrees\evaluation-center-ui\agent`、分支 `codex/file-quality-main-followup-20261114`、HEAD `19eecf23302103f8431b9f2d59df43f6d9a0d202` 验收。仅追加本节；保留先前未提交进度和 `.playwright-mcp/` 产物；没有提交、合并或部署。
+- 文件对账结论不变：28 份 RAG 上传样本原件 SHA 28/28 与 manifest 相符，但当前 `rag_eval_kb` 是 23 active（20 pass、3 soft_warning）、4 failed、1 个解析运行未登记；94 份压力资料 SHA 94/94 与 `rag_100_docs` 相符，但均为 soft_warning 且缺版本字段。它们覆盖多种上传格式和压力面，不代表全部处理通过。
+- 生产候选 42 份旧旅游原件和 6 份静态旅游资料 SHA 均与开发库 `travel` 对应；旧候选 41 active/soft_warning、1 pending_review，静态资料 6 active/pass。桌面 5 份授权生成的行为政策仍未进入项目 Registry；它们可约束回答和升级行为，不能补齐真实 HR/财务制度、适用商家合同/SLA、退款配送和旅游服务事实、生产 SQL 指标及权限矩阵。生产业务覆盖仍不足，本轮没有改 `travel`。
+- 当前 `travel` 仍有 1,614 块（406 Parent、1,208 Leaf），其中 1,058 个 Leaf 缺父指针、358 个 Parent 无 Leaf 引用；47 个 active 文档中 41 个缺 parser 或 chunk policy 版本。旧库切分不可靠。相对地，`travel_eval_kb` 厦门样本 131 块（23 Parent、108 Leaf）父子关系完整；RAG PDF 样本 511 块（95 Parent、416 Leaf）父子关系完整，两者的向量数和 BM25 写入阶段计数与块数相符。此前隔离试点的 8 块样本还做过一次向量 Top-5 与 BM25 排名 1–4 的只读检索命中；不能把这些小样本外推到全库。
+- LLM 兜底统计代码按处理运行持续累计候选、调用、采用、Provider 失败、边界拒绝、未采用、跳过、输出块，并按知识库受众、格式、触发原因、规则/解析版本和日期分组。登录后的真实源码管理端页面与同源 API 曾实际返回 200，页面显示当时 4 个测试库候选/调用、3 次采用、1 次 Provider 失败、21 个输出块，且显示“测试观察（不触发升级）”。随后隔离运行新增一条失败调用；当前数据库仓储只读结果为候选 5、调用 5、采用 3、Provider 失败 2、边界拒绝 0、未采用 2、输出块 21，全部 audience=`test`，同类内部/对客规则复核均未触发。最新 5 次计数没有在中断后的浏览器页面再次刷新，因此最新 UI 数字仍未验；共享管理端 3200 未部署本工作树代码。
+- 复验切分文件名修复时，第一次试跑因工作树默认 BM25 快照目录不存在而在解析前失败。第二次显式使用隔离 BM25 快照，数据库中保留候选 generation `3786e80894714ec6`：2 个 chunk 向量（1 Parent、1 Leaf）和 1 个文档向量；原件 SHA 为 `b705ab61ef2468867ac9e6559c24eb6c7f9958b5e4772870c853a549c7d2d792`。逐行比较确认候选 chunk 的 `document_title` 与 `source_file` 都等于逻辑文件名，没有 `stage-...` 临时名泄漏，Leaf 父指针能对应 Parent。真实 `chunking_llm_fallback` 阶段因 Provider connection error 而未采用 LLM 边界；规则保留 2 块。
+- 第二次运行的处理阶段 Trace 已写入：processing run `190ba558-931f-4aab-9cb9-3a0d156f8cf4`、Trace ID `ac25d2d93f13`，12 个阶段记录中有 `chunking_llm_fallback=fallback/provider_or_runtime_error`、向量写入 2/2 和 BM25 候选写入 2/2。运行未到发布完成：`doc_registry` 仍只有此前活动试点，候选 generation 未进入活动代次，BM25 发布指针仍是旧 generation `1ec958babf124529`。因此只把候选元数据和阶段记录算作通过，不把这次文件算作成功入库或完整 Trace 页面通过。
+- 运行中 Docker Desktop/5433 开发数据库一度中断；Windows 原生 PostgreSQL 5432 是另一套数据库，本机试点行数为 0，没有拿它替代项目库。恢复的是现有共享 `agent` Compose 栈，没有新起第二套；其自动备份完成后，宿主可用内存曾降至约 1.06 GB，按 2 GB 门槛停止所有后续索引/模型工作。该次运行的索引状态已如实收口为 `failed/local_validation_interrupted`；首次预检失败的运行也收口为 `failed/local_validation_preflight`。两代候选向量仍保留，未删除活动数据。
+- 写入前备份之一：`D:\tmp\rag-llm-fallback-title-fix-20261115T183742-da76bf\agent_memory.dump`，366,951,038 bytes，SHA-256 `5888034b55eca7a018a9b7a79f877a44b004f2064cf0f0bb5bfd33f61ce4c8e8`；第二份：`D:\tmp\rag-llm-fallback-title-fix-retry-20261115T184136-10e7ab\agent_memory.dump`，366,951,127 bytes，SHA-256 `bd098f44ae2c917b28ae0ae2bae5112649dea46038adc3bc2536e35a0d94d24a`。当前 Docker 备份容器还生成并通过 `pg_restore --list` 检查了 `agent_memory-20261115-105921.dump`（TOC 1,368 项）；随后只更新了两条隔离运行状态，没有恢复或删除数据。
+- 管理端逐文件 API 对账仍是 214/214 个文件可打开详情路由：18 份有完整 Trace 详情、160 份有直接处理运行详情、36 份只有相同文件 SHA 的历史运行记录可回退查看；后 196 份不是完整 Trace。真实浏览器已分别打开过代表性完整 Trace 和历史运行详情；没有逐一用浏览器导航全部 214 页。新的未发布候选 Trace ID 虽在处理阶段数据库中存在，本轮没有在管理端页面单独打开它。
+- 本轮定向验证实际结果：后端统计/兜底 API 与仓储测试 `13 passed`；管理端文件统计与 Trace 页面 3 个测试文件 `23 passed`；`npx tsc --noEmit --pretty false` 退出码 0；切分标题回归用例 `1 passed`；Python 编译检查与 `git diff --check` 通过。`frontend-admin/tsconfig.json` 只移除了 Next 自动写入的 node_modules 缓存 include 行，保留其他未提交配置。
+- 结论仍为 `PARTIAL / UNVERIFIED`：测试素材齐全但有失败和软警告；生产行为政策已生成但未进入项目库，权威业务事实缺件；新样本切分结构有正向证据、旧 `travel` 父子结构不合格；Trace 详情可由管理端追到完整 Trace 或运行记录，但历史 Span 不足；统计持久化和测试库隔离升级规则已由当前 DB 证据验证，最新五次数字的页面刷新未验证；最新 LLM Provider 实际调用失败，第二次候选运行未发布。后续应在内存稳定高于 2 GB、BGE 与 Chat Provider 都经实时健康复验、数据库备份完成后，仅恢复一份隔离候选运行并验证发布与管理端 Trace；共享 3200 仍需另行部署授权，本轮没有部署。
+- 末次环境只读复核：宿主可用内存 2.59 GB，BGE `127.0.0.1:8088/healthz` 不可达，共享 `agent-redis-1` 刚重启、健康状态仍为 starting。数据库查询和验收记录已完成；未再启动模型、索引或上传任务。
+
+## 2026-11-15 — 浏览器复验、失败运行入口和资料版本修正
+
+- 继续使用工作树 `C:\Users\wh\.codex\worktrees\evaluation-center-ui\agent`，分支 `codex/file-quality-main-followup-20261114`，HEAD `19eecf23302103f8431b9f2d59df43f6d9a0d202`。保留已有未提交改动和 `.playwright-mcp/`；未提交、合并、部署或修改线上。
+- 在本工作树管理端预览 `127.0.0.1:3201` 用真实浏览器打开 Trace `666de09032f8`：页面成功显示数据库核对的文件名“杭州-世界遗产主题.md”和 SUCCESS。另打开 PDF 失败记录 `progit_en_501p.pdf`：Trace `04edf9cb8df7` 的 Trace API 为 404，页面按同文件 SHA 和处理运行号回退到明确标注“处理运行记录（非 Trace）”的页面，显示文件名、文档 ID、SHA、运行 ID、4 个阶段及 OCR 58/0 和质量门禁原因。快照分别为 `.playwright-mcp/page-2026-11-15T14-20-10-113Z.yml`、`.playwright-mcp/page-2026-11-15T14-22-19-770Z.yml`。
+- 实际浏览器发现失败 PDF 的 58 条模型用量行共用 `ocr` key，导致 57 条 React 重复 key 错误；已在处理运行详情列表 key 中加入行序号并增加回归用例。修复后新浏览器页控制台为 0 错误；管理端 Trace/失败详情 3 个定向测试文件 `24 passed`，`DocumentsPanel` 统计组件 `6 passed`，`tsc --noEmit --pretty false` 退出码 0。
+- 失败列表在当前共享后端运行态仍显示“质量门禁失败 0 份”，但先前数据库/API 核对有 4 份失败样本；本工作树后端现已补充文件名和 SHA，前端链接可带上 SHA 与 run ID。定向后端回归测试 `1 passed`；该测试对 Registry、失败记录存储、操作日志和质量详情使用 stub，不执行上传/索引。测试日志虽显示任务表 schema ensure，运行前备份 `agent_memory.dump` 的 TOC 已包含 `tasks` 与 `agent_checkpoints` 表。本轮没有改文件、chunk 或向量记录。当前共享后端没有这份修复，因此真实管理端列表尚未复验为 4 条。
+- 统计卡片在源码预览中可见，但浏览器请求 `/api/rag/chunking/llm-fallback-stats?days=30` 对当前共享后端返回 404，页面显示“请求的资源不存在”。本轮另以 PostgreSQL `default_transaction_read_only=on` 只读调用当前源码仓储复核：1 个可见统计范围、全部 audience=`test`，候选/LLM 调用/采用/Provider 失败/边界拒绝/未采用/跳过/输出块分别为 `5/5/3/2/0/2/0/21`；类型为 `txt + no_recognized_structure + RecursiveChunkStrategy v2 + parser v1`，按规则升级提示为 false。页面仍未通过当前共享 API 显示这些最新数值。没有直接启动当前工作树后端：检查到其启动阶段会设置 PostgreSQL checkpoint 表并预热主 LLM，当前 BGE 服务不可达；本轮不为只读验收触发这些启动副作用，也不部署共享服务。
+- 检查本机生成的四份当前生产行为政策，客服当前版为 v1.1；SHA-256 与登记表逐份比对 `4/4` 相符。发现 README 仍链接客服 v1.0，已更正为 v1.1 并标明 v1.0 是历史版；客服说明文件也已标注当前版本。政策可约束事实答复、权限、动态信息及人工升级，但不包含真实企业制度、商家合同、退款时限或生产指标，且四份均尚未入项目知识库。
+- 本轮 `git diff --check` 退出码 0（仅有 Windows CRLF 提示）。最终状态仍为 `PARTIAL / UNVERIFIED`：测试资料有覆盖但 4 份上传样本失败、1 份未登记，94 份压力资料有软警告；生产业务事实仍缺；旧 `travel` 分块/版本缺口未修；全库历史 Trace 仍不完整且没有逐页打开 214 个入口；LLM 统计源码和数据库记录存在，但当前管理端运行态 API 404。宿主可用内存约 2.92 GB，BGE 仍不可达；没有上传、重建或索引。
+
+## 2026-11-15 — 当前 3200 管理端、测试文件归属与成功 LLM 切分 Trace 复核
+
+- 保留此前未提交改动与 `.playwright-mcp/` 产物；本节只追加验收证据，没有写知识库、上传文件、重建索引、提交、合并或部署。
+- 使用真实登录 super_admin 浏览器在当前管理端 `127.0.0.1:3200` 复查：文档 API 三页返回 `100 + 100 + 14 = 214` 份，指纹均为 `1878941ffee0`。与已保存的 213 份逐文件 Trace 清单相比，ID 集合是原 213 份加一份隔离试点 `e74e5a7e88`，没有旧文件消失。原 213 份审计记录为 17 份完整 Trace、187 份同文件哈希且有步骤的处理运行详情、3 份运行无步骤、6 份入口不可用；新增试点 Trace 已另行在当前 3200 页面打开。按该清单和新增一条的证据，当前可确认至少 18 份完整 Trace、原 187 份处理运行详情等旧分类；本轮没有重新对原 213 个 API 入口逐一发请求，不能把新旧证据说成一次 214 项全量复扫。旧完整 Trace 中有 4 份展示名与逻辑文件名不匹配。
+- 真实管理端当前 `rag_eval_kb` 文档 API 返回 23 份 active。`/api/rag/upload-failures?limit=100` 返回 74 条：70 条 async_queue、4 份质量门禁记录。四份是 `UF-09-01 report.pdf`、`UF-13-01 doc_cn.pdf`、`UF-14-01 progit_en_501p.pdf`、`UF-14-02 progit_zh.pdf`；记录均有 OCR/PDF 原文覆盖缺口，`trace_id` 与 `processing_run_id` 为空，状态 `missing_historical`。所以它们有失败原因详情，但不能从历史 Trace 追溯处理过程。
+- 更正“UF-15-01 未登记”的旧口径：本机 `scanned_partial_fail.pdf` 为 2,308,571 bytes，SHA-256 `13a742fa8a93636ac9f45a59886357ebecb551c5849750534bd9e8e5585e6004` 与 28 文件 manifest 相符；它不在 `rag_eval_kb` 的 23 份活动文件或 4 份质量门禁中，却在另一个压力 KB `rag_upload_pressure_20261113` 的失败队列出现，错误为 `请求预算已超限: request_tokens`。Trace `90c00499af23` 的管理端 API 返回 200、19 spans；`tags.kb_id/doc_id` 为 `rag_upload_pressure_20261113 / 7eda758d38`，Check span 的 `file_hash` 与原件 SHA 完全相同。该 Trace 能确定是同一原件，但界面显示临时名 `b8ef59d4404c.8e4ff84a0c8a43a9.pdf`，不是逻辑文件名；它也没有落在 manifest 指定的 `rag_eval_kb`。因此不是完全没有上传，而是目标 KB 不匹配、处理因预算失败，不能算目标测试库验收通过，也不能声称 OCR 部分失败场景已按预期跑通。
+- 对新增隔离样本 `LLM切分闭环隔离试点-20261115-08f636b0.txt` 做了当前 3200 管理端、API 和 PostgreSQL 只读交叉核验。运行 `1623348e-c754-4b51-9af1-b16fda7525eb` 为 success、12 阶段；Trace `5af8ed4af36d` API 200，真实页面展开后显示正确文件名和 `LLM 切分边界兜底` 阶段，输入 `txt / no_recognized_structure / 4 source units`，规则 v2、parser v1，LLM 成功采用并产出 8 块。页面可读到 Provider、模型和 prompt/completion token 详情；整次 Trace 21 spans，运行耗时 12.6 秒但 SLA 阈值 10 秒，功能阶段成功、时延 SLA 未通过。
+- PostgreSQL `BEGIN READ ONLY` 查询确认该样本原件 SHA 与 Registry 一致；Registry 为 active/pass，8 个 chunk = 4 Parent + 4 Leaf，Leaf 父指针完整；`rag_vectors` 中此 doc 有 8 条 chunk 向量和 1 条 doc 向量。处理运行阶段记录 embedding/vector_write/BM25 写入分别 8/8、8/8、8/8；BM25 候选代次记录为 `chroma::cand:1ec958babf124529`。当前 `/app/data/bm25/PUBLISHED.json` 的 generation 是空字符串，尽管文档 Registry 的 active/index generation 是 `1ec958babf124529`；没有对本样本做 BM25 实际召回，因此只能认定候选写入步骤成功，不能把活动 BM25 代次和检索质量判为通过。
+- 同一只读数据库范围内近 30 天 LLM 切分聚合为候选/调用/采用/Provider 失败/边界拒绝/未采用/跳过/输出块 `5/5/3/2/0/2/0/21`；分组全为 audience=`test`，类型 `txt / no_recognized_structure / RecursiveChunkStrategy v2 / parser v1`。本次成功试点已经包含在 5 次统计中。源码规则是只有 `internal/customer` 类型达到阈值才提示人工升级，测试库不会触发生产升级提示。真实 3200 登录态请求 `/api/rag/chunking/llm-fallback-stats?days=30` 仍为 404；当前管理端没有这项持续统计总览，源码 API 与数据库结果不能替代运行页面验收。
+- 当前资源复核：宿主可用内存约 4.16 GB，Postgres、RAG service/worker healthy，Redis 容器仍在 restarting，本地 BGE `127.0.0.1:8088/healthz` 连接被拒。本轮没有因此启动上传或索引。先前本地源码预览将 `/api/...` 直接发到 ASGI 服务、没有 APISIX 的 `/api` 去前缀和可信身份注入，故其 404 仅是预览链路无效，不计作功能失败或通过；本轮确认该预览端口已释放。
+- 结论仍为 `PARTIAL / UNVERIFIED`。已证实规则优先、LLM 兜底存在一次真实成功并可从当前管理端看详情，统计数据可从真实数据库读取；未达标的是 UF-15-01 的目标 KB 与预期 OCR 失败测试、四个历史门禁失败无 Trace、旧库 `travel` 父子/版本问题、生产权威业务事实缺件、共享管理端统计接口 404、当前 BM25 代次/召回未验。后续先在不写库前复核 Redis、embedding/LLM 配置和备份；可先修复并重新验收统计页面的部署缺口，但不触碰线上或直接批量改 `travel`。
+
+## 2026-11-15 — LLM 统计运行态与 BM25 快照续验
+
+- 当前真实管理端 `127.0.0.1:3200/knowledge/workbench` 可见 214 篇文档，但没有“规则切分后的 LLM 兜底记录”统计卡片。用登录态 token 请求 `/api/rag/chunking/llm-fallback-stats?days=30` 返回 `404 NOT_FOUND`；浏览器页面因此不能显示当前 DB 统计。检查到工作树后端路由存在，而运行中的 `agent-app-1` 容器内路由文件没有该路径；本轮没有重建或替换共享服务，遵守“未经确认不部署”的边界。
+- 对统计功能在源码侧完成定向验证：`test_rag_processing_lineage_api.py -k llm_chunking_fallback_stats` 为 `1 passed, 1 deselected`；`test_processing_lineage_pg.py -k chunking_fallback_stats` 为 `2 passed, 5 deselected`；管理端 `DocumentsPanel.test.tsx` 的持续统计/规则升级提示用例为 `1 passed, 5 skipped`。这些证明源码契约与页面组件测试通过，不等于当前运行管理端已验收。
+- 按仓库要求把新增 RAG 链路的规则兜底、统计授权与聚合、测试库不触发生产升级、上传产物完整性等定向用例加入 `.github/workflows/rag_smoke.yml`；路径过滤与 CI 契约测试实跑 `28 passed`。
+- 重新检查 BM25 文件：`PUBLISHED.json` 的 `generation` 为空；同目录 `meta.json` 显示 `source=vectorstore`、collection `chroma`、`doc_count=6074`、`vector_count=6074`、构建时间 `2026-11-15 10:59:35`。这是按当前向量库生成的整库快照线索，空 generation 本身不足以判定失效；尚未对试点或其他样本做 BM25 实际召回与快照内容核验，因此检索质量仍未验收。
+- 当前宿主可用内存复核约 4.42 GB；共享 `agent-redis-1` 仍在重启，本地 BGE 服务此前健康探测仍连接失败。本轮没有上传、写库、索引或启动模型；BM25 写入阶段 8/8 只证明该运行写入步骤成功。
+- 本节后当前状态仍为 `PARTIAL / UNVERIFIED`：源码持续统计逻辑和真实 DB 记录可对账，但统计管理页面尚未在运行态出现；BM25 实际召回未验。其余缺件沿用上节，不将新增的单样本成功扩大成全库通过。

@@ -31,6 +31,97 @@ export function groupSpansByType(spans: Span[]): SpanTypeGroup[] {
   }));
 }
 
+export interface EmbeddingCounts {
+  attempted: number | null;
+  succeeded: number | null;
+  failed: number | null;
+}
+
+/** Trace 未记录的计数保持为空，不能显示成真实的 0。 */
+export function getEmbeddingCounts(metrics?: Span["metrics"]): EmbeddingCounts {
+  const readCount = (key: keyof NonNullable<Span["metrics"]>): number | null => {
+    const value = metrics?.[key];
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  };
+
+  return {
+    attempted: readCount("attempted"),
+    succeeded: readCount("succeeded"),
+    failed: readCount("failed"),
+  };
+}
+
+/** 汇总 chunk embedding 阶段，跳过仅写文档级向量的 embedding Span。 */
+export function getEmbeddingCountsFromSpans(spans: Span[]): EmbeddingCounts {
+  const chunkSpans = spans.filter((span) => (
+    span.id === "index_embed" || span.id.startsWith("index_embed#")
+  ));
+  const countedSpans = chunkSpans.length > 0
+    ? chunkSpans
+    : spans.filter((span) => (
+      (["attempted", "succeeded", "failed"] as const).some((key) => (
+        typeof span.metrics?.[key] === "number"
+      ))
+    ));
+  if (countedSpans.length === 0) return getEmbeddingCounts();
+
+  const sumCount = (key: keyof EmbeddingCounts): number | null => {
+    const values = countedSpans.map((span) => getEmbeddingCounts(span.metrics)[key]);
+    if (values.some((value) => value === null)) return null;
+    return values.reduce<number>((total, value) => total + (value ?? 0), 0);
+  };
+
+  return {
+    attempted: sumCount("attempted"),
+    succeeded: sumCount("succeeded"),
+    failed: sumCount("failed"),
+  };
+}
+
+/** 文件列表打开 Trace 时使用 Registry 文件名覆盖上传过程中的临时文件名。 */
+export function getTraceDocumentTitle(traceQuestion: string, documentName?: unknown): string {
+  const name = typeof documentName === "string" ? documentName.trim() : "";
+  return name || traceQuestion;
+}
+
+export function getTraceDocumentId(trace: {
+  tags?: Record<string, unknown>;
+  spans?: Array<{ metrics?: Record<string, unknown> }>;
+}): string | null {
+  const tagDocId = trace.tags?.doc_id;
+  if (typeof tagDocId === "string" && tagDocId) return tagDocId;
+  for (const span of trace.spans ?? []) {
+    const spanDocId = span.metrics?.doc_id;
+    if (typeof spanDocId === "string" && spanDocId) return spanDocId;
+  }
+  return null;
+}
+
+export function getTraceDocumentIdentityError(
+  actualDocId: string | null,
+  expectedDocId: string,
+): string | null {
+  if (!actualDocId) return "Trace 未记录文档 ID，无法确认属于当前文件";
+  return actualDocId === expectedDocId ? null : "Trace 记录的文档 ID 与当前文件不匹配";
+}
+
+export function getProcessingRunDetailError(
+  detail: { doc_id?: unknown; run_id?: unknown; file_hash?: unknown; error?: unknown } | null | undefined,
+  expectedDocId: string,
+  expectedRunId: string,
+  expectedFileHash?: string,
+): string | null {
+  if (!detail) return "处理运行详情为空";
+  if (detail.doc_id !== expectedDocId) return "处理运行对应的文档 ID 与当前文件不匹配";
+  if (detail.run_id !== expectedRunId) return "处理运行 ID 与请求记录不匹配";
+  if (typeof detail.error === "string" && detail.error.trim()) return detail.error;
+  if (
+    expectedFileHash
+    && String(detail.file_hash || "").toLowerCase() !== expectedFileHash.toLowerCase()
+  ) return "处理运行文件 SHA-256 与当前文件不匹配";
+  return null;
+}
+
 function getQualitySpan(spans: Span[]): Span | undefined {
   return spans.find((span) => span.id === "index_quality"
       && typeof span.metrics?.quality_score === "number")

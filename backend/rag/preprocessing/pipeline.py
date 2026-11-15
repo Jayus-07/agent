@@ -93,6 +93,12 @@ def parse_and_chunk(
 def parse_and_chunk_full(
     file_path: str, doc_type_hint: str = "", *,
     ocr_page_budget: int | None = None,
+    tenant_id: str = "",
+    kb_id: str = "",
+    permission_scope: str = "general",
+    department: str = "",
+    lineage_recorder=None,
+    trace_parent_span_id: str | None = None,
 ) -> tuple[List[Document], dict]:
     """parse_and_chunk 的完整版：额外返回 §5.1 质量门禁所需上下文。
 
@@ -199,6 +205,44 @@ def parse_and_chunk_full(
 
     stage_started = time.monotonic()
     chunks = strategy.split(normalized_ast, file_path)
+    # 规则优先：只有规则路由落到通用递归兜底，或规则覆盖审计发现缺口时，
+    # 才让 LLM 选择原 AST 节点边界。LLM 不得改写正文，失败就保留规则结果。
+    rule_coverage = coverage_audit(normalized_ast, chunks)
+    fallback_type = ""
+    if strategy.__class__.__name__ == "RecursiveChunkStrategy":
+        fallback_type = "no_recognized_structure"
+    elif rule_coverage.get("uncovered_count"):
+        fallback_type = "rule_coverage_gap"
+    llm_chunking = {}
+    if fallback_type:
+        from backend.rag.preprocessing.llm_fallback_chunking import (
+            apply_llm_boundary_fallback,
+        )
+
+        chunks, llm_chunking = apply_llm_boundary_fallback(
+            normalized_ast,
+            file_path,
+            doc_type,
+            fallback_type,
+            chunks,
+            tenant_id=tenant_id,
+            kb_id=kb_id,
+            permission_scope=permission_scope,
+            department=department,
+            rule_strategy=route_decision.strategy,
+            rule_version=route_decision.strategy_version,
+            lineage_recorder=lineage_recorder,
+            trace_parent_span_id=trace_parent_span_id,
+        )
+        if llm_chunking.get("applied"):
+            logger.info(
+                "[ChunkPipeline] LLM 边界兜底已通过原文分组校验："
+                "source_format=%s fallback_type=%s groups=%s output_chunks=%s",
+                normalized_ast.source_format or "unknown",
+                fallback_type,
+                llm_chunking.get("group_count", 0),
+                len(chunks),
+            )
     # 标题优先解析器显式识别；PDF 等无标题样式的格式回落到文件名
     # （2026-10-24：此前三份 PDF 全部块的 document_title 为空，向量前缀
     # 的【文档】上下文与来源卡展示失去文档级锚点）。
@@ -208,7 +252,9 @@ def parse_and_chunk_full(
         chunk.metadata["source_format"] = normalized_ast.source_format
         chunk.metadata["parser_version"] = normalized_ast.parser_version
         chunk.metadata["chunk_policy_version"] = (
-            f"{route_decision.strategy}:{route_decision.strategy_version}"
+            "LLMBoundaryFallback:v1"
+            if llm_chunking.get("applied")
+            else f"{route_decision.strategy}:{route_decision.strategy_version}"
         )
     stage_ms["split_ms"] = round((time.monotonic() - stage_started) * 1000)
 
@@ -267,8 +313,22 @@ def parse_and_chunk_full(
         "normalized_ast": normalized_ast,
         "completeness": report,
         "doc_type": doc_type,
-        "strategy_name": strategy.__class__.__name__,
-        "route_decision": route_decision.as_dict(),
+        "strategy_name": (
+            "LLMBoundaryFallback"
+            if llm_chunking.get("applied")
+            else strategy.__class__.__name__
+        ),
+        "route_decision": {
+            **route_decision.as_dict(),
+            **({
+                "base_strategy": route_decision.strategy,
+                "strategy": "LLMBoundaryFallback",
+                "strategy_version": "v1",
+                "fallback_type": fallback_type,
+                "fallback_applied": True,
+            } if llm_chunking.get("applied") else {}),
+        },
+        "llm_chunking": llm_chunking,
         "document_title": document_title,
         "section_tree": section_tree(normalized_ast),
         "source_format": normalized_ast.source_format,

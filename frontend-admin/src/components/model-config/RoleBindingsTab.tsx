@@ -69,6 +69,7 @@ const POLICY_PRESETS: Record<string, Pick<RolePolicy, 'fallbackModel' | 'timeout
   fallback: { fallbackModel: '', timeoutSeconds: 30, maxRetries: 0, failurePolicy: 'fail_fast' },
   doc: { fallbackModel: '', timeoutSeconds: 20, maxRetries: 1, failurePolicy: 'skip' },
   metadata_extract: { fallbackModel: '', timeoutSeconds: 20, maxRetries: 1, failurePolicy: 'skip' },
+  chunking: { fallbackModel: '', timeoutSeconds: 20, maxRetries: 0, failurePolicy: 'skip' },
   question_gen: { fallbackModel: '', timeoutSeconds: 20, maxRetries: 1, failurePolicy: 'skip' },
   table_describe: { fallbackModel: '', timeoutSeconds: 20, maxRetries: 1, failurePolicy: 'skip' },
   ocr: { fallbackModel: '', timeoutSeconds: 120, maxRetries: 0, failurePolicy: 'mark_failed' },

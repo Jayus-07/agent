@@ -236,6 +236,13 @@ jobs:
             backend/tests/rag/test_pdf_ocr.py::TestDashScopeUsageRecording::test_missing_provider_usage_is_not_recorded_as_free \
             backend/tests/rag/test_indexer_trace.py::test_doc_level_embedding_budget_failure_is_visible_in_trace \
             backend/tests/rag/test_indexer_trace.py::TestHappyPath::test_candidate_trace_displays_logical_filename \
+            backend/tests/rag/test_indexer_trace.py::test_candidate_indexing_does_not_skip_incomplete_same_hash_active_doc \
+            backend/tests/rag/test_candidate_publish.py::test_publish_does_not_mark_success_when_active_vectors_are_missing \
+            backend/tests/rag/test_llm_fallback_chunking.py \
+            backend/tests/rag/test_processing_lineage_pg.py::test_chunking_fallback_stats_are_scoped_to_processing_identity_snapshot \
+            backend/tests/rag/test_processing_lineage_pg.py::test_chunking_fallback_stats_do_not_signal_production_upgrade_for_test_kb \
+            backend/tests/api/test_rag_processing_lineage_api.py::test_llm_chunking_fallback_stats_route_uses_visible_scope \
+            backend/tests/api/test_rag_upload_artifact_completeness.py \
             backend/tests/api/test_rag_routes_regression.py::test_quality_failure_summary_reports_ocr_and_pdf_page_gaps \
             backend/tests/rag/test_chunk_governance_p0.py::test_coverage_audit_detects_missing_table_cell_and_row \
             backend/tests/rag/test_chunk_governance_p0.py::test_index_identity_clears_removed_parent_reference \

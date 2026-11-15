@@ -1,17 +1,24 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { getTraceById } from "@/lib/observability/source";
 import type { TraceRecord, Span } from "@/types/trace";
 import { statusBadge, formatTime, formatRelative } from "@/types/trace";
 import { knowledgeService } from "@/api/knowledge";
+import type { ProcessingRunDetail } from "@/api/knowledge";
 import { X, Loader2 } from "lucide-react";
 import {
   getLogicalStageSpans, getMetadataPerformanceWarning, getMetadataStageDuration,
   formatTracePageCount, getQualityScore, getQualityScoreBreakdown, getQualityWarning,
   getTraceCostDisplay, groupSpansByType,
+  getEmbeddingCountsFromSpans,
+  getTraceDocumentTitle,
+  getTraceDocumentId,
+  getTraceDocumentIdentityError,
+  getProcessingRunDetailError,
 } from "../trace-metrics";
+import ProcessingRunDetailView from "../processing-run-detail";
 import {
   getChunkHeading,
   SIMULATED_QUESTIONS_LABEL,
@@ -74,8 +81,16 @@ const CHUNK_METHOD_CN: Record<string, string> = {
 interface ChunkDetail { chunk_index: number; content: string; char_count: number; keywords: string; llm_keywords?: string; llm_model?: string; granularity?: string; parent_scope?: string; document_title?: string; section_title?: string; section_titles?: string[]; chunk_type?: string; doc_type?: string; simulated_questions?: string[]; }
 
 export default function DocTracePage() {
-  const { id } = useParams<{ id: string }>(); const router = useRouter();
+  const { id } = useParams<{ id: string }>(); const router = useRouter(); const searchParams = useSearchParams();
+  const documentName = searchParams.get("documentName") || "";
+  const documentIdParam = searchParams.get("docId") || "";
+  const fileHashParam = searchParams.get("fileHash") || "";
+  const runIdParam = searchParams.get("runId") || "";
+  const viewParam = searchParams.get("view") || "";
   const [trace, setTrace] = useState<TraceRecord | null>(null);
+  const [processingRun, setProcessingRun] = useState<ProcessingRunDetail | null>(null);
+  const [processingRunHistoryFallback, setProcessingRunHistoryFallback] = useState(false);
+  const [processingRunError, setProcessingRunError] = useState("");
   const [loading, setLoading] = useState(true);
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
   const [expandedMeta, setExpandedMeta] = useState<Set<string>>(new Set());
@@ -84,7 +99,135 @@ export default function DocTracePage() {
   const [chunkDetailLoading, setChunkDetailLoading] = useState(false);
   const [chunkDetailError, setChunkDetailError] = useState("");
 
-  useEffect(() => { let c=false; (async()=>{const t=await getTraceById(id); if(!c){setTrace(t);setLoading(false);}})(); return ()=>{c=true;}; }, [id]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setTrace(null);
+    setProcessingRun(null);
+    setProcessingRunHistoryFallback(false);
+    setProcessingRunError("");
+
+    const loadRunDetail = async () => {
+      if (!documentIdParam) {
+        if (!cancelled) setProcessingRunError("缺少文件 ID，无法核对历史处理记录");
+        return;
+      }
+      let firstError = "";
+      if (runIdParam) {
+        try {
+          const detail = await knowledgeService.getProcessingRun(documentIdParam, runIdParam);
+          const identityError = getProcessingRunDetailError(
+            detail, documentIdParam, runIdParam, fileHashParam,
+          );
+          const hasSteps = Array.isArray(detail?.steps) && detail.steps.length > 0;
+          if (!identityError && hasSteps) {
+            if (!cancelled) {
+              setProcessingRun(detail);
+              setProcessingRunHistoryFallback(false);
+            }
+            return;
+          }
+          firstError = identityError || "该运行没有保存阶段明细";
+        } catch {
+          firstError = "最近一次处理运行读取失败";
+        }
+      }
+
+      if (!fileHashParam) {
+        if (!cancelled) {
+          setProcessingRunError(firstError || "文件未提供 SHA-256，无法核对历史处理版本");
+        }
+        return;
+      }
+
+      try {
+        const history = await knowledgeService.getProcessingRuns(
+          documentIdParam, { page: 1, page_size: 100 },
+        );
+        const candidates = (Array.isArray(history?.items) ? history.items : [])
+          .filter((run: ProcessingRunDetail) => (
+            run?.run_id
+            && run.run_id !== runIdParam
+            && String(run.file_hash || "").toLowerCase() === fileHashParam.toLowerCase()
+          ));
+        for (const candidate of candidates) {
+          try {
+            const detail = await knowledgeService.getProcessingRun(
+              documentIdParam, candidate.run_id,
+            );
+            const identityError = getProcessingRunDetailError(
+              detail, documentIdParam, candidate.run_id, fileHashParam,
+            );
+            if (identityError || !Array.isArray(detail?.steps) || detail.steps.length === 0) {
+              continue;
+            }
+            if (!cancelled) {
+              setProcessingRun(detail);
+              setProcessingRunHistoryFallback(true);
+              setProcessingRunError("");
+            }
+            return;
+          } catch {
+            // 单条历史记录不可读时，继续核对下一条同 SHA 记录。
+          }
+        }
+        if (!cancelled) {
+          setProcessingRunError(
+            firstError
+              ? `${firstError}；未找到 SHA 一致且保存了阶段的历史运行`
+              : "未找到与当前文件 SHA 一致且保存了阶段明细的处理运行",
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setProcessingRunError(
+            firstError
+              ? `${firstError}；历史处理记录读取失败`
+              : "历史处理记录读取失败",
+          );
+        }
+      }
+    };
+
+    void (async () => {
+      if (viewParam === "unavailable") {
+        await loadRunDetail();
+        if (!cancelled) setLoading(false);
+        return;
+      }
+      if (viewParam === "processing-run") {
+        await loadRunDetail();
+        if (!cancelled) setLoading(false);
+        return;
+      }
+
+      const foundTrace = await getTraceById(id);
+      if (cancelled) return;
+      if (foundTrace) {
+        const identityError = documentIdParam
+          ? getTraceDocumentIdentityError(getTraceDocumentId(foundTrace), documentIdParam)
+          : null;
+        if (!identityError) {
+          setTrace(foundTrace);
+          setLoading(false);
+          return;
+        }
+        setProcessingRunError(identityError);
+      }
+      if (documentIdParam) {
+        await loadRunDetail();
+        if (!cancelled && foundTrace && documentIdParam
+          && getTraceDocumentIdentityError(getTraceDocumentId(foundTrace), documentIdParam)) {
+          setProcessingRunError((current) => current ? `Trace 已拒绝展示（文档 ID 不匹配）；运行记录读取失败：${current}` : "Trace 文档 ID 不匹配");
+        }
+      } else if (!foundTrace) {
+        setProcessingRunError("Trace 详情不存在或已过期，且没有关联的处理运行 ID");
+      }
+      if (!cancelled) setLoading(false);
+    })();
+
+    return () => { cancelled = true; };
+  }, [id, documentIdParam, fileHashParam, runIdParam, viewParam]);
   useEffect(() => { if (!chunkPanelOpen) return; const onKey=(e:KeyboardEvent)=>{if(e.key==="Escape")setChunkPanelOpen(false)}; window.addEventListener("keydown",onKey); return ()=>window.removeEventListener("keydown",onKey); }, [chunkPanelOpen]);
 
   const childSpans = useMemo(() => { if(!trace)return[]; return (trace.spans||[]).filter(s=>s.parent_id!==null).sort((a,b)=>spanOrder(a)-spanOrder(b)); }, [trace]);
@@ -140,7 +283,29 @@ export default function DocTracePage() {
   const handleOpenChunkDetail = async () => { if(!docId)return; setChunkPanelOpen(true);setChunkDetailLoading(true);setChunkDetailError(""); try{const res=await knowledgeService.getChunkDetail(docId); setChunkDetailData((res as any)?.chunks??(res as any)?.data?.chunks??[]);}catch(e){setChunkDetailError((e as Error).message);}finally{setChunkDetailLoading(false);} };
 
   if(loading) return <div className="flex-1 flex items-center justify-center"><p className="text-sm text-slate-400">加载中…</p></div>;
-  if(!trace) return <div className="flex-1 flex items-center justify-center"><div className="text-center"><p className="text-slate-400">Trace {id} 不存在或已过期</p><button onClick={()=>router.back()} className="mt-3 text-sm text-violet-600 hover:text-violet-500">← 返回</button></div></div>;
+  if (!trace && processingRun) {
+    return <ProcessingRunDetailView
+      detail={processingRun}
+      documentName={documentName}
+      historyFallback={processingRunHistoryFallback}
+    />;
+  }
+  if (!trace) return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-2xl mx-auto px-6 py-10">
+        <button onClick={() => router.push("/knowledge/workbench?tab=documents")} className="text-xs text-slate-400 hover:text-slate-600">← 返回文档</button>
+        <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-5">
+          <div className="text-sm font-semibold text-amber-900">处理详情未留存</div>
+          <p className="mt-2 text-sm text-slate-700">{documentName || "未记录文件名"}</p>
+          <p className="mt-2 text-xs leading-relaxed text-amber-800">{processingRunError || `Trace ${id} 不存在或已过期`}</p>
+          {searchParams.get("operation") && (
+            <p className="mt-3 text-xs text-slate-600">最后操作：{searchParams.get("operation")}；时间：{searchParams.get("operationAt") || "未记录"}</p>
+          )}
+          <p className="mt-3 text-xs leading-relaxed text-slate-500">当前记录不足以还原处理阶段。请保留该文件现状；下一次受控重建成功后，可从新运行记录追溯，不会补造历史详情。</p>
+        </div>
+      </div>
+    </div>
+  );
 
   const badge = statusBadge(trace.status??"success");
   const traceCost = getTraceCostDisplay({
@@ -176,7 +341,7 @@ export default function DocTracePage() {
 
       {/* Overview */}
       <div>
-        <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-3"><h1 className="text-base font-semibold text-slate-800">{trace.question}</h1><span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span></div><span className="text-xs text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span></div>
+        <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-3"><h1 className="text-base font-semibold text-slate-800">{getTraceDocumentTitle(trace.question, searchParams.get("documentName"))}</h1><span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span></div><span className="text-xs text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span></div>
         <div className="grid grid-cols-4 gap-2 mb-2">
           {[{label:'文件大小',value:overview.fileSize>0?`${(overview.fileSize/1024).toFixed(1)}KB`:'-',sub:`${overview.fileSize} bytes`},{label:'Chunks',value:overview.chunkCount>0?String(overview.chunkCount):'-',sub:'文本分块数'},{label:'Tokens',value:overview.totalTokens>0?overview.totalTokens.toLocaleString():'-',sub:'prompt+completion'},{label:'成本',value:traceCost.value,sub:traceCost.detail}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 font-mono">{c.value}</div><div className="text-[9px] text-slate-400">{c.sub}</div></div>))}
         </div>
@@ -284,7 +449,7 @@ export default function DocTracePage() {
             }
 
             // embedding
-            if(type==="embedding"){const s=spans[0];const attempted=s.metrics?.attempted as number||0;const succeeded=s.metrics?.succeeded as number||0;const failed=s.metrics?.failed as number||0;const embModel=(overview.models||[]).find(m=>m.component==='embedding')?.model||trace?.tags?.embedding_model||"";return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span><span className="text-xs text-slate-400">成功 <span className="font-mono text-green-600">{succeeded}</span>{failed>0&&<span className="ml-1">失败 <span className="font-mono text-red-500">{failed}</span></span>}<span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted}</span></span></span>{embModel&&<span className="ml-auto text-[10px] text-slate-300 shrink-0">模型: {embModel}</span>}</div></div>);}
+            if(type==="embedding"){const {attempted,succeeded,failed}=getEmbeddingCountsFromSpans(spans);const embModel=(overview.models||[]).find(m=>m.component==='embedding')?.model||trace?.tags?.embedding_model||"";return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span><span className="text-xs text-slate-400">{attempted===null&&succeeded===null?"Trace 未记录计数":<><span>成功 <span className="font-mono text-green-600">{succeeded===null?"—":succeeded.toLocaleString()}</span></span>{failed!==null&&failed>0&&<span className="ml-1">失败 <span className="font-mono text-red-500">{failed.toLocaleString()}</span></span>}<span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted===null?"—":attempted.toLocaleString()}</span></span></>}</span>{embModel&&<span className="ml-auto text-[10px] text-slate-300 shrink-0">模型: {embModel}</span>}</div></div>);}
 
             // dedup
             if(type==="dedup"){const s=spans[0];const cached=s.metrics?.cached as boolean|undefined;const existingDocId=s.metrics?.existing_doc_id as string||"";return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>{cached?<span className="text-xs text-amber-600">⚡ 命中缓存 → doc {existingDocId}</span>:<span className="text-xs text-slate-400">未命中缓存 → 进入完整索引流程</span>}</div></div>);}

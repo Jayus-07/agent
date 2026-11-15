@@ -1735,7 +1735,7 @@ def _latest_processing_trace_for_doc(doc_id: str) -> tuple[str, str]:
 def _active_document_artifacts_complete(
     doc: dict, filepath: str, expected_hash: str,
 ) -> bool:
-    """只有源文件和 chunk_store 都齐全，才允许把同哈希上传当作重复件。"""
+    """只有原件、chunk_store 和登记向量齐全，才允许把同哈希上传当作重复件。"""
     doc_id = str(doc.get("doc_id") or "")
     try:
         expected_count = int(doc.get("chunk_count") or 0)
@@ -1749,9 +1749,58 @@ def _active_document_artifacts_complete(
         from backend.rag.indexing.chunk_store import get_chunk_store
 
         chunks = get_chunk_store().get_by_doc_id(doc_id)
+        raw_vector_ids = doc.get("chunk_ids") or []
+        vector_ids = (
+            json.loads(raw_vector_ids)
+            if isinstance(raw_vector_ids, str) else raw_vector_ids
+        )
+        expected_vector_ids = {
+            str(value) for value in vector_ids or [] if str(value or "").strip()
+        }
+        if not expected_vector_ids:
+            return False
+        active_vector_ids = _active_vector_ids_for_doc(
+            doc_id, sorted(expected_vector_ids),
+        )
     except Exception as exc:  # noqa: BLE001 — 无法核对时不误判为完整
         raise RuntimeError(f"核对已入库文档完整性失败 ({doc_id})") from exc
-    return len(chunks) == expected_count
+    return (
+        len(chunks) == expected_count
+        and expected_vector_ids.issubset(active_vector_ids)
+    )
+
+
+def _active_vector_ids_for_doc(doc_id: str,
+                               expected_ids: list[str]) -> set[str]:
+    """只读核对主 pgvector collection 中登记的 chunk ID。"""
+    if not doc_id or not expected_ids:
+        return set()
+    import psycopg2
+    from psycopg2 import sql
+
+    from backend.config.database import (
+        CHROMA_PATH,
+        VECTOR_PG_CONFIG,
+        VECTOR_PG_TABLE_PREFIX,
+    )
+
+    table = sql.Identifier(f"{VECTOR_PG_TABLE_PREFIX}rag_vectors")
+    collection = os.path.basename(os.path.normpath(str(CHROMA_PATH))) or "default"
+    conn = psycopg2.connect(**VECTOR_PG_CONFIG)
+    try:
+        conn.set_session(readonly=True)
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql.SQL(
+                    "SELECT id FROM {} WHERE collection = %s AND doc_id = %s "
+                    "AND id = ANY(%s)"
+                ).format(table),
+                (collection, doc_id, expected_ids),
+            )
+            return {str(row[0]) for row in cursor.fetchall()}
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 def _do_index_sync(upload_id: str, filepath: str, filename: str,
@@ -2005,6 +2054,14 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
         # 保持 publishing 状态等待重试续跑（publish_candidate 幂等），不清理
         # 任何产物、不删暂存（续跑还要用它），不标记 failed。
         logger.error(f"[RAG] 发布段失败（保持 publishing 待续跑）: {e}")
+        try:
+            run_store.mark_status(
+                upload_id, "publishing", stage="publish", error=str(e)[:500],
+            )
+        except Exception as status_error:  # noqa: BLE001 — 原发布错误优先
+            logger.warning(
+                f"[RAG] 发布失败原因写入运行记录失败 ({upload_id}): "
+                f"{status_error}")
         raise
     finally:
         _heartbeat_stop.set()
@@ -2435,7 +2492,9 @@ async def list_upload_failures(request: Request, limit: int = 50):
             "upload_id": f"registry:{row.get('doc_id') or row.get('file_name')}",
             "record_kind": "quality_gate",
             "retryable": False,
+            "file_name": row.get("file_name") or os.path.basename(file_path),
             "file_path": row.get("file_path", ""),
+            "file_hash": row.get("file_hash") or "",
             "doc_id": row.get("doc_id", ""),
             "kb_id": row.get("kb_id", ""),
             "department": row.get("department", ""),
