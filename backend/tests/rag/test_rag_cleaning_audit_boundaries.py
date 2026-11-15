@@ -219,7 +219,7 @@ def _index_harness(tmp_path, monkeypatch, chunks, qc):
 
     monkeypatch.setattr(
         pipeline_module, "parse_and_chunk_full",
-        lambda _path: (chunks, qc),
+        lambda _path, **_kwargs: (chunks, qc),
     )
     persisted: list[dict] = []
     monkeypatch.setattr(

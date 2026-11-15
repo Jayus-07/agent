@@ -605,3 +605,4 @@
 - 已修复为读取 `resolve_runtime_policy("chunking").timeout_seconds`，并在同步 Provider 调用外套用现有 `scoped_execution_timeout`；配置读取异常回落到角色代码默认值。Proxy 使用同一 ContextVar 把剩余时限变为受支持 Provider 的请求超时，超时后仍回退原规则 Chunk。
 - 回归测试先在修复前失败（Provider 调用时 `remaining_execution_seconds()` 为 `None`），修复后 `test_llm_fallback_chunking.py` 与 deadline 传播/Proxy 直接用例共 `10 passed`；`py_compile` 和 `git diff --check` 通过。
 - 同批运行整个 `test_execution_deadline_propagation.py` 时为 `34 passed, 1 failed`；失败在未改动的 `test_astream_caps_and_aborts_after_total_deadline`，实际拿到 `[]`，断言期待 `['a']`。该用例未纳入本轮直接改动范围，未把它报告为通过；本轮收窄到 fallback、scope、Provider kwargs 和同步 Proxy deadline 的 5 个相关用例复验均通过。PR 更新后仍需确认 CI 与审查状态，再决定合并。
+- PR #471 的 RAG Smoke 免费预检在 `2,245 passed, 5 failed, 5 skipped` 下失败；5 个失败都是 `test_rag_cleaning_audit_boundaries.py::test_prepaid_gate_blocks_paid_calls` 参数化场景。原因是其测试桩 `lambda _path` 不接受新增的身份/追溯关键字参数，不是运行时代码错误。将桩改为接收并忽略 `**_kwargs` 后，本机该 5 个用例 `5 passed`；已记录为待推送 CI 重跑，不提前宣称门禁通过。
