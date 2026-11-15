@@ -1398,7 +1398,10 @@ class IncrementalIndexer:
                 )
                 lineage_recorder.persist_stage(ocr_lineage[0])
         try:
-            from backend.rag.preprocessing.pipeline import parse_and_chunk_full
+            from backend.rag.preprocessing.pipeline import (
+                _filename_title,
+                parse_and_chunk_full,
+            )
             if ext == ".pdf":
                 from backend.rag.preprocessing.parser import ocr as _ocr_mod
 
@@ -1410,10 +1413,24 @@ class IncrementalIndexer:
             )
             with lineage_recorder.bind_stage(bind_step) if lineage_recorder else nullcontext():
                 if self.ocr_page_budget is None:
-                    chunks, _qc = parse_and_chunk_full(file_path)
+                    chunks, _qc = parse_and_chunk_full(
+                        file_path,
+                        tenant_id=self.tenant_id,
+                        kb_id=kb_id,
+                        permission_scope=permission_scope,
+                        department=department,
+                        lineage_recorder=lineage_recorder,
+                        trace_parent_span_id=parse_span.span_id,
+                    )
                 else:
                     chunks, _qc = parse_and_chunk_full(
                         file_path, ocr_page_budget=self.ocr_page_budget,
+                        tenant_id=self.tenant_id,
+                        kb_id=kb_id,
+                        permission_scope=permission_scope,
+                        department=department,
+                        lineage_recorder=lineage_recorder,
+                        trace_parent_span_id=parse_span.span_id,
                     )
             if ocr_lineage is not None and ext == ".pdf":
                 raw_ast = _qc.get("raw_ast")
@@ -1741,9 +1758,14 @@ class IncrementalIndexer:
             os.path.abspath(file_path)
         ):
             staged_name = os.path.basename(file_path)
-            staged_title = os.path.splitext(staged_name)[0]
+            staged_title = _filename_title(file_path)
+            staged_title_variants = {
+                staged_name,
+                os.path.splitext(staged_name)[0],
+                staged_title,
+            }
             source_title = os.path.splitext(display_name)[0] or display_name
-            if not document_title or document_title in {staged_name, staged_title}:
+            if not document_title or document_title in staged_title_variants:
                 document_title = source_title
         doc_meta = {
             "doc_id": doc_id,

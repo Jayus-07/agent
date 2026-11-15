@@ -303,6 +303,7 @@ def test_upload_failure_list_includes_quality_gate_doc_and_trace(monkeypatch):
                 "doc_id": "UF-09-01",
                 "file_name": "report.pdf",
                 "file_path": "/app/data/docs/report.pdf",
+                "file_hash": "a" * 64,
                 "kb_id": "rag_eval_kb",
                 "department": "general",
                 "tenant_id": "tenant-a",
@@ -341,6 +342,8 @@ def test_upload_failure_list_includes_quality_gate_doc_and_trace(monkeypatch):
     assert response["items"][0]["retryable"] is False
     assert response["items"][0]["trace_id"] == "trace-1"
     assert response["items"][0]["trace_status"] == "available"
+    assert response["items"][0]["file_name"] == "report.pdf"
+    assert response["items"][0]["file_hash"] == "a" * 64
     assert response["items"][0]["processing_run_id"] == "run-1"
     assert response["items"][0]["failure_details"] == "切分缺 3 处，表格少 4 行、2 个单元格"
 

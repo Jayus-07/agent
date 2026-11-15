@@ -138,11 +138,13 @@ export default function RuntimeChainCard({ roles, catalog: _catalog }: Props) {
         </div>
       </Chain>
 
-      {/* 入库链路：Upload → Doc → Metadata → QuestionGen → Table → OCR → Embedding → Index */}
+      {/* 入库链路：规则优先，结构识别不足时由切分模型选择原文边界。 */}
       <Chain title="入库链路" hint="文档上传 → 解析抽取 → 建索引（各阶段可空，空 = 跟随 main）">
         <Step label="Upload" model="—" muted />
         <Arrow />
         <Step label="Doc 抽取" model={modelName(byRole, 'doc')} />
+        <Arrow />
+        <Step label="切分边界兜底" model={modelName(byRole, 'chunking')} />
         <Arrow />
         <Step label="元数据抽取" model={modelName(byRole, 'metadata_extract')} />
         <Arrow />

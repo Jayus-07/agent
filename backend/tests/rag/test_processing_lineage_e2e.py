@@ -208,7 +208,7 @@ def test_four_format_indexing_records_stage_matrix(
             },
         )]
 
-    def _parse_stub(path):
+    def _parse_stub(path, **_kwargs):
         if ocr_outcome == "cached":
             from backend.rag.preprocessing.parser import ocr as ocr_module
             ocr_module._record_ocr_result(status="cached", cache_status="hit")

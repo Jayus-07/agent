@@ -87,6 +87,74 @@ describe('UploadFailuresPanel', () => {
     expect(container.querySelector('a[href*="/traces/"]')).toBeNull()
   })
 
+  it('Trace 缺失时以文件 SHA 和处理运行 ID 提供非 Trace 详情', async () => {
+    const runId = '56538019-881e-4364-bf32-357616a9325e'
+    const fileHash = '461791d73e2497dc748e2663b438f067beb98e738d4347917b878240ae03a729'
+    vi.spyOn(knowledgeService, 'listUploadFailures').mockResolvedValueOnce({
+      ok: true,
+      total: 1,
+      counts: { async_queue: 0, quality_gate: 1 },
+      items: [{
+        upload_id: 'registry:UF-14-01',
+        doc_id: 'UF-14-01',
+        file_name: 'progit_en_501p.pdf',
+        file_path: '/app/data/docs/progit_en_501p.pdf',
+        file_hash: fileHash,
+        processing_run_id: runId,
+        record_kind: 'quality_gate',
+        retryable: false,
+        trace_id: '',
+        trace_status: 'missing_historical',
+      }],
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    mounted = { root, container }
+
+    act(() => root.render(<UploadFailuresPanel />))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(container.textContent).toContain('查看处理运行（非 Trace）')
+    expect(container.querySelector(
+      `a[href="/knowledge/operations/traces/${runId}?documentName=progit_en_501p.pdf&docId=UF-14-01&fileHash=${fileHash}&runId=${runId}&view=processing-run"]`,
+    )).not.toBeNull()
+  })
+
+  it('Trace ID 已记录但详情可能过期时保留文件身份校验和运行回退参数', async () => {
+    const runId = '56538019-881e-4364-bf32-357616a9325e'
+    const traceId = '04edf9cb8df7'
+    const fileHash = '461791d73e2497dc748e2663b438f067beb98e738d4347917b878240ae03a729'
+    vi.spyOn(knowledgeService, 'listUploadFailures').mockResolvedValueOnce({
+      ok: true,
+      total: 1,
+      counts: { async_queue: 0, quality_gate: 1 },
+      items: [{
+        upload_id: 'registry:UF-14-01',
+        doc_id: 'UF-14-01',
+        file_name: 'progit_en_501p.pdf',
+        file_path: '/app/data/docs/progit_en_501p.pdf',
+        file_hash: fileHash,
+        processing_run_id: runId,
+        record_kind: 'quality_gate',
+        trace_id: traceId,
+        trace_status: 'missing_historical',
+      }],
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    mounted = { root, container }
+
+    act(() => root.render(<UploadFailuresPanel />))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(container.textContent).toContain('查看 Trace / 运行记录')
+    expect(container.querySelector(
+      `a[href="/knowledge/operations/traces/${traceId}?documentName=progit_en_501p.pdf&docId=UF-14-01&fileHash=${fileHash}&runId=${runId}"]`,
+    )).not.toBeNull()
+  })
+
   it('按真实接口的72条响应显示异步失败、质量失败和可追溯入口', async () => {
     const items = Array.from({ length: 72 }, (_, index) => ({
       upload_id: `upload-${index}`,

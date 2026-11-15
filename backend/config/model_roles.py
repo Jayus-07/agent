@@ -126,6 +126,14 @@ MODEL_ROLES: dict[str, RoleSpec] = {
         has_inherit_semantics=True,
         validator="registered_model",
     ),
+    "chunking": RoleSpec(
+        env_key="CHUNKING_LLM_MODEL",
+        default="",
+        desc="规则切分无法识别结构时的 LLM 边界兜底",
+        inherit="main",
+        has_inherit_semantics=True,
+        validator="registered_model",
+    ),
     "question_gen": RoleSpec(
         env_key="QUESTION_GEN_MODEL",
         default="",
@@ -244,6 +252,8 @@ ROLE_RUNTIME_DEFAULTS: dict[str, RoleRuntimeDefaults] = {
     # 入库链路：单阶段失败不阻塞整篇文档，标记后继续
     "doc": RoleRuntimeDefaults(timeout_seconds=20, max_retries=1, failure_policy="skip"),
     "metadata_extract": RoleRuntimeDefaults(timeout_seconds=20, max_retries=1, failure_policy="skip"),
+    # 规则切分之后的语义边界兜底必须限时；失败时回退到原规则分块。
+    "chunking": RoleRuntimeDefaults(timeout_seconds=20, max_retries=0, failure_policy="skip"),
     "question_gen": RoleRuntimeDefaults(timeout_seconds=20, max_retries=1, failure_policy="skip"),
     "table_describe": RoleRuntimeDefaults(timeout_seconds=20, max_retries=1, failure_policy="skip"),
     # OCR 逐页识别是长任务；失败标记文档 OCR failed，不换模型静默重试
@@ -329,7 +339,7 @@ def resolve_runtime_policy(role: str) -> RoleRuntimeDefaults:
 # tool_selector；MultiQuery P0 接通改写超时/重试/skip 策略。
 # 管理端只对已登记角色开放策略编辑按钮，未登记角色编辑了也不生效，
 # 不该给可点的入口。
-POLICY_CONSUMED_ROLES = frozenset({"tool_selector", "multi_query"})
+POLICY_CONSUMED_ROLES = frozenset({"tool_selector", "multi_query", "chunking"})
 
 
 def policy_enforced(role: str) -> bool:

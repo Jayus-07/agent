@@ -357,6 +357,248 @@ class PostgresProcessingLineageRepository:
             "page_size": page_size,
         }
 
+    def chunking_fallback_stats(
+        self,
+        *,
+        tenant_id: str,
+        kb_ids: list[str],
+        user_permissions: list[str],
+        is_admin: bool,
+        department: str | None,
+        days: int = 30,
+        review_threshold: int = 5,
+    ) -> dict[str, Any]:
+        """按阶段内的可信身份快照统计兜底，不读取正文或文件名。"""
+        normalized_days = min(max(int(days), 1), 365)
+        threshold = max(int(review_threshold), 1)
+        if not tenant_id or not kb_ids:
+            return {
+                "window_days": normalized_days,
+                "count_unit": "processing_run",
+                "review_threshold": threshold,
+                "candidate_count": 0,
+                "llm_call_count": 0,
+                "applied_count": 0,
+                "provider_failure_count": 0,
+                "boundary_rejection_count": 0,
+                "not_applied_count": 0,
+                "skipped_count": 0,
+                "output_chunk_count": 0,
+                "last_seen_at": None,
+                "by_audience": [],
+                "by_type": [],
+                "daily": [],
+            }
+
+        department_filter = (
+            " AND COALESCE(step.metadata->>'department', '') = %s"
+            if department is not None else ""
+        )
+        scope_filter = f"""
+            step.metadata->>'tenant_id' = %s
+            AND step.metadata->>'kb_id' = ANY(%s::text[])
+            AND (
+                %s
+                OR NOT EXISTS (
+                    SELECT 1
+                      FROM unnest(string_to_array(
+                          COALESCE(NULLIF(step.metadata->>'permission_scope', ''), 'general'),
+                          ','
+                      )) AS required_scope(value)
+                     WHERE btrim(required_scope.value) NOT IN ('', 'general')
+                       AND NOT (btrim(required_scope.value) = ANY(%s::text[]))
+                )
+            )
+            {department_filter}
+        """
+        scope_params = (
+            tenant_id, kb_ids, is_admin, user_permissions,
+        )
+        if department is not None:
+            scope_params = (*scope_params, department)
+        where_sql = (
+            "step.stage = 'chunking_llm_fallback' "
+            "AND step.started_at >= now() - (%s * interval '1 day') "
+            f"AND {scope_filter}"
+        )
+        common_params = (normalized_days, *scope_params)
+
+        with self._conn() as conn:
+            summary = self._exec(
+                conn,
+                f"""
+                SELECT COUNT(*) AS candidate_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                       ) AS llm_call_count,
+                       COUNT(*) FILTER (
+                           WHERE step.status = 'success'
+                             AND step.metadata->>'applied' = 'true'
+                       ) AS applied_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                             AND step.metadata->>'failure_type' = 'provider_or_runtime_error'
+                       ) AS provider_failure_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                             AND step.metadata->>'failure_type' IN (
+                                 'invalid_json', 'invalid_groups',
+                                 'invalid_source_node_partition', 'cross_section_group',
+                                 'coverage_validation_failed'
+                             )
+                       ) AS boundary_rejection_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                             AND COALESCE(step.metadata->>'applied', 'false') <> 'true'
+                       ) AS not_applied_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' <> 'true'
+                              OR step.metadata->>'attempted' IS NULL
+                       ) AS skipped_count,
+                       COALESCE(SUM(step.output_count) FILTER (
+                           WHERE step.status = 'success'
+                             AND step.metadata->>'applied' = 'true'
+                       ), 0) AS output_chunk_count,
+                       MAX(step.started_at) AS last_seen_at
+                  FROM {self._steps_table} AS step
+                  JOIN {self._runs_table} AS prun USING (run_id)
+                 WHERE {where_sql}
+                """,
+                common_params,
+            ).fetchone() or {}
+            grouped = self._exec(
+                conn,
+                f"""
+                SELECT COALESCE(kb.audience, 'unknown') AS kb_audience,
+                       COALESCE(NULLIF(LOWER(step.metadata->>'source_format'), ''), 'unknown')
+                           AS source_format,
+                       COALESCE(NULLIF(step.metadata->>'fallback_type', ''), 'unknown')
+                           AS fallback_type,
+                       COALESCE(NULLIF(step.metadata->>'rule_strategy', ''), 'unknown')
+                           AS rule_strategy,
+                       COALESCE(NULLIF(step.metadata->>'rule_version', ''), 'unknown')
+                           AS rule_version,
+                       COALESCE(NULLIF(step.metadata->>'parser_version', ''), 'unknown')
+                           AS parser_version,
+                       COUNT(*) AS candidate_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                       ) AS llm_call_count,
+                       COUNT(*) FILTER (
+                           WHERE step.status = 'success'
+                             AND step.metadata->>'applied' = 'true'
+                       ) AS applied_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                             AND step.metadata->>'failure_type' = 'provider_or_runtime_error'
+                       ) AS provider_failure_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                             AND step.metadata->>'failure_type' IN (
+                                 'invalid_json', 'invalid_groups',
+                                 'invalid_source_node_partition', 'cross_section_group',
+                                 'coverage_validation_failed'
+                             )
+                       ) AS boundary_rejection_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                             AND COALESCE(step.metadata->>'applied', 'false') <> 'true'
+                       ) AS not_applied_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' <> 'true'
+                              OR step.metadata->>'attempted' IS NULL
+                       ) AS skipped_count,
+                       COALESCE(SUM(step.output_count) FILTER (
+                           WHERE step.status = 'success'
+                             AND step.metadata->>'applied' = 'true'
+                       ), 0) AS output_chunk_count
+                  FROM {self._steps_table} AS step
+                  JOIN {self._runs_table} AS prun USING (run_id)
+                  LEFT JOIN auth.knowledge_bases AS kb
+                    ON kb.kb_id = step.metadata->>'kb_id'
+                 WHERE {where_sql}
+                  GROUP BY 1, 2, 3, 4, 5, 6
+                  ORDER BY 1, 2, 3, 4, 5, 6
+                """,
+                common_params,
+            ).fetchall()
+            daily = self._exec(
+                conn,
+                f"""
+                SELECT to_char(date_trunc('day', step.started_at), 'YYYY-MM-DD') AS day,
+                       COALESCE(kb.audience, 'unknown') AS kb_audience,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                       ) AS llm_call_count,
+                       COUNT(*) FILTER (
+                           WHERE step.status = 'success'
+                             AND step.metadata->>'applied' = 'true'
+                       ) AS applied_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                             AND step.metadata->>'failure_type' = 'provider_or_runtime_error'
+                       ) AS provider_failure_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                             AND step.metadata->>'failure_type' IN (
+                                 'invalid_json', 'invalid_groups',
+                                 'invalid_source_node_partition', 'cross_section_group',
+                                 'coverage_validation_failed'
+                             )
+                       ) AS boundary_rejection_count,
+                       COUNT(*) FILTER (
+                           WHERE step.metadata->>'attempted' = 'true'
+                             AND COALESCE(step.metadata->>'applied', 'false') <> 'true'
+                       ) AS not_applied_count
+                  FROM {self._steps_table} AS step
+                  JOIN {self._runs_table} AS prun USING (run_id)
+                  LEFT JOIN auth.knowledge_bases AS kb
+                    ON kb.kb_id = step.metadata->>'kb_id'
+                 WHERE {where_sql}
+                 GROUP BY 1, 2
+                 ORDER BY 1, 2
+                """,
+                common_params,
+            ).fetchall()
+
+        by_audience_counts: dict[str, dict[str, int | str]] = {}
+        by_type = []
+        for row in grouped:
+            item = dict(row)
+            audience = str(item.get("kb_audience") or "unknown")
+            item["kb_audience"] = audience
+            item["upgrade_review_required"] = (
+                audience in {"internal", "customer"}
+                and int(item.get("llm_call_count") or 0) >= threshold
+            )
+            by_type.append(item)
+            audience_summary = by_audience_counts.setdefault(
+                audience,
+                {"kb_audience": audience},
+            )
+            for key in (
+                "candidate_count", "llm_call_count", "applied_count",
+                "provider_failure_count", "boundary_rejection_count",
+                "not_applied_count", "skipped_count", "output_chunk_count",
+            ):
+                audience_summary[key] = int(audience_summary.get(key, 0) or 0) + int(
+                    item.get(key) or 0
+                )
+        return {
+            "window_days": normalized_days,
+            "count_unit": "processing_run",
+            "review_threshold": threshold,
+            **dict(summary),
+            "by_audience": [
+                by_audience_counts[key] for key in sorted(by_audience_counts)
+            ],
+            "by_type": by_type,
+            "daily": [
+                {**dict(row), "kb_audience": row.get("kb_audience") or "unknown"}
+                for row in daily
+            ],
+        }
+
     def get_run_detail(self, doc_id: str, run_id: str) -> dict[str, Any] | None:
         # 查询使用独立短连接，不持有实例级锁，避免高并发详情查询阻塞
         # 处理运行的异步阶段写入。

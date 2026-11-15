@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Span } from "@/types/trace";
 import {
-  formatTracePageCount, getLogicalStageSpans, getMetadataPerformanceWarning,
+  formatTracePageCount, getEmbeddingCounts, getEmbeddingCountsFromSpans,
+  getLogicalStageSpans, getMetadataPerformanceWarning,
+  getTraceDocumentTitle, getProcessingRunDetailError, getTraceDocumentId, getTraceDocumentIdentityError,
   getMetadataStageDuration,
   getQualityScore, getQualityScoreBreakdown, getQualityWarning, getTraceCostDisplay,
   groupSpansByType,
@@ -18,6 +20,72 @@ function span(
 }
 
 describe("Trace duration and quality metrics", () => {
+  it("Trace 未记录嵌入计数时保持未知，真实的零计数仍显示为零", () => {
+    expect(getEmbeddingCounts()).toEqual({ attempted: null, succeeded: null, failed: null });
+    expect(getEmbeddingCounts({ attempted: 0, succeeded: 0, failed: 0 })).toEqual({
+      attempted: 0,
+      succeeded: 0,
+      failed: 0,
+    });
+  });
+
+  it("从多个 embedding Span 中汇总 chunk 计数，不把文档向量计为分块", () => {
+    expect(getEmbeddingCountsFromSpans([
+      span("index_doc_embed", "embedding", "root", 8, { doc_vector_count: 1 }),
+      span("index_embed", "embedding", "root", 80, {
+        chunk_count: 8, attempted: 8, succeeded: 8, failed: 0,
+      }),
+    ])).toEqual({ attempted: 8, succeeded: 8, failed: 0 });
+    expect(getEmbeddingCountsFromSpans([
+      span("index_embed#1", "embedding", "root", 30, {
+        attempted: 3, succeeded: 2, failed: 1,
+      }),
+      span("index_embed#2", "embedding", "root", 50, {
+        attempted: 5, succeeded: 5, failed: 0,
+      }),
+    ])).toEqual({ attempted: 8, succeeded: 7, failed: 1 });
+  });
+
+  it("文件列表打开 Trace 时优先显示实际文件名", () => {
+    expect(getTraceDocumentTitle("upload-id.generated.md", "厦门-鼓浪屿建筑风格.md"))
+      .toBe("厦门-鼓浪屿建筑风格.md");
+    expect(getTraceDocumentTitle("原始 Trace 标题", "  ")).toBe("原始 Trace 标题");
+  });
+
+  it("处理运行兜底必须匹配当前文件和运行 ID", () => {
+    expect(getProcessingRunDetailError(
+      { doc_id: "doc-1", run_id: "run-1" }, "doc-1", "run-1",
+    )).toBeNull();
+    expect(getProcessingRunDetailError(
+      { doc_id: "doc-other", run_id: "run-1" }, "doc-1", "run-1",
+    )).toBe("处理运行对应的文档 ID 与当前文件不匹配");
+    expect(getProcessingRunDetailError(
+      { doc_id: "doc-1", run_id: "run-other" }, "doc-1", "run-1",
+    )).toBe("处理运行 ID 与请求记录不匹配");
+    expect(getProcessingRunDetailError(
+      { doc_id: "doc-1", run_id: "run-1", error: "处理运行不存在" }, "doc-1", "run-1",
+    )).toBe("处理运行不存在");
+    expect(getProcessingRunDetailError(
+      { doc_id: "doc-1", run_id: "run-1", file_hash: "old-hash" },
+      "doc-1", "run-1", "current-hash",
+    )).toBe("处理运行文件 SHA-256 与当前文件不匹配");
+    expect(getProcessingRunDetailError(
+      { doc_id: "doc-1", run_id: "run-1", file_hash: "current-hash" },
+      "doc-1", "run-1", "current-hash",
+    )).toBeNull();
+  });
+
+  it("Trace 有文档身份时必须与文件列表记录一致", () => {
+    expect(getTraceDocumentId({ tags: { doc_id: "doc-1" } })).toBe("doc-1");
+    expect(getTraceDocumentId({ spans: [{ metrics: { doc_id: "doc-2" } }] })).toBe("doc-2");
+    expect(getTraceDocumentId({ tags: {}, spans: [] })).toBeNull();
+    expect(getTraceDocumentIdentityError("doc-1", "doc-1")).toBeNull();
+    expect(getTraceDocumentIdentityError("doc-other", "doc-1"))
+      .toBe("Trace 记录的文档 ID 与当前文件不匹配");
+    expect(getTraceDocumentIdentityError(null, "doc-1"))
+      .toBe("Trace 未记录文档 ID，无法确认属于当前文件");
+  });
+
   it("uses only root logical spans and aggregates same-type stages without nested calls", () => {
     const spans = [
       span("root", "workflow", null, 47_160),

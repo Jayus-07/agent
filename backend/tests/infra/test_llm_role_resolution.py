@@ -81,6 +81,32 @@ def test_invoke_metadata_llm_disables_thinking_through_role_proxy(monkeypatch):
     )
 
 
+def test_invoke_metadata_llm_does_not_retry_provider_error_as_capability_fallback(
+    monkeypatch,
+):
+    """关闭思考参数后的 Provider 错误必须原样上抛，不能再发普通请求。"""
+    fake = MagicMock()
+    fake.model = "qwen3.7-plus"
+    provider_error = RuntimeError("provider call failed")
+    fake.invoke.side_effect = [provider_error, "unexpected second request"]
+    monkeypatch.setattr(proxy, "bind_llm_for_role", lambda _role, **kwargs: fake)
+    monkeypatch.setattr(
+        "backend.infra.llm.models.supports_thinking_flag",
+        lambda _model: True,
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.models.thinking_disabled_extra_body",
+        lambda _model: {"thinking": {"type": "disabled"}},
+    )
+
+    with pytest.raises(RuntimeError, match="provider call failed"):
+        invoke_metadata_llm("prompt")
+
+    fake.invoke.assert_called_once_with(
+        "prompt", extra_body={"thinking": {"type": "disabled"}},
+    )
+
+
 def test_invoke_metadata_llm_plain_invoke_when_policy_declines(monkeypatch):
     """策略判定不注入参数（如无法识别供应商）时回落普通调用。"""
     fake = MagicMock()

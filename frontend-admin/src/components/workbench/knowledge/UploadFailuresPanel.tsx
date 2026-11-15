@@ -46,6 +46,41 @@ function basename(path: string): string {
   return path.split(/[\\/]/).pop() || path
 }
 
+function getFailureDetailLink(item: any): { href: string; label: string; title: string } | null {
+  const traceId = typeof item.trace_id === 'string' ? item.trace_id.trim() : ''
+  const docId = typeof item.doc_id === 'string' ? item.doc_id.trim() : ''
+  const runId = typeof item.processing_run_id === 'string' ? item.processing_run_id.trim() : ''
+  const fileHash = typeof item.file_hash === 'string' ? item.file_hash.trim() : ''
+  const hasVerifiedRunIdentity = Boolean(
+    docId && runId && /^[a-f0-9]{64}$/i.test(fileHash),
+  )
+
+  if (!traceId && !hasVerifiedRunIdentity) return null
+  if (!hasVerifiedRunIdentity) {
+    return {
+      href: `/knowledge/operations/traces/${encodeURIComponent(traceId)}`,
+      label: '查看 Trace',
+      title: `Trace ID：${traceId}`,
+    }
+  }
+
+  const params = new URLSearchParams({
+    documentName: item.file_name || basename(item.file_path || ''),
+    docId,
+    fileHash,
+    runId,
+  })
+  if (!traceId) params.set('view', 'processing-run')
+
+  return {
+    href: `/knowledge/operations/traces/${encodeURIComponent(traceId || runId)}?${params}`,
+    label: traceId ? '查看 Trace / 运行记录' : '查看处理运行（非 Trace）',
+    title: traceId
+      ? '优先打开 Trace；历史 Span 缺失时回退到文件 SHA 一致的处理运行记录'
+      : '该记录没有完整 Trace，打开按文件 SHA 核对的处理运行记录',
+  }
+}
+
 /** 后端 created_at 为 UTC 字符串（'YYYY-MM-DD HH:MM:SS'），转本地时间显示。 */
 function fmtTime(raw: string): string {
   if (!raw) return '-'
@@ -118,7 +153,7 @@ export default function UploadFailuresPanel() {
                 <th className="px-4 py-2.5 font-medium">部门</th>
                 <th className="px-4 py-2.5 font-medium">失败时间</th>
                 <th className="px-4 py-2.5 font-medium">原因</th>
-                <th className="px-4 py-2.5 font-medium">Trace</th>
+                <th className="px-4 py-2.5 font-medium">追溯详情</th>
               </tr>
             </thead>
             <tbody>
@@ -139,7 +174,15 @@ export default function UploadFailuresPanel() {
                     )}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
-                    {it.trace_id ? <Link className="text-accent hover:underline" href={`/knowledge/operations/traces/${encodeURIComponent(it.trace_id)}`} title={`Trace ID：${it.trace_id}`}>查看 Trace</Link> : <span className="text-text-muted" title="历史记录中没有可用的 Trace ID，无法恢复原始跟踪详情">无历史 Trace</span>}
+                    {(() => {
+                      const detailLink = getFailureDetailLink(it)
+                      const noDetailMessage = it.processing_run_id
+                        ? '缺文件 SHA，无法核对处理运行记录'
+                        : '无历史 Trace'
+                      return detailLink
+                        ? <Link className="text-accent hover:underline" href={detailLink.href} title={detailLink.title}>{detailLink.label}</Link>
+                        : <span className="text-text-muted" title="没有足够的身份信息核对处理详情">{noDetailMessage}</span>
+                    })()}
                   </td>
                 </tr>
               ))}

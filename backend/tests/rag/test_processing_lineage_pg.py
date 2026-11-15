@@ -123,6 +123,113 @@ def test_repository_counts_duplicate_stage_keys_for_selected_runs():
     assert params == (["run-1", "run-2"],)
 
 
+def test_chunking_fallback_stats_are_scoped_to_processing_identity_snapshot():
+    connection = _Connection()
+    connection.cursor_instance._rows = [{
+        "kb_audience": "internal",
+        "candidate_count": 3,
+        "llm_call_count": 2,
+        "applied_count": 1,
+        "provider_failure_count": 1,
+        "boundary_rejection_count": 0,
+        "not_applied_count": 1,
+        "skipped_count": 1,
+        "output_chunk_count": 8,
+        "last_seen_at": "2026-11-15T00:00:00Z",
+        "source_format": "pdf",
+        "fallback_type": "rule_coverage_gap",
+    }]
+    repo = _repo_with_connection(connection)
+
+    result = repo.chunking_fallback_stats(
+        tenant_id="tenant-a",
+        kb_ids=["kb-a"],
+        user_permissions=["support"],
+        is_admin=False,
+        department="general",
+        days=14,
+        review_threshold=2,
+    )
+
+    assert result["window_days"] == 14
+    assert result["review_threshold"] == 2
+    assert result["count_unit"] == "processing_run"
+    assert result["candidate_count"] == 3
+    assert result["applied_count"] == 1
+    assert result["provider_failure_count"] == 1
+    assert result["by_audience"] == [{
+        "kb_audience": "internal",
+        "candidate_count": 3,
+        "llm_call_count": 2,
+        "applied_count": 1,
+        "provider_failure_count": 1,
+        "boundary_rejection_count": 0,
+        "not_applied_count": 1,
+        "skipped_count": 1,
+        "output_chunk_count": 8,
+    }]
+    assert result["by_type"][0]["upgrade_review_required"] is True
+    assert len(connection.cursor_instance.executed) == 3
+    for sql, params in connection.cursor_instance.executed:
+        assert "step.metadata->>'tenant_id' = %s" in sql
+        assert "step.metadata->>'kb_id' = ANY(%s::text[])" in sql
+        assert "unnest(string_to_array(" in sql
+        assert "ANY(%s::text[])" in sql
+        assert "FROM doc_registry" not in sql
+        assert "step.metadata->>'failure_type' = 'provider_or_runtime_error'" in sql
+        assert "AS boundary_rejection_count" in sql
+        assert "step.metadata->>'department'" in sql
+        has_audience_join = "LEFT JOIN auth.knowledge_bases AS kb" in sql
+        assert has_audience_join == ("SELECT COUNT(*) AS candidate_count" not in sql)
+        if has_audience_join:
+            assert "COALESCE(kb.audience, 'unknown') AS kb_audience" in sql
+        assert params == (
+            14,
+            "tenant-a",
+            ["kb-a"],
+            False,
+            ["support"],
+            "general",
+        )
+
+
+def test_chunking_fallback_stats_do_not_signal_production_upgrade_for_test_kb():
+    connection = _Connection()
+    connection.cursor_instance._rows = [{
+        "kb_audience": "test",
+        "candidate_count": 5,
+        "llm_call_count": 5,
+        "applied_count": 5,
+        "provider_failure_count": 0,
+        "boundary_rejection_count": 0,
+        "not_applied_count": 0,
+        "skipped_count": 0,
+        "output_chunk_count": 40,
+        "last_seen_at": "2026-11-15T00:00:00Z",
+        "source_format": "txt",
+        "fallback_type": "no_recognized_structure",
+        "rule_strategy": "RecursiveChunkStrategy",
+        "rule_version": "v2",
+        "parser_version": "v1",
+    }]
+    repo = _repo_with_connection(connection)
+
+    result = repo.chunking_fallback_stats(
+        tenant_id="tenant-a",
+        kb_ids=["test-kb"],
+        user_permissions=["support"],
+        is_admin=False,
+        department="general",
+        days=30,
+        review_threshold=5,
+    )
+
+    assert result["by_type"][0]["kb_audience"] == "test"
+    assert result["by_type"][0]["llm_call_count"] == 5
+    assert result["by_type"][0]["upgrade_review_required"] is False
+    assert result["by_audience"][0]["kb_audience"] == "test"
+
+
 def test_repository_uses_one_bounded_lazy_connection_pool(monkeypatch):
     import backend.rag.indexing.processing_lineage_pg as lineage_pg
 

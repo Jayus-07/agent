@@ -73,6 +73,7 @@ def invoke_metadata_llm(
                 logger.debug(f"[MetadataLLM] 直接调用计量失败: {exc}")
         return response
 
+    extra_body = None
     try:
         # STOP D（D4）：thinking 开关判定与供应商协议参数统一走 Registry。
         model_name = str(getattr(llm_obj, "model", "") or "")
@@ -83,10 +84,12 @@ def invoke_metadata_llm(
 
         if supports_thinking_flag(model_name):
             extra_body = thinking_disabled_extra_body(model_name)
-            if extra_body is not None:
-                return _invoke_and_record(prompt, extra_body=extra_body)
     except Exception as e:  # 解析失败不影响主流程，按普通调用
         logger.debug(f"[MetadataLLM] 模型解析失败，走普通调用: {e}")
+    # 只把能力解析异常降级为普通参数调用。Provider 调用必须放在 try 外；
+    # 否则真实调用失败会被误认为能力解析失败，再发起一次可能计费的请求。
+    if extra_body is not None:
+        return _invoke_and_record(prompt, extra_body=extra_body)
     return _invoke_and_record(prompt)
 
 
