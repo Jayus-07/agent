@@ -73,6 +73,16 @@ def _map_exception(exc: BaseException) -> ErrorClassification:
     msg = str(exc).lower()
     name = type(exc).__name__
 
+    # RAG 检索明确知道「这次没搜完」，本地模式下不会经过 HTTP 503，
+    # 必须直接归为可重试的服务故障，不能落到普通 FAILED/无证据话术。
+    if name == "RetrievalUnavailableError":
+        return ErrorClassification(
+            ToolStatus.UNAVAILABLE,
+            "service_unavailable",
+            "知识库检索服务暂不可用",
+            True,
+        )
+
     # ── 取消：调用方主动放弃，不是错误（executor 不重试，向上传播由 wait_for 处理）──
     if isinstance(exc, asyncio.CancelledError):
         return ErrorClassification(ToolStatus.FAILED, "cancelled", str(exc), False)

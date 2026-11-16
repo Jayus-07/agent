@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any
 
 from backend.config.redis import REDIS_KEY_PREFIX
@@ -17,6 +16,8 @@ OUTBOX_STREAM = f"{REDIS_KEY_PREFIX}cs:event_outbox"
 OUTBOX_GROUP = "cs-event-compensation"
 OUTBOX_MAXLEN = 10000
 OUTBOX_CLAIM_IDLE_MS = 60000
+# 定时补偿任务复用稳定消费者名，避免每次调度都在 Consumer Group 留下新元数据。
+_DEFAULT_CONSUMER_NAME = "cs-event-compensator"
 
 
 def _redis():
@@ -234,7 +235,7 @@ def drain_pending_events(
     if redis is None:
         return {"ok": False, "processed": 0, "failed": 0}
 
-    consumer_name = consumer or f"cs-compensator-{uuid.uuid4().hex[:12]}"
+    consumer_name = consumer or _DEFAULT_CONSUMER_NAME
     try:
         _ensure_group(redis)
         messages = _collect_messages(

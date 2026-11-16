@@ -9,7 +9,7 @@
 | 服务 | 内存上限 MiB | CPU 上限 | 说明 |
 | --- | ---: | ---: | --- |
 | PostgreSQL | 1024 | 1.5 | max_connections=120、shared_buffers=256MB、work_mem=4MB |
-| Redis 缓存 | 384 | 0.4 | maxmemory=192mb，LRU，给 AOF/分配器留余量 |
+| Redis 缓存/控制面 | 384 | 0.4 | maxmemory=192mb，volatile-LRU 只淘汰带 TTL 的缓存，保护无 TTL Stream/位点；给 AOF/分配器留余量 |
 | Redis broker/result | 192 | 0.2 | maxmemory=128mb，noeviction |
 | Auth Redis | 96 | 0.2 | maxmemory=48mb，noeviction |
 | APISIX | 288 | 0.5 | 实测常驻约 228MiB |
@@ -121,6 +121,8 @@ docker compose -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.ym
 
 ## 磁盘与回滚
 
-生产应将 Docker 数据目录与 PostgreSQL 备份放到数据盘。当前示例用 `/data/docker` 与 `/data/backups/agent/postgres`；确认数据盘已挂载后，再创建备份目录并按 pgvector 镜像内 postgres 用户的 UID/GID 设置属主。备份默认保留 7 天，仍需外部异地副本。各目录占用以实际 df/du 为准，超过 85% 停止新增构建/导入并扩容或按既有保留策略处理。不要删除 volume 或自动清理其他任务镜像。
+生产应将 Docker 数据目录、PostgreSQL 备份和 Redis 持久化备份放到数据盘；Redis RDB/AOF 还要复制到独立故障域并定期隔离恢复演练。当前 PostgreSQL 示例用 `/data/docker` 与 `/data/backups/agent/postgres`；确认数据盘已挂载后，再创建备份目录并按 pgvector 镜像内 postgres 用户的 UID/GID 设置属主。备份默认保留 7 天，仍需外部异地副本。各目录占用以实际 df/du 为准，超过 85% 停止新增构建/导入并扩容或按既有保留策略处理。不要删除 volume 或自动清理其他任务镜像。
+
+Redis 缓存实例的 4C8G 档位使用 `maxmemory=192mb`、容器限额 `384m` 和 `volatile-lru`：只有带 TTL 的缓存键会被淘汰，无 TTL 的 Stream/消费位点会保留；因此队列也必须有界并持续检查长度、pending/lag，达到上限时写入可能失败。主流生产方案应把缓存和关键队列/控制面分开，或使用满足目标 RPO/RTO 的托管 Redis；不能把 AOF 本地卷当成唯一备份。至少监控 `used_memory/maxmemory`、RSS、`evicted_keys` 增量、`aof_last_write_status`、`rdb_last_bgsave_status`、Stream backlog 和最近备份时间。
 
 回滚应用使用已知可用镜像并重新创建对应服务，保留数据卷。配置回滚恢复对应 Compose 与环境文件后重建；数据库结构回滚走迁移治理，不能 DROP 已应用迁移。资源限制回滚不能代替已发布向量数据的恢复。

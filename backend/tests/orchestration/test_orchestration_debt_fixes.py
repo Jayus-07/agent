@@ -123,7 +123,7 @@ def test_router_cache_scoped_by_context(monkeypatch):
     calls = {"n": 0}
 
     class FakeRule:
-        def route(self, q: str):
+        def route(self, q: str, **_kwargs):
             calls["n"] += 1
             return None
 

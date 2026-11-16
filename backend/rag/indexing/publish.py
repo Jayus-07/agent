@@ -30,8 +30,11 @@ failed，旧版文件/登记行/向量/BM25 全部原样；发布阶段（b 之�
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List
@@ -56,6 +59,101 @@ class PublishAuthorizationRevoked(SupersededCandidate):
 
 class CandidatePublishError(RuntimeError):
     """发布阶段失败（提交点之后）——必须保持 publishing 状态等待续跑。"""
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _is_cross_device_error(exc: OSError) -> bool:
+    """兼容 POSIX EXDEV 和 Windows ERROR_NOT_SAME_DEVICE。"""
+    return (
+        exc.errno == errno.EXDEV
+        or getattr(exc, "winerror", None) == 17
+    )
+
+
+def _commit_staging_file(
+    staging_path: str, final_path: str, expected_hash: str = "",
+) -> None:
+    """把暂存原件提交到正式目录，跨盘时先同盘复制再原子替换。"""
+    if not staging_path:
+        if not os.path.isfile(final_path):
+            raise CandidatePublishError(
+                f"暂存文件与正式文件均缺失，无法完成发布: {final_path}")
+        return
+
+    source = Path(staging_path)
+    target = Path(final_path)
+    if not source.is_file():
+        if target.is_file():
+            return
+        raise CandidatePublishError(
+            f"暂存文件与正式文件均缺失，无法完成发布: {final_path}")
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            if not _is_cross_device_error(exc):
+                raise
+
+        # os.replace 跨卷不可用。先在目标目录写完整临时文件并校验哈希，
+        # 再同卷原子替换；失败时保留原暂存文件，供 publishing 续跑。
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".publishing",
+            dir=str(target.parent),
+        )
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(fd, "wb") as dst, source.open("rb") as src:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
+                dst.flush()
+                os.fsync(dst.fileno())
+            if expected_hash and _sha256_file(temp_path) != expected_hash:
+                raise CandidatePublishError(
+                    "跨卷暂存复制后的文件哈希不匹配，拒绝提交")
+            os.replace(temp_path, target)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        try:
+            source.unlink()
+        except OSError as exc:
+            # 正式文件已原子就位，暂存残留不影响本次发布；保留可观察日志，
+            # 后续暂存清理器可按终态回收。
+            logger.warning(f"[Publish] 正式文件已提交但暂存清理失败: {exc}")
+    except CandidatePublishError:
+        raise
+    except OSError as exc:
+        raise CandidatePublishError(
+            f"源文件提交失败（暂存保留，可续跑）: {exc}") from exc
+
+
+def _verify_visible_vectors(store, doc_id: str, expected_ids: list[str],
+                           label: str) -> None:
+    """确认发布后的主 collection 中仍能读到本次登记的向量 ID。"""
+    getter = getattr(store, "get", None)
+    if not callable(getter):
+        return  # 纯协议测试桩；生产 PgVectorKnowledgeStore 必须可读
+    try:
+        payload = getter(where={"doc_id": doc_id}) or {}
+        visible_ids = {str(value) for value in payload.get("ids") or []}
+    except Exception as exc:  # noqa: BLE001 — 无法核验时拒绝收口
+        raise CandidatePublishError(
+            f"发布后核对{label}失败（待续跑）: {exc}") from exc
+    missing_ids = sorted(set(map(str, expected_ids)) - visible_ids)
+    if missing_ids:
+        preview = ",".join(missing_ids[:3])
+        raise CandidatePublishError(
+            f"发布后{label}不完整，缺少 {len(missing_ids)} 个向量 ID"
+            f"（示例: {preview}）")
 
 
 # ── 候选期存储替身 ──────────────────────────────────────────────
@@ -193,7 +291,10 @@ class CandidateStores:
 
 
 def candidate_bm25_dir(index_dir: str | Path, generation: str) -> Path:
-    return Path(index_dir) / f"staging-{generation}"
+    main_dir = Path(index_dir)
+    if main_dir.name not in ("", "/"):
+        return main_dir.parent / f"staging-{generation}"
+    return main_dir / f"staging-{generation}"
 
 
 def _collection_of(store) -> str:
@@ -332,11 +433,27 @@ def _bm25_global_lock(main_dir: Path):
         f"BM25 全局发布锁获取超时: {lock_path}")
 
 
-def _release_bm25_global_lock(fd) -> None:
+def _release_bm25_global_lock(fd, lock_path: Path) -> None:
+    """释放 BM25 发布锁，并只删除本次创建的锁文件。"""
+    try:
+        owned_stat = os.fstat(fd)
+    except OSError:
+        owned_stat = None
     try:
         os.close(fd)
     except OSError:
         pass
+    if owned_stat is None:
+        return
+    try:
+        current_stat = lock_path.stat()
+        if (current_stat.st_dev, current_stat.st_ino) == (
+                owned_stat.st_dev, owned_stat.st_ino):
+            lock_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning(f"[Publish] BM25 全局锁清理失败: {exc}")
 
 
 def switch_bm25_snapshot(cand_store, main_store, generation: str) -> dict:
@@ -362,6 +479,7 @@ def switch_bm25_snapshot(cand_store, main_store, generation: str) -> dict:
     main_dir = Path(main_store.index_dir)
     main_dir.mkdir(parents=True, exist_ok=True)
     lock_fd = _bm25_global_lock(main_dir)
+    lock_path = main_dir / ".publish.lock"
     try:
         for name in _BM25_ARTIFACTS:
             src = cand_dir / name
@@ -374,7 +492,7 @@ def switch_bm25_snapshot(cand_store, main_store, generation: str) -> dict:
         # 指针统一由 store 维护（重建/切换同一入口，最后写）
         main_store.write_published_pointer(generation, meta)
     finally:
-        _release_bm25_global_lock(lock_fd)
+        _release_bm25_global_lock(lock_fd, lock_path)
     logger.info(
         f"[Publish] BM25 快照已切换 generation={generation} "
         f"doc_count={meta.get('doc_count')}")
@@ -530,6 +648,13 @@ def publish_candidate(
         _collection_of(stores.vectordb))
     promoted_docs = stores.main_doc_db.promote_collection(
         _collection_of(stores.doc_db))
+    _verify_visible_vectors(
+        stores.main_vectordb, doc_id, chunk_ids, "chunk 向量",
+    )
+    if doc_db_id:
+        _verify_visible_vectors(
+            stores.main_doc_db, doc_id, [str(doc_db_id)], "文档级向量",
+        )
     logger.info(
         f"[Publish] 候选向量晋级: chunks={promoted_chunks} docs={promoted_docs} "
         f"(gen={generation[:12]})")
@@ -537,13 +662,9 @@ def publish_candidate(
     # ── d. BM25 快照切换 ──
     switch_bm25_snapshot(stores.bm25_store, main_bm25_store, generation)
 
-    # ── e. 源文件替换（旧文件自此才被覆盖）──
+    # ── e. 源文件替换（旧文件自此才被覆盖；跨卷走目标盘原子复制）──
     staging_path = index_result.get("staging_path") or ""
-    if staging_path and os.path.isfile(staging_path):
-        os.replace(staging_path, final_path)
-    elif not os.path.isfile(final_path):
-        raise CandidatePublishError(
-            f"暂存文件与正式文件均缺失，无法完成发布: {final_path}")
+    _commit_staging_file(staging_path, final_path, file_hash)
 
     # ── f. chunk_store 翻新 ──
     try:
@@ -555,13 +676,21 @@ def publish_candidate(
     # ── g.（已前移至步骤 c0）财务版本快照翻转在晋级前执行 ──
 
     # ── h. 旧版清理（精确按 id，绝不 doc_id 条件删）──
-    if not use_snapshot and old_chunk_ids:
+    current_chunk_ids = {str(item) for item in chunk_ids}
+    obsolete_chunk_ids = [
+        str(item) for item in old_chunk_ids
+        if str(item) not in current_chunk_ids
+    ]
+    if not use_snapshot and obsolete_chunk_ids:
         try:
-            stores.main_vectordb.delete(ids=[str(x) for x in old_chunk_ids])
+            stores.main_vectordb.delete(ids=obsolete_chunk_ids)
             logger.info(
-                f"[Publish] 已清理旧 chunk 向量 {len(old_chunk_ids)} 条")
+                f"[Publish] 已清理旧 chunk 向量 {len(obsolete_chunk_ids)} 条")
         except Exception as e:
             logger.warning(f"[Publish] 旧 chunk 向量清理失败（Sweeper 兜底）: {e}")
+    _verify_visible_vectors(
+        stores.main_vectordb, doc_id, chunk_ids, "chunk 向量",
+    )
     if old_doc_id:
         new_doc_db_id = doc_db_id
         old_db_id = old_doc_db_id or (old_row or {}).get("doc_db_id", "")

@@ -96,10 +96,15 @@ async def get_stats(request: Request):
         reg = _get_registry()
         docs = [d for d in reg.list_active() if authz.can_read_row(d)]
         total_chunks = sum(d.get("chunk_count", 0) for d in docs)
+        quality_status_counts = {key: 0 for key in ("pass", "soft_warning", "failed", "unknown")}
+        for doc in docs:
+            quality_status = str(doc.get("quality_status") or "unknown")
+            quality_status_counts[quality_status if quality_status in quality_status_counts else "unknown"] += 1
         return {
             "kb_count": len(set(d.get("kb_id", "default") for d in docs)),
             "doc_count": len(docs),
             "chunk_count": total_chunks,
+            "quality_status_counts": quality_status_counts,
             "embedding_model": _embedding_model_name(),
             # 向量库唯一实现 = pgvector（agent_memory.rag_vectors 表）；
             # Chroma 与 VECTOR_BACKEND 开关已于 2026-09-17 删除。
@@ -111,6 +116,35 @@ async def get_stats(request: Request):
     except Exception as e:
         logger.error(f"[RAG] stats 失败: {e}")
         return {"kb_count": 0, "doc_count": 0, "chunk_count": 0, "embedding_model": "", "vector_db": "pgvector", "error": str(e)}
+
+
+@router.get("/chunking/llm-fallback-stats")
+async def get_llm_chunking_fallback_stats(
+    request: Request,
+    days: int = Query(default=30, ge=1, le=365),
+):
+    """汇总当前主体可见范围内的 LLM 切分兜底记录。"""
+    authz = await _require_authz(request)
+    try:
+        threshold = max(int(os.getenv("RAG_LLM_CHUNK_RULE_REVIEW_THRESHOLD", "5")), 1)
+    except (TypeError, ValueError):
+        threshold = 5
+    try:
+        return await asyncio.to_thread(
+            get_processing_lineage_repository().chunking_fallback_stats,
+            tenant_id=authz.principal.tenant_id,
+            kb_ids=sorted(authz.kb_scope),
+            user_permissions=sorted(authz.user_permissions or ()),
+            is_admin=authz.is_admin,
+            department=(
+                None if authz.is_admin else (authz.principal.department or "")
+            ),
+            days=days,
+            review_threshold=threshold,
+        )
+    except Exception as exc:
+        logger.error("[RAG] LLM 切分兜底统计查询失败: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="切分统计暂不可用") from exc
 
 
 @router.get("/documents")
@@ -125,6 +159,7 @@ async def list_documents(
     confidence_min: float = 0,
     llm_used: bool | None = None,
     quality_min: float = 0,
+    quality_status: str = "",
     sort_by: str = "updated_at",
     page: int = 1,
     page_size: int = 20,
@@ -139,6 +174,8 @@ async def list_documents(
         if kb_id and not authz.can_search_kb(kb_id):
             return {"documents": [], "total": 0, "page": page,
                     "page_size": page_size, "current_fingerprint": METADATA_SCHEMA_FINGERPRINT}
+        if quality_status and quality_status not in {"pass", "soft_warning", "failed", "unknown"}:
+            raise HTTPException(status_code=422, detail="质量状态无效")
         kb_scope = sorted(authz.kb_scope)
         # 显式 department 参数对非 admin 只能是本部门（查询条件可收窄）
         if department and not authz.is_admin and department != authz.principal.department:
@@ -153,6 +190,7 @@ async def list_documents(
             doc_type=doc_type, kb_id=kb_id, department=department,
             confidence_min=confidence_min,
             llm_used=llm_used, quality_min=quality_min, sort_by=sort_by,
+            quality_status_filter=quality_status,
             page=page, page_size=page_size,
             kb_scope=kb_scope, visible_scopes=visible_scopes,
             tenant_id=authz.principal.tenant_id,
@@ -210,6 +248,9 @@ async def list_documents(
                 "model_count": int(d.get("model_count") or 0),
                 "processing_status": d.get("processing_status", ""),
                 "processing_finished_at": d.get("processing_finished_at"),
+                "quality_status": d.get("quality_status") or "unknown",
+                "quality_score": d.get("quality_score", 0),
+                "quality_issues": d.get("quality_issues") or "",
             }
 
         return {
@@ -328,7 +369,49 @@ async def list_pending_docs(request: Request, page: int = 1, page_size: int = 20
             d["id"] = d.get("doc_id")
             d["name"] = d.get("file_name")
             items.append(sanitize_doc_row(d))
+        visible_ids = {str(item.get("doc_id") or item.get("id") or "") for item in items}
+        orphan_items = []
+        from backend.rag.authz import is_super_admin
+        if is_super_admin(tuple(getattr(authz.principal, "roles", ()) or ())):
+            # 老的 KB 标识可能已从目录移除或被停用；它们不应悄悄消失在
+            # 待复核页。仅超管能看见，并且只能通过拒绝流程归档。
+            from backend.rag.knowledge_base_store import list_knowledge_bases
+
+            catalog = await asyncio.to_thread(
+                list_knowledge_bases, include_inactive=True,
+            )
+            catalog_status = {
+                str(kb.get("kb_id") or ""): str(kb.get("status") or "active")
+                for kb in catalog
+            }
+            all_pending = await asyncio.to_thread(
+                reg.list_by_statuses, ["pending_review"],
+            )
+            scoped_kbs = set(authz.kb_scope or ())
+            for row in all_pending:
+                doc_id = str(row.get("doc_id") or "")
+                if (
+                    not doc_id
+                    or doc_id in visible_ids
+                    or row.get("tenant_id") != authz.principal.tenant_id
+                    or str(row.get("kb_id") or "") in scoped_kbs
+                ):
+                    continue
+                safe_row = dict(row)
+                safe_row.update({
+                    "id": doc_id,
+                    "name": row.get("file_name"),
+                    "orphaned_kb": True,
+                    "orphan_reason": (
+                        "知识库已停用"
+                        if catalog_status.get(str(row.get("kb_id") or "")) == "inactive"
+                        else "知识库目录中没有此标识"
+                    ),
+                })
+                orphan_items.append(sanitize_doc_row(safe_row))
         result["items"] = items
+        result["items"].extend(orphan_items)
+        result["total"] = int(result.get("total") or 0) + len(orphan_items)
         return result
     except HTTPException:
         raise
@@ -414,6 +497,23 @@ async def reject_pending_doc(doc_id: str, request: Request):
         if not doc:
             return {"ok": False, "error": "文档不存在"}
         ok, reason = authz.can_manage_row(doc)
+        if not ok:
+            from backend.rag.authz import is_super_admin
+
+            principal = authz.principal
+            is_same_tenant = (
+                bool(getattr(principal, "tenant_id", ""))
+                and str(doc.get("tenant_id") or "default")
+                == str(principal.tenant_id)
+            )
+            is_out_of_scope_pending = (
+                is_super_admin(tuple(getattr(principal, "roles", ()) or ()))
+                and doc.get("status") == "pending_review"
+                and str(doc.get("kb_id") or "") not in set(authz.kb_scope or ())
+                and is_same_tenant
+            )
+            if is_out_of_scope_pending:
+                ok, reason = True, ""
         if not ok:
             return _deny_manage(reason)
 
@@ -1072,7 +1172,7 @@ async def get_chunks(doc_id: str, request: Request):
 @router.get("/chunks/{doc_id}/detail")
 async def get_chunk_detail(doc_id: str, request: Request):
     """获取文档的完整 Chunk 文本（从 chunk_store 取，非向量库）。
-    供 Trace 详情页查看每条 chunk 的完整内容、token 数、关键词。
+    供管理端独立核验每条 chunk 的正文、身份与来源/切分元数据。
 
     发布状态门（#62）：与兄弟端点同口径——非 active（下线/待审核）文档
     不再向普通可读主体暴露正文；管理员保留诊断读取（历史 trace 排查），
@@ -1096,7 +1196,10 @@ async def get_chunk_detail(doc_id: str, request: Request):
         from backend.rag.indexing.chunk_detail import build_chunk_detail_items
         return {
             "doc_id": doc_id,
-            "chunks": build_chunk_detail_items(rows),
+            "chunks": build_chunk_detail_items(
+                rows,
+                source_file_name=str(doc.get("file_name") or ""),
+            ),
             "total": len(rows),
         }
     except HTTPException:

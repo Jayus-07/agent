@@ -2,10 +2,19 @@
  * RAG 答案语义（done.answer_status / confidence）的前端消费口径。
  *
  * 稳定码由后端 evidence_gate.models.ANSWER_STATUS_BY_REASON 下发
- * （蛇形小写：rag_no_evidence / rag_permission_denied / rag_hallucination），
- * 行动指引文案复用 ErrorCard.RAG_REJECTION_ACTIONS 预登记契约（大写码），
- * 此处只做归一，不持第二份文案（单一事实源）。
+ * （蛇形小写：rag_no_evidence / rag_retrieval_degraded / rag_permission_denied /
+ * rag_hallucination），
+ * 拒答后的行动建议由普通聊天和企业助手共用，避免同一种结果出现不同说法。
  */
+
+/** 拒答状态 → 用户下一步可以做什么。 */
+export const RAG_REJECTION_ACTIONS: Record<string, string> = {
+  RAG_NO_EVIDENCE: "补充资料名称、业务范围或时间范围；也可以联系管理员确认内容是否已发布到知识库",
+  RAG_RETRIEVAL_DEGRADED: "请稍后重试；如果多次发生，请联系管理员",
+  RAG_PERMISSION_DENIED: "联系管理员申请查看权限",
+  RAG_VERSION_CONFLICT: "说明要查询的资料版本或生效日期；不确定时联系资料管理员",
+  RAG_HALLUCINATION: "缩小问题范围，或联系资料管理员核对原文",
+}
 
 /** 低置信阈值：与客服知识门禁 CAUTIOUS 档下界（0.60）同口径 */
 export const RAG_LOW_CONFIDENCE_THRESHOLD = 0.6

@@ -79,6 +79,18 @@ class TestYAMLDefaultsCoverage:
     def test_code_controlled_not_in_defaults(self, defaults):
         assert "security.input_guard" not in defaults
 
+    def test_rag_prompt_handles_multiple_thresholds_in_one_evidence(self, defaults):
+        template = defaults["rag.qa"]
+
+        assert "同一个 Evidence 对同一主题出现多个不同阈值" in template
+        assert "按原文适用条件核对" in template
+
+    def test_rag_contextualize_preserves_disputed_topic_and_citations(self, defaults):
+        template = defaults["rag.contextualize"]
+
+        assert "保留争议主题、相关数值及 [E数字] 引用编号" in template
+        assert "不能把上一轮助手的说法当作事实" in template
+
 
 class TestYAMLVariableConsistency:
     @pytest.fixture(scope="class")

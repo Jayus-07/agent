@@ -225,7 +225,8 @@ class TestBuildRejectionResponse:
                                 diagnostics={"doc_count": 0, "threshold": {"vec_min": 0.2}})
         msg, info = build_rejection_response(decision, "retrieval")
         # 2026-10-25 文案用户语言化：断言语义而非字面（避免文案演进即碎）
-        assert "未找到" in msg
+        assert "当前可访问的知识库" in msg
+        assert "没有找到能回答" in msg
         assert info.rejected is True
         assert info.reason == "no_evidence"
         assert info.layer == "retrieval"
@@ -237,7 +238,7 @@ class TestBuildRejectionResponse:
                                 score=0.05,
                                 diagnostics={"top_score": 0.05, "doc_count": 3})
         msg, info = build_rejection_response(decision, "retrieval")
-        assert "相关性" in msg
+        assert "不够相关" in msg
         assert info.scores["top_score"] == 0.05
 
     def test_self_correction_attempted_appended(self):
@@ -246,7 +247,7 @@ class TestBuildRejectionResponse:
                                 diagnostics={"doc_count": 5})
         msg, info = build_rejection_response(decision, "rerank",
                                               self_correction_attempted=True)
-        assert "改写提问" in msg
+        assert "换种问法查过" in msg
         assert info.self_correction_attempted is True
 
     def test_unknown_reason_fallback_message(self):

@@ -1,5 +1,5 @@
 {
-  "version": "v1",
+  "version": "v2",
   "doc_types": {
     "listing": {
       "description": "商品 Listing、标题、卖点和搜索展示规范",
@@ -1892,6 +1892,7 @@
     "financial": {
       "description": "收入、成本、资产、负债和财务流程",
       "rules": {
+        "差旅": 3,
         "营收": 3,
         "收入": 2,
         "利润": 3,
@@ -1942,6 +1943,7 @@
         "门票": 2,
         "游玩": 2,
         "行程": 2,
+        "鼓浪屿": 3,
         "自驾游": 2,
         "自由行": 2
       }
@@ -1971,6 +1973,7 @@
     "厦门-景点-": "travel_guide",
     "厦门-美食-": "travel_guide",
     "厦门-城市-": "travel_guide",
+    "厦门-鼓浪屿": "travel_guide",
     "政策": "policy",
     "制度": "policy",
     "规范": "policy",

@@ -4,6 +4,11 @@ Extracted from ``observability.py`` so that both the existing observability
 API and the new CS admin API can produce identical DTOs.
 """
 from backend.config.observability import TRACE_DETAIL_LEVEL
+from backend.observability.trace_roles import (
+    is_llm_generation_span,
+    is_specialized_model_span,
+    span_model_role,
+)
 from backend.observability.trace_source import classify_trace_source
 
 
@@ -152,7 +157,7 @@ def backfill_usage_from_llm_store(data) -> None:
         for span in spans:
             sget = (lambda k, d=None: span.get(k, d)) if isinstance(span, dict) \
                 else (lambda k, d=None: getattr(span, k, d))
-            if sget("type", "") != "llm_call":
+            if sget("type", "") != "llm_call" or not is_llm_generation_span(span):
                 continue
             m = sget("metrics", {}) or {}
             if m.get("total_tokens") or m.get("prompt_tokens") or not pending:
@@ -194,10 +199,28 @@ def backfill_usage_from_llm_store(data) -> None:
         return
 
 
+_SPECIALIZED_SPAN_GENERATION_USAGE_KEYS = frozenset({
+    "prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens",
+    "reasoning_tokens", "cost_usd", "cost_cny", "model_name",
+    "duration_ms_call", "token_source",
+})
+
+
 def to_span_dto(s, all_spans: list, total_ms: int) -> dict:
     """Span / dict → frontend Span DTO. Compatible with TraceRecord Span and SQLite dict."""
     get = lambda k, d=None: s.get(k, d) if isinstance(s, dict) else getattr(s, k, d)
     span_id = get("span_id", "")
+    raw_metrics = get("metrics", {}) or {}
+    role = span_model_role(s)
+    specialized = is_specialized_model_span(s)
+    metrics = raw_metrics
+    if specialized and isinstance(raw_metrics, dict):
+        # 历史 Trace 可能已经把聊天模型用量错误回填到 rerank/embedding span；
+        # DTO 不再把来源不明的生成 Token、费用或模型字段暴露给消费者。
+        metrics = {
+            key: value for key, value in raw_metrics.items()
+            if key not in _SPECIALIZED_SPAN_GENERATION_USAGE_KEYS
+        }
     dto: dict = {
         "id": span_id,
         "type": get("type", ""),
@@ -208,7 +231,7 @@ def to_span_dto(s, all_spans: list, total_ms: int) -> dict:
         "end_time": get("end_time", ""),
         "duration_ms": get("duration_ms", 0),
         "duration_ratio": get("duration_ms", 0) / total_ms if total_ms else 0,
-        "metrics": get("metrics", {}),
+        "metrics": metrics,
         "children": [
             (c.get("span_id") if isinstance(c, dict) else c.span_id)
             for c in all_spans
@@ -223,24 +246,39 @@ def to_span_dto(s, all_spans: list, total_ms: int) -> dict:
         m = get("metrics", {}) or {}
         inp = get("input") or {}
         out = get("output") or {}
-        dto["llm_call"] = {
-            "model": m.get("model_name", "") if isinstance(m, dict) else "",
-            "temperature": m.get("temperature", 0) if isinstance(m, dict) else 0,
-            "prompt_tokens": m.get("prompt_tokens", 0) if isinstance(m, dict) else 0,
-            "completion_tokens": m.get("completion_tokens", 0) if isinstance(m, dict) else 0,
-            "cost_usd": m.get("cost_usd", 0) if isinstance(m, dict) else 0,
-            # 记账本位币主口径（Billing V2，2026-10-07）
-            "cost_cny": m.get("cost_cny") if isinstance(m, dict) else None,
+        model = "" if not isinstance(m, dict) else (
+            (m.get("model") or m.get("model_name", ""))
+            if role in {"embedding", "rerank"}
+            else (m.get("model_name") or m.get("model", ""))
+        )
+        llm_call = {
+            "model": model,
+            "provider": m.get("provider", "") if isinstance(m, dict) else "",
+            "role": role,
             # HTTP 响应状态（metrics.http_status；当前采集链无写入点，默认 null，
             # reranker 等已采集 HTTP 维度的 span 后续点亮，2026-10-31）
             "http_status": m.get("http_status") if isinstance(m, dict) else None,
-            # 文本回退链：prompt/question/query（路由 LLM 的 input 用 query 键）、
-            # response/metrics.completion_text（chain 层截断写入）
-            "prompt_text": ((inp.get("prompt") or inp.get("question") or inp.get("query") or "")
-                            if isinstance(inp, dict) else ""),
-            "response_text": (((out.get("response") or "") if isinstance(out, dict) else "")
-                              or (m.get("completion_text", "") if isinstance(m, dict) else "")),
         }
+        if not specialized:
+            llm_call.update({
+                "temperature": m.get("temperature", 0) if isinstance(m, dict) else 0,
+                "prompt_tokens": m.get("prompt_tokens", 0) if isinstance(m, dict) else 0,
+                "completion_tokens": m.get("completion_tokens", 0) if isinstance(m, dict) else 0,
+                "cost_usd": m.get("cost_usd", 0) if isinstance(m, dict) else 0,
+                # 记账本位币主口径（Billing V2，2026-10-07）
+                "cost_cny": m.get("cost_cny") if isinstance(m, dict) else None,
+                # 文本回退链：prompt/question/query（路由 LLM 的 input 用 query 键）、
+                # response/metrics.completion_text（chain 层截断写入）
+                "prompt_text": (
+                    (inp.get("prompt") or inp.get("question") or inp.get("query") or "")
+                    if isinstance(inp, dict) else ""
+                ),
+                "response_text": (
+                    ((out.get("response") or "") if isinstance(out, dict) else "")
+                    or (m.get("completion_text", "") if isinstance(m, dict) else "")
+                ),
+            })
+        dto["llm_call"] = llm_call
     return dto
 
 
@@ -293,12 +331,34 @@ def to_trace_dto(t, detail_level: str | None = None) -> dict:
     def _stype(s):
         return s.get("type", "") if isinstance(s, dict) else getattr(s, "type", "")
 
+    def _span_id(s):
+        return s.get("span_id", "") if isinstance(s, dict) else getattr(s, "span_id", "")
+
+    def _parent_id(s):
+        return s.get("parent_id") if isinstance(s, dict) else getattr(s, "parent_id", None)
+
+    rerank_operation_ids = {
+        _span_id(s) for s in all_spans if _stype(s) == "rerank" and _span_id(s)
+    }
+    rerank_provider_calls_without_operation = sum(
+        1 for s in all_spans
+        if _stype(s) == "llm_call"
+        and span_model_role(s) == "rerank"
+        and _parent_id(s) not in rerank_operation_ids
+    )
+
     # P1-5: 服务端统一统计口径 — 前端概览/过滤/明细三处不再各自计数，
     # 消除 "LLM 调用 2 vs 明细 1"、"工具调用 14 vs 过滤 10" 的口径矛盾。
     summary = {
-        "llm_calls": sum(1 for s in all_spans if _stype(s) == "llm_call"),
+        "llm_calls": sum(
+            1 for s in all_spans
+            if _stype(s) == "llm_call" and is_llm_generation_span(s)
+        ),
         "tool_calls": sum(1 for s in all_spans if _stype(s) == "tool_call"),
-        "retrieval_calls": sum(1 for s in all_spans if _stype(s) in ("retrieval", "rerank")),
+        "retrieval_calls": (
+            sum(1 for s in all_spans if _stype(s) in ("retrieval", "rerank"))
+            + rerank_provider_calls_without_operation
+        ),
         "span_count": len(all_spans),
     }
 

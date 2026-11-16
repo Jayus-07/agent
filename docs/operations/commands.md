@@ -13,9 +13,10 @@
 .\devctl.bat stop web /y
 .\devctl.bat restart all /y
 .\devctl.bat rebuild /y
+.\devctl.bat rebuild admin /y
 ~~~
 
-`rebuild` 会将当前 Git commit、UTC 构建时间和工作树状态写入后端镜像 OCI 标签、启动日志及 `/health.build`。dirty 开发构建会显示 `dirty: true`；正式发布只接受 `dirty: false`。日常查看状态和日志优先使用下面的 Compose 命令。共享环境中不要擅自停止或重建服务。
+`rebuild` 默认重建后端与两个容器化前端；可指定 `backend`、`admin` 或 `web` 只重建对应服务，避免为单个前端改动重启无关后端。后端重建会将当前 Git commit、UTC 构建时间和工作树状态写入镜像 OCI 标签、启动日志及 `/health.build`。dirty 开发构建会显示 `dirty: true`；正式发布只接受 `dirty: false`。日常查看状态和日志优先使用下面的 Compose 命令。共享环境中不要擅自停止或重建服务。
 
 脚本内部把 Compose 项目名固定为共享栈的 `agent`：从目录名不是 `agent` 的任务工作树运行时，若未显式导出 `COMPOSE_PROJECT_NAME`，脚本会自动设为 `agent` 并打印一行提示，避免构建出平行项目镜像；调用方已导出该变量时以调用方为准。在 Git Bash 中运行时确认参数用 `-y`（`/y` 会被 MSYS 路径转换吞掉）。
 
@@ -180,6 +181,16 @@ Playwright 的 Windows 默认浏览器目录是 `%LOCALAPPDATA%\ms-playwright`�
 | LLM 额度/供应商故障 | DB 模型角色绑定、凭据探测、预算预占、最近单价快照 | 不偷偷改 model 或绕预算；避免敏感数据发到未授权 Provider |
 | RAG 不能检索 | 文档审核状态、active_generation、向量/BM25 指针及权限范围 | 不能把 pending_review 当 active；不能删除旧版恢复证据 |
 | Grafana 无数据/告警未发 | Prometheus target、/metrics、PromQL、规则状态 | No Data ≠ 0，Webhook 未配置则不宣称通知已通过 |
+
+### Redis AOF 损坏处置
+
+1. 先确认受影响实例和用途（缓存、Celery、认证控制面或 Stream 队列），查看容器日志、`INFO persistence`、`INFO memory`、淘汰计数和 Stream Consumer Group 的 pending/lag；不要因为 Redis 启动失败就删除数据卷。
+2. 停止故障实例反复重启及会继续写入的相关进程。将整个 Redis 数据目录复制到独立、受控的备份位置，保留 RDB、AOF manifest、所有 base/increment 文件和权限；副本不要放在同一 Docker volume 或同一块故障盘上。
+3. 在隔离副本上先做只读完整性检查，再对副本尝试 AOF 修复。Redis 7 多段 AOF 必须以 manifest 和整组文件为单位；记录被截去的字节范围，修复后再次只读校验，并在隔离实例启动确认数据可读。
+4. 只有隔离恢复结果、丢失窗口和业务影响已评估后，才按回滚方案恢复服务。不要对唯一原件直接修复，不要删除 manifest/增量文件，也不要用 `FLUSHDB`、`FLUSHALL` 或 `down -v` 清理故障。
+5. 恢复后核对 AOF 写入、RDB 保存、淘汰量、Consumer Group pending/lag，以及数据库中的幂等记录；之后完成一次备份读取和隔离恢复演练。`appendfsync everysec` 不能代替异地备份，也不能保证文件损坏时只丢失一秒数据。
+
+生产要求：Redis 备份放到异地/独立故障域并设置访问控制、版本保留和可恢复告警；明确每类 Redis 数据的 RPO/RTO。缓存与不能被淘汰的队列优先拆实例；临时混部时仅允许带 TTL 的缓存参与淘汰，并对 Stream 长度、pending/lag、内存和淘汰增量设告警。
 
 **演练证据**：触发/故障时间、影响租户与操作范围、业务状态、错误/Trace ID、只读诊断、恢复决策、备份版本、回滚或人工裁决、数据一致性和最终负责人。恢复脚本运行前核对容器名称、数据库目标、共享 Worktree/Volume 及备份落点；不使用 `down -v` 和强制清理 Worktree 来“修好”系统。
 

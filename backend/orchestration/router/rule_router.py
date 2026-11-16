@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import List
 
 from backend.orchestration.router.types import (
@@ -137,6 +138,14 @@ def sql_lean_hits(query: str) -> int:
 # 仅关键词共现不算（"退款审核时间是多少"是单意图 RAG 问题，不能被拆）。
 _COMPOUND_CONNECTOR = re.compile(r"同时|并且|并(?![发联排集])|以及|还要|然后再|然后|顺便|接着|另外")
 
+# 原文核对追问需要上一轮知识库上下文，或当前追问明确提到知识库业务主题。
+_KNOWLEDGE_FOLLOWUP_REFERENCE = re.compile(
+    r"刚才|刚刚|之前|前面|上面|上述|前述|刚提到|刚列出|上一轮"
+)
+_KNOWLEDGE_SOURCE_CHECK = re.compile(
+    r"核对|查证|对照|原始依据|原文|出处|引用|来源|证据"
+)
+
 # 复合意图专用富词表（独立于单意图强信号列表——判定目的是"这个问题
 # 涉及哪几类能力"，词表要宽；单意图路由的强/弱信号语义不受影响）
 _COMPOSITE_GROUP_KEYWORDS: dict[str, list[str]] = {
@@ -152,10 +161,49 @@ _COMPOSITE_GROUP_KEYWORDS: dict[str, list[str]] = {
 }
 
 
+def is_knowledge_evidence_followup(
+    query: str,
+    routing_context: Mapping[str, object] | None,
+) -> bool:
+    """判断是否应沿用上一轮知识库回答来核对原文依据。"""
+    if not isinstance(routing_context, Mapping):
+        return False
+    if not _KNOWLEDGE_FOLLOWUP_REFERENCE.search(query):
+        return False
+    if not _KNOWLEDGE_SOURCE_CHECK.search(query):
+        return False
+    active_domain = str(routing_context.get("active_domain") or "").strip().lower()
+    has_knowledge_topic = any(
+        re.search(keyword, query)
+        for keyword in _RULE_KEYWORD_GROUPS.get("rag.search", ())
+    )
+    if active_domain != "knowledge" and not has_knowledge_topic:
+        return False
+    # 显式的数据分析仍由现有 SQL/复合意图规则处理。
+    return sql_lean_hits(query) < 2
+
+
+def is_knowledge_evidence_request(query: str) -> bool:
+    """当前问题提到业务主题并要求原文依据时，稳定识别为知识检索。"""
+    query_lower = (query or "").lower()
+    if not _KNOWLEDGE_SOURCE_CHECK.search(query_lower):
+        return False
+    has_knowledge_topic = any(
+        re.search(keyword, query_lower)
+        for keyword in _RULE_KEYWORD_GROUPS.get("rag.search", ())
+    )
+    return has_knowledge_topic and sql_lean_hits(query_lower) < 2
+
+
 class RuleRouter:
     """Rule Router：基于关键词强信号快速路由（0 成本，~1ms）。"""
 
-    def route(self, query: str) -> RouteDecision | None:
+    def route(
+        self,
+        query: str,
+        *,
+        routing_context: Mapping[str, object] | None = None,
+    ) -> RouteDecision | None:
         """返回 RouteDecision 或 None（None 表示交给下层 Router）。
 
         Returns:
@@ -201,6 +249,24 @@ class RuleRouter:
                 candidates=[CapabilityScore(name="competitor.analyze", score=0.65)],
                 confidence=0.72,  # < 0.8 → fallback 到 Vector
                 reason="匹配竞品分析关键词 1 个（弱信号）",
+            )
+
+        if is_knowledge_evidence_followup(query_lower, routing_context):
+            return RouteDecision(
+                execution_mode=ExecutionMode.DIRECT,
+                candidates=[CapabilityScore(name="rag.search", score=0.95)],
+                confidence=0.95,
+                reason="知识库回答后的原文依据追问，继续检索知识库",
+            )
+
+        # 首次提问也可能直接要求「核对原文/出处」。退款审核等主题会带
+        # 「金额」这类 SQL 词，但它们仍是知识证据检索，不应拆成 SQL + RAG。
+        if is_knowledge_evidence_request(query_lower):
+            return RouteDecision(
+                execution_mode=ExecutionMode.DIRECT,
+                candidates=[CapabilityScore(name="rag.search", score=0.95)],
+                confidence=0.95,
+                reason="当前问题要求核对业务主题原文依据，优先检索知识库",
             )
 
         # 2. 复合意图强信号（显式连接词 + ≥2 能力组命中 → 稳定走 plan）

@@ -16,6 +16,7 @@ import ast
 import json
 import re
 from collections.abc import Mapping
+from html import escape
 
 from backend.infra.llm import llm
 from langchain_core.messages import AIMessage
@@ -27,6 +28,20 @@ from backend.prompts.service import prompt_service
 # 协议：本模块负责在透传给用户 / 喂给汇总 LLM 前剥离；done 帧侧解析在
 # events.make_done_event（读原始 step_results，不受此处剥离影响）
 _RAG_META_RE = re.compile(r"<!--\s*RAGMETA\s*(\{.*?\})\s*-->\s*", re.DOTALL)
+_STRUCTURED_SUMMARY_RULES = """SQL 摘要强制规则（不受已发布模板版本影响）：
+只根据已核实的数据作答，不编造或推算数值、单位、时间范围和趋势；预览或样例不能证明全量排名、总计、比例或趋势；只有明确确认总数为 0 才能说没有匹配记录；摘要省略的内容不能猜测，数据不足时说明缺少什么。"""
+
+
+def _ensure_structured_summary_contract(prompt: str, question: str) -> str:
+    """旧版已发布模板可能遗漏用户问题或事实边界，在调用层补齐。"""
+    question_text = str(question or "")[:500]
+    if question_text and question_text not in prompt:
+        prompt = (
+            f"{prompt.rstrip()}\n\n"
+            "用户问题（只用于确定回答目标，不改变事实约束）：\n"
+            f"{question_text}"
+        )
+    return f"{prompt.rstrip()}\n\n{_STRUCTURED_SUMMARY_RULES}"
 
 
 def _needs_web_summary(question: str, step_results: dict) -> bool:
@@ -48,6 +63,26 @@ def strip_rag_meta(text: str) -> str:
     if text and "<!--RAGMETA" in text:
         return _RAG_META_RE.sub("", text).lstrip()
     return text
+
+
+def _single_rag_passthrough_step(step_results: dict) -> dict | None:
+    """返回唯一实质 RAG 步骤，条件与答案快速路径保持一致。"""
+    rag_steps = {
+        sid: sr for sid, sr in step_results.items()
+        if sr.get("capability") == "rag.search" and sr.get("status") == "success"
+        and sr.get("output") and len(str(sr.get("output", ""))) > 50
+    }
+    other_meaningful = [
+        sid for sid, sr in step_results.items()
+        if sr.get("capability") != "rag.search"
+        and sr.get("output")
+        and len(str(sr.get("output", "")).strip()) > 30
+        and "无结果" not in str(sr.get("output", ""))
+        and "未找到" not in str(sr.get("output", ""))
+    ]
+    if len(rag_steps) == 1 and not other_meaningful:
+        return next(iter(rag_steps.values()))
+    return None
 
 
 # =====================================================
@@ -298,25 +333,17 @@ def generate_final_answer(
         step_results = filter_step_results(step_results, question)
 
     # —— 快速路径：RAG 有结果且其他步骤无实质输出时，直接透传 ——
-    rag_steps = {
-        sid: sr for sid, sr in step_results.items()
-        if sr.get("capability") == "rag.search" and sr.get("status") == "success"
-        and sr.get("output") and len(str(sr.get("output", ""))) > 50
-    }
-    other_meaningful = [
-        sid for sid, sr in step_results.items()
-        if sr.get("capability") != "rag.search"
-        and sr.get("output")
-        and len(str(sr.get("output", "")).strip()) > 30
-        and "无结果" not in str(sr.get("output", ""))
-        and "未找到" not in str(sr.get("output", ""))
-    ]
-    if rag_steps and not other_meaningful:
-        rag_output = list(rag_steps.values())[0].get("output", "")
+    rag_step = _single_rag_passthrough_step(step_results)
+    if rag_step:
+        rag_output = rag_step.get("output", "")
         if rag_output:
+            if isinstance(rag_output, str):
+                rag_output = _normalize_single_rag_citations(
+                    strip_rag_meta(rag_output),
+                )
             logger.info("[Reporter] RAG 有实质输出且其他步骤无，直接透传")
             return _append_degraded_disclosure(
-                strip_rag_meta(rag_output), step_results)
+                rag_output, step_results)
 
     # —— 快速路径：单步骤有实质输出时直接透传（省掉 LLM 总结 ~2s）——
     # 仅限字符串输出（RAG/报告类）；SQL/BusinessInsight 是结构化 dict，
@@ -331,13 +358,21 @@ def generate_final_answer(
                 sole_sr.get("description", "查询结果"),
                 sole_sr.get("capability", ""), sole_output,
             )
+            if sole_sr.get("capability") == "rag.search":
+                rendered = _normalize_single_rag_citations(rendered)
             return _append_degraded_disclosure(rendered, step_results)
 
-    # 提取参考文献
-    rag_references = _extract_rag_references(step_results)
+    # 多步 RAG 的每步引用编号都从 1 开始。汇总前统一编号，确保正文、
+    # 末尾参考文献和 done.sources 卡片指向同一来源。
+    rag_citations = _build_rag_citation_context(step_results)
+    rag_references = rag_citations["references"]
 
     # 构建步骤输出摘要
-    outputs_text = _format_step_outputs(step_results, strip_references=True)
+    outputs_text = _format_step_outputs(
+        step_results,
+        strip_references=True,
+        citation_index_maps=rag_citations["index_maps"],
+    )
 
     if not outputs_text:
         logger.warning("[Reporter] 无可用的 step 输出")
@@ -356,11 +391,22 @@ def generate_final_answer(
         try:
             # LLM 只写一句话执行摘要（max_tokens=64 防超长；模板由 reporter.summary 提供）
             data_summary = _build_data_summary(step_results)
-            summary_prompt = prompt_service.render_sync(
-                "reporter.summary", data_summary=data_summary
+            rendered_summary_prompt = prompt_service.render_sync(
+                "reporter.summary", question=question[:500],
+                data_summary=data_summary,
             ).text
+            summary_prompt = _ensure_structured_summary_contract(
+                rendered_summary_prompt, question,
+            )
             resp = llm.bind(max_tokens=64).invoke(summary_prompt)
             summary = resp.content.strip()
+            if rag_citations["index_maps"]:
+                valid_indexes = {
+                    int(source["index"]) for source in rag_citations["sources"]
+                }
+                summary = _rewrite_rag_citations(
+                    summary, {index: index for index in valid_indexes}, strict=True,
+                )
             final = f"## {summary}\n\n{structured}"
             if rag_references:
                 final = final + rag_references
@@ -374,7 +420,11 @@ def generate_final_answer(
             return final
 
     if not allow_llm:
-        return render_step_results_deterministically(step_results)
+        return render_step_results_deterministically(
+            step_results,
+            citation_index_maps=rag_citations["index_maps"],
+            rag_references=rag_references,
+        )
 
     # ── 非结构化数据：走完整 LLM 路径（与旧行为一致）──
     try:
@@ -401,6 +451,13 @@ def generate_final_answer(
         from backend.infra.llm.proxy import (
             emit_stream_delta, extract_chunk_reasoning, extract_chunk_text,
         )
+        valid_citation_indexes = {
+            int(source["index"]) for source in rag_citations["sources"]
+        }
+        citation_stream_validator = (
+            _RagCitationStreamValidator(valid_citation_indexes)
+            if rag_citations["index_maps"] else None
+        )
         if ENABLE_TOKEN_STREAMING:
             parts = []
             for chunk in llm.stream(msgs):
@@ -411,12 +468,26 @@ def generate_final_answer(
                     emit_stream_delta(reasoning, kind="thinking")
                 text = extract_chunk_text(chunk)
                 if text:
-                    parts.append(text)
-                    emit_stream_delta(text)
+                    if citation_stream_validator:
+                        text = citation_stream_validator.feed(text)
+                    if text:
+                        parts.append(text)
+                        emit_stream_delta(text)
+            if citation_stream_validator:
+                tail = citation_stream_validator.feed("", final=True)
+                if tail:
+                    parts.append(tail)
+                    emit_stream_delta(tail)
             resp = AIMessage(content="".join(parts))
         else:
             resp = llm.invoke(msgs)
         final = resp.content.strip()
+        if citation_stream_validator and not ENABLE_TOKEN_STREAMING:
+            final = _rewrite_rag_citations(
+                final,
+                {index: index for index in valid_citation_indexes},
+                strict=True,
+            )
 
         if rag_references:
             final = final + rag_references
@@ -543,6 +614,8 @@ def _failure_text(result: dict) -> str:
     kind = _result_kind(result)
     if kind == "permission_denied" and result.get("capability") == "sql.query":
         return "当前账号无权执行该查询或访问相关数据，请联系管理员申请相应的数据访问权限后重试。"
+    if kind == "unavailable" and result.get("capability") == "rag.search":
+        return "知识库检索服务暂不可用，请稍后重试。"
     if (kind == "approval_required"
             and isinstance(result.get("output"), str)
             and result.get("output").strip()):
@@ -766,7 +839,12 @@ def _append_degraded_disclosure(answer: str, step_results: dict) -> str:
     return answer.rstrip() + "\n\n> ⚠️ " + "；".join(notes)
 
 
-def render_step_results_deterministically(step_results: dict) -> str:
+def render_step_results_deterministically(
+    step_results: dict,
+    *,
+    citation_index_maps: dict | None = None,
+    rag_references: str = "",
+) -> str:
     """Runner 兜底与 Direct/Workflow 共用的纯规则安全渲染。"""
     # 决策 #25：引用对象在此替换为摘要文本（同 generate_final_answer 入口，
     # 保证 direct/workflow 确定性渲染也不把引用对象透成"无法展示"文案）
@@ -786,6 +864,13 @@ def render_step_results_deterministically(step_results: dict) -> str:
             continue
         output = sr.get("output")
         rendered = render_result_for_user(label, sr.get("capability", ""), output)
+        if sr.get("capability") == "rag.search":
+            citation_maps = citation_index_maps or {}
+            step_index = str(step_id)
+            if step_index in citation_maps:
+                index_map = citation_maps[step_index]
+                rendered = _strip_rag_reference_section(rendered)
+                rendered = _rewrite_rag_citations(rendered, index_map)
         if rendered:
             sections.append(rendered)
         if kind in {"degraded", "partial_success"}:
@@ -805,7 +890,8 @@ def render_step_results_deterministically(step_results: dict) -> str:
         if sql_permission_denied
         else "## 查询结果"
     )
-    return heading + "\n\n" + "\n\n---\n\n".join(sections)
+    answer = heading + "\n\n" + "\n\n---\n\n".join(sections)
+    return answer + rag_references if rag_references else answer
 
 
 def _is_step_successful(result: dict) -> bool:
@@ -854,8 +940,7 @@ def _empty_result_phrases() -> frozenset:
 
 def _empty_result_prefixes() -> tuple:
     from backend.rag.evidence_gate.models import REJECT_MESSAGES
-    # 前缀变体：RAG self-correction 会在拒答话术后追加改写说明
-    # （"知识库暂无相关资料。\n（已尝试改写提问重新检索，仍未找到可靠答案）"），
+    # 前缀变体：RAG self-correction 会在拒答话术后补充查找结果；
     # 精确匹配拦不住，被当有效结果透传（实测 2026-09-19，拒答转追问由此漏判）
     return ("知识库暂无相关资料", "未找到相关信息", *REJECT_MESSAGES.values())
 
@@ -868,61 +953,210 @@ def _is_empty_output(output: str) -> bool:
     return any(text.startswith(p) for p in _empty_result_prefixes())
 
 
-def _extract_rag_references(step_results: dict) -> str:
-    """从 search_knowledge 步骤的输出中提取参考文献部分"""
-    import re
+def _strip_rag_reference_section(text: str, note: bool = False) -> str:
+    """移除 RAG 输出自带的参考文献段，供汇总路径统一追加。"""
+    for marker in ["### 参考文献", "### 参考来源"]:
+        idx = text.find(marker)
+        if idx != -1:
+            separator = text.rfind("\n---", 0, idx)
+            if separator != -1 and not text[separator + 4:idx].strip():
+                idx = separator
+            body = text[:idx].rstrip()
+            if note:
+                return body + "\n\n*(参考文献已移至报告末尾)*"
+            return body
+    return text
+
+
+def _rewrite_rag_citations(
+    text: str, index_map: dict[int, int], *, strict: bool = False,
+) -> str:
+    """把局部编号映射到整轮编号，避免未匹配编号误指向其他来源。"""
+    if not text:
+        return text
+
+    def replace(match: re.Match) -> str:
+        local_index = int(match.group(2))
+        global_index = index_map.get(local_index)
+        if global_index is None:
+            if strict or match.group(1) or index_map:
+                return "[引用来源未能对应]"
+            return match.group(0)
+        prefix = match.group(1) or ""
+        return f"[{prefix}{global_index}]"
+
+    return re.sub(r"\[(E)?(\d+)\]", replace, text)
+
+
+class _RagCitationStreamValidator:
+    """逐段校验 LLM 引用号，避免流式内容与 done.answer 不一致。"""
+
+    _CITATION = re.compile(r"\[(E)?(\d+)\]")
+    _POSSIBLE_CITATION = re.compile(r"(?:E)?\d*")
+
+    def __init__(self, valid_indexes: set[int]):
+        self._valid_indexes = valid_indexes
+        self._pending = ""
+
+    def feed(self, text: str, *, final: bool = False) -> str:
+        pending = self._pending + text
+        self._pending = ""
+        output = []
+
+        while pending:
+            opening = pending.find("[")
+            if opening == -1:
+                output.append(pending)
+                break
+            output.append(pending[:opening])
+
+            closing = pending.find("]", opening + 1)
+            next_opening = pending.find("[", opening + 1)
+            if next_opening != -1 and (closing == -1 or next_opening < closing):
+                output.append("[")
+                pending = pending[opening + 1:]
+                continue
+
+            if closing == -1:
+                possible = pending[opening + 1:]
+                if (not final
+                        and self._POSSIBLE_CITATION.fullmatch(possible)):
+                    self._pending = pending[opening:]
+                    break
+                output.append("[")
+                pending = pending[opening + 1:]
+                continue
+
+            token = pending[opening:closing + 1]
+            match = self._CITATION.fullmatch(token)
+            if match and int(match.group(2)) not in self._valid_indexes:
+                output.append("[引用来源未能对应]")
+            else:
+                output.append(token)
+            pending = pending[closing + 1:]
+
+        if final and self._pending:
+            output.append(self._pending)
+            self._pending = ""
+        return "".join(output)
+
+
+def _normalize_single_rag_citations(text: str) -> str:
+    """单步 RAG 保留原编号，同时标明无法对应到来源的引用。"""
+    if not text:
+        return text
     from backend.agents.reporter.context_filter import parse_sources_from_text
 
-    all_refs = []
-    seen_files = set()
+    local_indexes = {
+        int(source["index"]) for source in parse_sources_from_text(text)
+    }
+    return _rewrite_rag_citations(
+        text, {index: index for index in local_indexes},
+    )
 
-    for sid, sr in step_results.items():
-        if sr.get("capability") != "rag.search":
-            continue
-        if sr.get("status") != "success" or sr.get("_filtered"):
+
+def _build_rag_citation_context(step_results: dict) -> dict:
+    """为多步 RAG 建立统一引用编号、正文映射、来源卡和参考文献。"""
+    from backend.agents.reporter.context_filter import parse_sources_from_text
+
+    index_maps: dict[str, dict[int, int]] = {}
+    sources: list[dict] = []
+    source_indexes: dict[tuple, int] = {}
+    reference_lines: list[str] = []
+    emitted_indexes: set[int] = set()
+    reference_line = re.compile(r"^(\s*)(\d+)\.(\s*\*\*.+)$")
+
+    for step_id, sr in sorted(step_results.items(), key=lambda item: str(item[0])):
+        if (sr.get("capability") != "rag.search"
+                or sr.get("status") != "success" or sr.get("_filtered")):
             continue
 
+        index_maps[str(step_id)] = {}
         output = str(sr.get("output", ""))
-        for marker in ["### 参考文献", "### 参考来源"]:
-            idx = output.find(marker)
-            if idx != -1:
-                ref_section = output[idx:]
-                ref_entries = []
-                for line in ref_section.split("\n"):
-                    stripped = line.strip()
-                    if not stripped or stripped.startswith("#") or stripped.startswith("---"):
-                        ref_entries.append(line)
-                        continue
-                    m = re.match(r'\d+\.\s*\*\*(.+?)\*\*', stripped)
-                    if m:
-                        fname = m.group(1)
-                        if fname not in seen_files:
-                            seen_files.add(fname)
-                            ref_entries.append(line)
-                    elif seen_files:
-                        ref_entries.append(line)
-                if ref_entries:
-                    all_refs.append("\n".join(ref_entries))
-                break
+        parsed_sources = parse_sources_from_text(output)
+        if not parsed_sources:
+            continue
 
-    if not all_refs:
-        return ""
-    return "\n\n" + "\n\n".join(all_refs)
+        local_to_global: dict[int, int] = {}
+        for source in parsed_sources:
+            try:
+                local_index = int(source["index"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            filename = str(source.get("filename") or "").strip()
+            if not filename:
+                continue
+
+            # 同一文件的不同页/章节保留为不同证据卡；相同定位则复用编号。
+            # 旧索引缺少 doc_id 时无法证明跨步骤同名文件是同一文档，按步骤隔离。
+            doc_id = str(source.get("doc_id") or "").strip()
+            identity = (
+                doc_id or f"{step_id}:{filename}",
+                tuple(source.get("pages") or ()),
+                str(source.get("section") or "").strip(),
+            )
+            global_index = source_indexes.get(identity)
+            if global_index is None:
+                global_index = len(sources) + 1
+                source_indexes[identity] = global_index
+                sources.append({**source, "index": global_index})
+            local_to_global[local_index] = global_index
+
+        if not local_to_global:
+            continue
+        index_maps[str(step_id)] = local_to_global
+
+        reference_start = min(
+            (output.find(marker) for marker in ("### 参考文献", "### 参考来源")
+             if output.find(marker) != -1),
+            default=-1,
+        )
+        if reference_start == -1:
+            continue
+        for line in output[reference_start:].splitlines():
+            match = reference_line.match(line)
+            if not match:
+                continue
+            local_index = int(match.group(2))
+            global_index = local_to_global.get(local_index)
+            if global_index is None or global_index in emitted_indexes:
+                continue
+            emitted_indexes.add(global_index)
+            reference_lines.append(
+                f"{match.group(1)}{global_index}.{match.group(3)}"
+            )
+
+    references = (
+        "\n\n### 参考文献\n\n" + "\n".join(reference_lines)
+        if reference_lines else ""
+    )
+    return {
+        "index_maps": index_maps,
+        "references": references,
+        "sources": sources,
+    }
+
+
+def _extract_rag_references(step_results: dict) -> str:
+    """从 RAG 步骤提取统一编号后的参考文献。"""
+    return _build_rag_citation_context(step_results)["references"]
 
 
 def _extract_sources_from_steps(step_results: dict) -> list[dict]:
     """从 RAG step_results 中提取结构化来源"""
     from backend.agents.reporter.context_filter import parse_sources_from_text
 
-    for sr in step_results.values():
-        if sr.get("capability") != "rag.search":
-            continue
-        if sr.get("status") != "success" or sr.get("_filtered"):
-            continue
-        output = str(sr.get("output", ""))
-        sources = parse_sources_from_text(output)
-        if sources:
-            return sources
+    passthrough_step = _single_rag_passthrough_step(step_results)
+    if passthrough_step:
+        # 单步透传保留工具正文中的原始编号，来源卡也必须保留该编号。
+        passthrough_output = str(passthrough_step.get("output", ""))
+        passthrough_sources = parse_sources_from_text(passthrough_output)
+        if passthrough_sources:
+            return passthrough_sources
+
+    sources = _build_rag_citation_context(step_results)["sources"]
+    if sources:
+        return sources
 
     for sr in step_results.values():
         output = str(sr.get("output", sr.get("final_answer", "")))
@@ -933,7 +1167,11 @@ def _extract_sources_from_steps(step_results: dict) -> list[dict]:
     return []
 
 
-def _format_step_outputs(step_results: dict[str, dict], strip_references: bool = False) -> str:
+def _format_step_outputs(
+    step_results: dict[str, dict],
+    strip_references: bool = False,
+    citation_index_maps: dict[str, dict[int, int]] | None = None,
+) -> str:
     """将 step_results 格式化为 LLM 可读的文本"""
     parts = []
     for step_id, sr in sorted(step_results.items()):
@@ -945,12 +1183,16 @@ def _format_step_outputs(step_results: dict[str, dict], strip_references: bool =
         if status == "success":
             output = render_result_for_user(
                 _user_step_label(sr), capability, sr.get("output"))
-            if strip_references and capability == "rag.search":
-                for marker in ["\n\n---\n\n### 参考文献", "\n\n---\n\n### 参考来源"]:
-                    idx = output.find(marker)
-                    if idx != -1:
-                        output = output[:idx] + "\n\n*(参考文献已移至报告末尾)*"
-                        break
+            if capability == "rag.search":
+                citation_maps = citation_index_maps or {}
+                step_index = str(step_id)
+                if step_index in citation_maps:
+                    index_map = citation_maps[step_index]
+                    if strip_references:
+                        output = _strip_rag_reference_section(
+                            output, note=bool(index_map),
+                        )
+                    output = _rewrite_rag_citations(output, index_map)
             if len(output) > 3000:
                 output = output[:3000] + "\n\n*(输出过长，已截断)*"
             suffix = (f"\n状态: 已降级，信息可能不完整"
@@ -1044,7 +1286,7 @@ def _render_table_section(description: str, columns: list[str], rows: list[dict]
     display_rows = rows[:20]
     data_lines = []
     for row in display_rows:
-        vals = [str(row.get(c, "")) for c in columns]
+        vals = [_format_table_cell(row.get(c)) for c in columns]
         data_lines.append("| " + " | ".join(vals) + " |")
 
     lines = [
@@ -1060,6 +1302,17 @@ def _render_table_section(description: str, columns: list[str], rows: list[dict]
         lines.append(f"\n*(共 {len(rows)} 行，仅显示前 20 行)*")
 
     return "\n".join(lines)
+
+
+def _format_table_cell(value) -> str:
+    """把单元格内容作为纯文本显示，不让数据改变 Markdown 表格结构。"""
+    if value is None:
+        return "—"
+
+    text = escape(str(value), quote=False)
+    text = text.replace("\\", "\\\\")
+    text = re.sub(r"[\r\n]+", " / ", text)
+    return re.sub(r"([|*_`~\[\]])", r"\\\1", text)
 
 
 def _render_insight_section(description: str, output: dict) -> str:
@@ -1094,7 +1347,7 @@ def _render_insight_section(description: str, output: dict) -> str:
 
 
 def _build_data_summary(step_results: dict) -> str:
-    """从结构化结果构建一句话数据摘要（供 LLM 总结用）。"""
+    """提取少量结构化结果事实，供 LLM 写出有数据支撑的一句话结论。"""
     parts = []
     for sr in step_results.values():
         if sr.get("status") != "success":
@@ -1103,18 +1356,132 @@ def _build_data_summary(step_results: dict) -> str:
         if not isinstance(output, dict):
             continue
 
+        if sr.get("capability") == "sql.query":
+            # execute_sql_tool 使用 {status, data:{columns, rows, total}} 封套；
+            # SQL Agent 也可能直接返回 {columns, rows, row_count}。
+            if (output.get("status") in {"success", "ok"}
+                    and isinstance(output.get("data"), Mapping)):
+                output = output["data"]
+            raw_rows = output.get("rows")
+            has_rows = isinstance(raw_rows, list)
+            rows = raw_rows if has_rows else []
+            raw_columns = output.get("columns", [])
+            if not isinstance(raw_columns, (list, tuple)):
+                raw_columns = []
+            if not raw_columns and rows and isinstance(rows[0], Mapping):
+                raw_columns = list(rows[0])
+            columns = list(raw_columns[:6])
+            row_count = output.get("row_count")
+            if (not isinstance(row_count, int) or isinstance(row_count, bool)
+                    or row_count < 0):
+                row_count = output.get("total")
+            has_row_count = (isinstance(row_count, int)
+                             and not isinstance(row_count, bool)
+                             and row_count >= 0)
+            declared_row_count = row_count if has_row_count else None
+            if not has_row_count:
+                row_count = len(rows)
+
+            label = str(sr.get("description") or "查询结果").strip()[:80]
+            if not rows:
+                if has_row_count and row_count > 0:
+                    parts.append(f"{label}：共 {row_count} 行，但当前摘要未取得明细")
+                elif has_row_count:
+                    parts.append(f"{label}：共 0 行，无匹配记录")
+                else:
+                    parts.append(f"{label}：当前没有可展示明细，无法确认是否有匹配记录")
+                continue
+
+            samples = []
+            for row in rows[:3]:
+                if isinstance(row, Mapping):
+                    pairs = [(column, row.get(column)) for column in columns]
+                elif isinstance(row, (list, tuple)):
+                    pairs = list(zip(columns, row))
+                else:
+                    continue
+                rendered = []
+                for column, value in pairs:
+                    if isinstance(value, (dict, list, tuple)):
+                        value = json.dumps(value, ensure_ascii=False, default=str)
+                    value_text = "空" if value is None else re.sub(r"\s+", " ", str(value))
+                    if len(value_text) > 80:
+                        rendered.append(
+                            f"{column}=[值过长，未纳入摘要；请查看结果明细]"
+                        )
+                    else:
+                        rendered.append(f"{column}={value_text}")
+                if rendered:
+                    samples.append("；".join(rendered))
+            sample_text = "；".join(samples)
+            if sample_text:
+                returned_rows = len(rows)
+                if (declared_row_count == returned_rows
+                        and returned_rows <= 3 and len(samples) == returned_rows):
+                    result_scope = f"本次查询返回 {returned_rows} 行"
+                elif (declared_row_count is not None
+                      and declared_row_count >= returned_rows):
+                    result_scope = (
+                        f"预览，仅列出 {len(samples)} / {declared_row_count} 行；"
+                        "不能据此判断全量排名或趋势"
+                    )
+                elif declared_row_count is not None:
+                    result_scope = (
+                        f"预览，行数不一致（报告 {declared_row_count} 行，"
+                        f"返回 {returned_rows} 行）；范围未确认，"
+                        "不能据此判断全量排名或趋势"
+                    )
+                else:
+                    result_scope = (
+                        f"预览，仅列出 {len(samples)} 行；完整范围未确认，"
+                        "不能据此判断全量排名或趋势"
+                    )
+                parts.append(f"{label}：{result_scope}；结果：{sample_text}")
+            else:
+                if declared_row_count is None:
+                    parts.append(
+                        f"{label}：当前没有可用明细，无法确认是否有匹配记录"
+                    )
+                elif declared_row_count < len(rows):
+                    parts.append(
+                        f"{label}：结果总数与明细不一致（报告 {declared_row_count} 行，"
+                        f"返回 {len(rows)} 行），当前摘要没有可用明细"
+                    )
+                else:
+                    parts.append(
+                        f"{label}：共 {declared_row_count} 行，但当前摘要未取得可用明细"
+                    )
+            continue
+
         row_count = output.get("row_count", 0)
         tables = output.get("tables", [])
 
         if "risks" in output:
             parts.append(f"风险: {len(output.get('risks',[]))}个")
         if "summary" in output and output["summary"]:
-            parts.append(output["summary"][:80])
+            summary_text = re.sub(r"\s+", " ", str(output["summary"]))
+            if len(summary_text) > 80:
+                parts.append("摘要内容过长，未纳入一句话总结；请查看结果明细")
+            else:
+                parts.append(summary_text)
         if row_count:
             tables_str = ", ".join(tables[:3]) if tables else "数据"
             parts.append(f"查询{tables_str}返回{row_count}行")
 
-    return "; ".join(parts) if parts else "无摘要"
+    if not parts:
+        return "无摘要"
+
+    omission_notice = "后续结果因摘要长度限制未纳入，请查看结果明细"
+    max_summary_chars = 4000
+    summary = ""
+    for part in parts:
+        candidate = f"{summary}; {part}" if summary else part
+        if len(candidate) + len(omission_notice) + 2 > max_summary_chars:
+            break
+        summary = candidate
+    if len(summary) < len("; ".join(parts)):
+        return f"{summary}; {omission_notice}" if summary else omission_notice
+    return summary
 
 
 def _fallback_summary(question: str, step_results: dict, error: str) -> str:

@@ -3,7 +3,8 @@ import re
 import threading
 
 from backend.rag.retrieval_budget import (
-    RetrievalDeadlineExceeded, await_retrieval, current_budget,
+    RetrievalDeadlineExceeded, RetrievalUnavailableError, await_retrieval,
+    current_budget,
 )
 
 from backend.shared.logger import logger
@@ -625,7 +626,16 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
 
         if len(failures) == 2:
             # 向量 + BM25 都失败 = 真系统失败，向上抛（与 hybrid 路径口径一致）
-            raise RuntimeError(
+            trace_collector.end_span(
+                span,
+                status="error",
+                metrics={
+                    "query_tier": "vector_only",
+                    "fallback_side": ",".join(failures),
+                    "retrieval_unavailable": True,
+                },
+            )
+            raise RetrievalUnavailableError(
                 f"Vector 与 BM25 检索均失败: "
                 f"vector={failures['vector']}, bm25={failures['bm25']}"
             ) from failures["vector"]
@@ -661,11 +671,26 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
             metrics["fallback_reason"] = "; ".join(
                 f"{side}: {str(err)[:100]}" for side, err in failures.items()
             )
+        retrieval_unavailable = bool(failures and not merged)
+        if failures and merged:
+            for doc in merged:
+                doc.metadata["_retrieval_partial"] = True
+        if retrieval_unavailable:
+            metrics["retrieval_unavailable"] = True
         _record_request_retrieval_counts(
             vector_count=len(vector_docs), bm25_count=len(bm25_docs),
             fused_count=len(merged),
         )
-        trace_collector.end_span(span, metrics=metrics)
+        if retrieval_unavailable:
+            trace_collector.end_span(span, status="error", metrics=metrics)
+            cause = next(iter(failures.values()))
+            raise RetrievalUnavailableError(
+                "检索路径发生故障且可用的降级检索没有命中，无法确认知识库中没有相关资料"
+            ) from cause
+        if failures:
+            trace_collector.end_span(span, status="partial", metrics=metrics)
+        else:
+            trace_collector.end_span(span, metrics=metrics)
 
         if merged:
             _inject_gate_decision(merged, query)
@@ -732,7 +757,16 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     ):
         # 两侧都失败（或 BM25 检索器缺位+向量失败）= 真系统失败，向上抛
         # （不伪装成『没有资料』的空召回）
-        raise RuntimeError(
+        trace_collector.end_span(
+            span,
+            status="error",
+            metrics={
+                "query_tier": query_tier,
+                "fallback_side": ",".join(failures.keys()),
+                "retrieval_unavailable": True,
+            },
+        )
+        raise RetrievalUnavailableError(
             f"Vector 与 BM25 检索均失败: "
             f"vector={failures.get('vector')}, bm25={failures.get('bm25', 'retriever=None(冷启动)')}"
         ) from failures.get("vector")
@@ -879,11 +913,26 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         metrics["fallback_reason"] = "; ".join(
             f"{k}: {str(v)[:100]}" for k, v in failures.items()
         )
+    retrieval_unavailable = bool(failures and not merged)
+    if failures and merged:
+        for doc in merged:
+            doc.metadata["_retrieval_partial"] = True
+    if retrieval_unavailable:
+        metrics["retrieval_unavailable"] = True
     _record_request_retrieval_counts(
         vector_count=len(vector_docs), bm25_count=len(bm25_docs),
         fused_count=len(merged),
     )
-    trace_collector.end_span(span, metrics=metrics)
+    if retrieval_unavailable:
+        trace_collector.end_span(span, status="error", metrics=metrics)
+        cause = next(iter(failures.values()))
+        raise RetrievalUnavailableError(
+            "检索路径发生故障且可用的降级检索没有命中，无法确认知识库中没有相关资料"
+        ) from cause
+    if failures:
+        trace_collector.end_span(span, status="partial", metrics=metrics)
+    else:
+        trace_collector.end_span(span, metrics=metrics)
 
     # ── Evidence Gate: Retrieval 阶段拒答判定 ────────────────
     # 接入各 doc 的 metadata 让下游 chain.py 能读取（Rerank 可能淘汰任意

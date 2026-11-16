@@ -93,6 +93,27 @@ def _question_candidate_indexes(chunks: list[Document]) -> list[int]:
     return candidates
 
 
+def _parse_trace_page_metrics(
+    chunks: list[Document], ext: str, raw_ast: Any = None,
+) -> tuple[int, bool]:
+    """返回 Trace 可核对的物理页数；PDF 优先使用解析器记录的原始页数。"""
+    pages_applicable = ext.lower() == ".pdf"
+    if not pages_applicable:
+        return 0, False
+
+    page_count = 0
+    for chunk in chunks:
+        value = (chunk.metadata or {}).get("page_count")
+        if isinstance(value, int) and value > page_count:
+            page_count = value
+
+    try:
+        pdf_page_count = int(getattr(raw_ast, "pdf_page_count", 0) or 0)
+    except (TypeError, ValueError):
+        pdf_page_count = 0
+    return max(page_count, pdf_page_count), True
+
+
 def build_fixture_chunk_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     """返回评测 chunk 必须携带的稳定身份字段。"""
     fixture_set = str(metadata.get("fixture_set") or "").strip()
@@ -278,18 +299,19 @@ def apply_index_chunk_identity(chunks: list, doc_id: str) -> None:
     chunk_id 统一覆盖为 ``{doc_id}_{i}``。若不同步改写 parent_chunk_id，
     检索端 attach_parent_context 按 chunk_id $in 查询永远落空，
     Parent-Child 上下文扩展静默失效（2026-10-13 修复）。
+    过滤后找不到目标 Parent 时清空旧引用，避免留下无法命中的伪关联。
     """
-    id_map: dict[str, str] = {}
-    for i, ch in enumerate(chunks):
-        old_cid = str(ch.metadata.get("chunk_id") or "")
-        new_cid = f"{doc_id}_{i}"
-        if old_cid and old_cid != new_cid:
-            id_map[old_cid] = new_cid
-        ch.metadata["chunk_id"] = new_cid
-    for ch in chunks:
+    id_map = {
+        str(chunk.metadata.get("chunk_id") or ""): f"{doc_id}_{index}"
+        for index, chunk in enumerate(chunks)
+        if str(chunk.metadata.get("chunk_id") or "")
+    }
+    for index, ch in enumerate(chunks):
+        ch.metadata["chunk_id"] = f"{doc_id}_{index}"
         pid = str(ch.metadata.get("parent_chunk_id") or "")
-        if pid and pid in id_map:
-            ch.metadata["parent_chunk_id"] = id_map[pid]
+        if pid:
+            # 只保留能映射到本次完整分块清单的父块，兼容父块排在子块之后。
+            ch.metadata["parent_chunk_id"] = id_map.get(pid, "")
 
 
 def _filter_index_chunks(
@@ -433,6 +455,15 @@ PREPAID_INTEGRITY_ISSUE_PREFIX = "quality_anomaly:prepaid_integrity"
 _COVERAGE_AUDIT_FIELDS = {
     "leaf_total", "audited_leaf_count", "uncovered_count", "sampled",
 }
+
+
+class PrepaidContentIntegrityError(ValueError):
+    """付费前完整性门禁拒绝文档；与请求参数错误区分。"""
+
+    def __init__(self, issue_codes: list[str]):
+        self.issue_codes = tuple(str(code) for code in issue_codes if code)
+        detail = ",".join(self.issue_codes) or "content_integrity"
+        super().__init__(f"质量门禁硬异常(付费前预检): {detail}")
 
 
 def _coverage_quality_metrics(coverage: dict) -> dict:
@@ -706,9 +737,7 @@ def _enforce_prepaid_content_integrity(
                 "[Indexer] 付费前完整性预检留痕写入 registry 失败",
                 exc_info=True,
             )
-    raise ValueError(
-        f"质量门禁硬异常(付费前预检): {detail}"
-    )
+    raise PrepaidContentIntegrityError(failures)
 
 
 class ChunkingEmptyError(Exception):
@@ -1132,12 +1161,13 @@ class IncrementalIndexer:
         # identity_path（候选模式）：doc_id/KB/归属等派生与 registry 读取用
         # 正式路径；真实文件读取（load/parse）仍用 file_path（暂存文件）。
         path_id = identity_path or file_path
+        display_name = os.path.basename(path_id) or os.path.basename(file_path)
         kb_id = self.kb_id if self.kb_id != "default" else self._derive_kb_id(path_id)
         file_hash = file_hash or self._sha256(file_path)
         doc_id = self._derive_doc_id(path_id, file_hash, kb_id)
         # ── 启动 indexer trace ──
         trace = trace_collector.start(
-            question=os.path.basename(file_path),
+            question=display_name,
             session_id="",
             workflow_name="knowledge_index",
             workflow_kind=WorkflowKind.KNOWLEDGE_INDEX.value,
@@ -1178,7 +1208,7 @@ class IncrementalIndexer:
         upload_span = trace_collector.start_span(
             "index_upload",
             parent_id=None,
-            name=f"Index {os.path.basename(file_path)}",
+            name=f"Index {display_name}",
             type="workflow",
             kind=SpanKind.INDEX_UPLOAD.value,
             input={"file_path": file_path, "size_bytes": file_size},
@@ -1216,7 +1246,7 @@ class IncrementalIndexer:
                     )
             trace_collector.end_span(upload_span,
                 metrics={"doc_id": doc_id, "kb_id": kb_id})
-            trace_collector.finish(trace, os.path.basename(file_path),
+            trace_collector.finish(trace, display_name,
                                    upload_span.duration_ms, "", "")
             # P2-2:返回 dict 含 trace_id + chunk_count + doc_db_id,
             # 让 reindex_file 直接消费,不再反查 registry
@@ -1283,6 +1313,7 @@ class IncrementalIndexer:
         """
         ext = os.path.splitext(file_path)[1].lower()
         path_id = identity_path or file_path
+        display_name = os.path.basename(path_id) or os.path.basename(file_path)
         # department 必须按文件路径派生，不能用 self.department：批量 sync 时
         # indexer 是单实例跨多部门构建的，self.department 只是构造默认值。
         department = self._derive_department(path_id)
@@ -1314,7 +1345,7 @@ class IncrementalIndexer:
         load_span = trace_collector.start_span(
             "index_load",
             parent_id="index_upload",
-            name=f"Load {os.path.basename(file_path)}",
+            name=f"Load {display_name}",
             type="load",
             kind=SpanKind.INDEX_LOAD.value,
             input={"file_path": file_path, "ext": ext},
@@ -1341,7 +1372,7 @@ class IncrementalIndexer:
         parse_span = trace_collector.start_span(
             "index_parse",
             parent_id="index_upload",
-            name=f"Parse {os.path.basename(file_path)}",
+            name=f"Parse {display_name}",
             type="parse",
             kind=SpanKind.INDEX_PARSE.value,
             input={"file_path": file_path, "ext": ext},
@@ -1367,7 +1398,10 @@ class IncrementalIndexer:
                 )
                 lineage_recorder.persist_stage(ocr_lineage[0])
         try:
-            from backend.rag.preprocessing.pipeline import parse_and_chunk_full
+            from backend.rag.preprocessing.pipeline import (
+                _filename_title,
+                parse_and_chunk_full,
+            )
             if ext == ".pdf":
                 from backend.rag.preprocessing.parser import ocr as _ocr_mod
 
@@ -1379,10 +1413,24 @@ class IncrementalIndexer:
             )
             with lineage_recorder.bind_stage(bind_step) if lineage_recorder else nullcontext():
                 if self.ocr_page_budget is None:
-                    chunks, _qc = parse_and_chunk_full(file_path)
+                    chunks, _qc = parse_and_chunk_full(
+                        file_path,
+                        tenant_id=self.tenant_id,
+                        kb_id=kb_id,
+                        permission_scope=permission_scope,
+                        department=department,
+                        lineage_recorder=lineage_recorder,
+                        trace_parent_span_id=parse_span.span_id,
+                    )
                 else:
                     chunks, _qc = parse_and_chunk_full(
                         file_path, ocr_page_budget=self.ocr_page_budget,
+                        tenant_id=self.tenant_id,
+                        kb_id=kb_id,
+                        permission_scope=permission_scope,
+                        department=department,
+                        lineage_recorder=lineage_recorder,
+                        trace_parent_span_id=parse_span.span_id,
                     )
             if ocr_lineage is not None and ext == ".pdf":
                 raw_ast = _qc.get("raw_ast")
@@ -1508,16 +1556,11 @@ class IncrementalIndexer:
                     parser_lineage[0], status="success",
                     started_at=parser_lineage[1], output_count=len(chunks),
                 )
-            # P1（2026-10-19）：doc_count 是产出 chunk 数；page_count 不再由
-            # chunk 数冒充——仅 PDF 有真实物理页数（pipeline 元数据提供），
-            # 其余格式无可靠分页语义，记 0 并显式标记 page_count_applicable=false，
-            # 前端据此区分「不适用」与「0 页」。
-            _parse_pages = 0
-            for _ch in chunks:
-                _p = _ch.metadata.get("page_count")
-                if isinstance(_p, int) and _p > 0:
-                    _parse_pages = max(_parse_pages, _p)
-            _pages_applicable = ext.lower() == ".pdf"
+            # PDF 物理总页数保存在原始 AST；chunk 元数据没有页数字段时也要记录。
+            # 其余格式没有可靠的物理页数口径，记 0 并显式标记不适用。
+            _parse_pages, _pages_applicable = _parse_trace_page_metrics(
+                chunks, ext, _qc.get("raw_ast"),
+            )
             parse_metrics = {
                 "doc_count": len(chunks),
                 "page_count": _parse_pages if _pages_applicable else 0,
@@ -1553,7 +1596,7 @@ class IncrementalIndexer:
         clean_span = trace_collector.start_span(
             "index_clean",
             parent_id="index_upload",
-            name=f"Clean {os.path.basename(file_path)}",
+            name=f"Clean {display_name}",
             type="clean",
             kind=SpanKind.INDEX_CLEAN.value,
             input={"doc_count": len(chunks)},
@@ -1566,7 +1609,7 @@ class IncrementalIndexer:
         dedup_span = trace_collector.start_span(
             "index_dedup",
             parent_id="index_upload",
-            name=f"Check {os.path.basename(file_path)}",
+            name=f"Check {display_name}",
             type="dedup",
             kind=SpanKind.INDEX_DEDUP.value,
             input={"file_hash": file_hash},
@@ -1589,7 +1632,9 @@ class IncrementalIndexer:
             except Exception as e:
                 logger.debug(f"[Indexer] parsing 占位行写入失败（不影响索引）: {e}")
         dup_check = self.registry.get_by_path(path_id)
-        if dup_check and dup_check.get("file_hash") == file_hash and dup_check.get("status") == "active":
+        if (not self.candidate_mode and dup_check
+                and dup_check.get("file_hash") == file_hash
+                and dup_check.get("status") == "active"):
             trace_collector.end_span(dedup_span,
                 metrics={"cached": True, "existing_doc_id": dup_check.get("doc_id", "")})
             logger.info(f"[Dedup] 文件未变更，跳过索引: {file_path}")
@@ -1607,7 +1652,7 @@ class IncrementalIndexer:
         chunk_span = trace_collector.start_span(
             "index_chunk",
             parent_id="index_upload",
-            name=f"Chunk {os.path.basename(file_path)}",
+            name=f"Chunk {display_name}",
             type="chunk",
             kind=SpanKind.INDEX_CHUNK.value,
         )
@@ -1649,10 +1694,6 @@ class IncrementalIndexer:
                     f"个 chunk ({reason_breakdown})"
                 )
             chunks = filtered_chunks
-
-            # 后续审计与质量记录都以最终输出为准。先统一索引期 ID，
-            # 让 Parent/Leaf 关系校验对账实际入库身份；不补造被过滤的 Parent。
-            apply_index_chunk_identity(chunks, doc_id)
 
             trace_collector.end_span(chunk_span,
                 metrics={"raw_chunks": total_before_filter,
@@ -1713,10 +1754,25 @@ class IncrementalIndexer:
                 for chunk in chunks
                 if str((chunk.metadata or {}).get("document_title") or "").strip()
             ), "")
+        if os.path.normcase(os.path.abspath(path_id)) != os.path.normcase(
+            os.path.abspath(file_path)
+        ):
+            staged_name = os.path.basename(file_path)
+            staged_title = _filename_title(file_path)
+            staged_title_variants = {
+                staged_name,
+                os.path.splitext(staged_name)[0],
+                staged_title,
+            }
+            source_title = os.path.splitext(display_name)[0] or display_name
+            if not document_title or document_title in staged_title_variants:
+                document_title = source_title
         doc_meta = {
             "doc_id": doc_id,
-            "source_file": os.path.basename(file_path),
-            "file_path": file_path,
+            # 候选模式实际读取的是随机暂存文件；文档元数据必须绑定正式身份路径，
+            # 否则文件名分类会看到 upload_id，Trace 和入库元数据也会泄露暂存路径。
+            "source_file": os.path.basename(path_id),
+            "file_path": path_id,
             "kb_id": kb_id,  # 用派生的 kb_id 参数，而非 self.kb_id（否则 kb 隔离失效）
             "fixture_set": fixture_set or "",
             "dataset": "rag_eval" if fixture_set else "",
@@ -1749,6 +1805,10 @@ class IncrementalIndexer:
         collection_name = str(getattr(self.vectordb, "_collection", "") or "")
         if "::cand:" in collection_name:
             doc_meta["index_generation"] = collection_name.split("::cand:", 1)[1]
+        else:
+            # 普通重索引会原地覆盖当前版本，但 Registry 的发布指针保持不变；
+            # 新 Chunk 与 Registry 必须继续记录该 Active 代次，供详情和 Trace 追溯。
+            doc_meta["index_generation"] = str(doc_row.get("active_generation") or "")
         # 截断标记先算出来：付费前预检与质量记录都要用（定义在使用点之前）。
         chunks_truncated = any(
             ch.metadata.get("chunks_truncated") for ch in chunks
@@ -1764,6 +1824,10 @@ class IncrementalIndexer:
             filtered_details=filtered_details,
             truncated=chunks_truncated,
         )
+
+        # 先让付费前完整性审计看到原始父子引用并拦截悬空关系，再映射成
+        # 最终索引 ID；避免清掉坏引用后让预检误以为切分结构有效。
+        apply_index_chunk_identity(chunks, doc_id)
 
         metadata_lineage = None
         if lineage_recorder is not None:
@@ -2198,6 +2262,7 @@ class IncrementalIndexer:
 
         for i, ch in enumerate(chunks):
             ch.metadata["chunk_index"] = i
+            ch.metadata["document_title"] = str(doc_meta.get("title") or "")
             ch.metadata["source_format"] = str(doc_meta.get("source_format") or "")
             ch.metadata["parser_version"] = str(doc_meta.get("parser_version") or "")
             ch.metadata["chunk_policy_version"] = str(
@@ -2373,7 +2438,42 @@ class IncrementalIndexer:
             if len(full_text) > DOC_LEVEL_TEXT_MAX_CHARS:
                 doc_db_meta["doc_level_truncated"] = "true"
                 doc_db_meta["doc_level_full_chars"] = len(full_text)
-            ids = self.doc_db.add_texts(texts=[doc_level_text], metadatas=[doc_db_meta]) if doc_level_text else []
+            doc_embed_span = trace_collector.start_span(
+                "index_doc_embed",
+                parent_id="index_upload",
+                name="Embed document summary",
+                type="embedding",
+                kind=SpanKind.INDEX_EMBED.value,
+                input={
+                    "text_chars": len(doc_level_text),
+                    "doc_level_truncated": (
+                        doc_db_meta.get("doc_level_truncated") == "true"
+                    ),
+                },
+            )
+            try:
+                ids = (
+                    self.doc_db.add_texts(
+                        texts=[doc_level_text], metadatas=[doc_db_meta],
+                    )
+                    if doc_level_text else []
+                )
+            except Exception as exc:
+                trace_collector.end_span(
+                    doc_embed_span,
+                    status="error",
+                    metrics={"error": f"{type(exc).__name__}: {exc}"[:240]},
+                )
+                raise
+            else:
+                trace_collector.end_span(
+                    doc_embed_span,
+                    status="success" if ids else "skipped",
+                    metrics={
+                        "doc_vector_count": len(ids),
+                        "text_chars": len(doc_level_text),
+                    },
+                )
             doc_db_id = ids[0] if ids else ""
         except Exception as e:
             logger.error(f"Doc 级写入失败: {e}")

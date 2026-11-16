@@ -825,19 +825,19 @@ def _resilience_call_identity() -> tuple[str, str, str]:
 
 
 def _role_runtime_policy(role: str):
-    """读取由 Proxy 消费的角色运行策略。当前仅接通 MultiQuery P0。"""
-    if role != "multi_query":
+    """读取由 Proxy 消费的角色运行策略。"""
+    if role not in {"multi_query", "chunking"}:
         return None
     from backend.config import model_roles
 
     try:
         policy = model_roles.resolve_runtime_policy(role)
     except Exception:
-        # 策略解析不可用时使用代码默认，确保 MultiQuery 仍是零重试、skip。
+        # 策略解析不可用时使用代码默认，保证轻量兜底角色仍按自身策略运行。
         return model_roles.runtime_defaults(role)
-    if role == "multi_query" and policy.failure_policy not in {"skip", "fallback"}:
+    if role in {"multi_query", "chunking"} and policy.failure_policy not in {"skip", "fallback"}:
         logger.warning(
-            "[LLM:proxy] 忽略存量 MultiQuery 非支持 failure_policy，"
+            "[LLM:proxy] 忽略轻量兜底角色的非支持 failure_policy，"
             "回落到代码默认策略"
         )
         defaults = model_roles.runtime_defaults(role)

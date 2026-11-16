@@ -7,12 +7,10 @@ import json
 import uuid
 from typing import Any
 
+from backend.evaluation.dataset.query_types import RAG_QUERY_TYPES
 from backend.evaluation_v2 import repository
 
-_SUPPORTED_QUERY_TYPES = {
-    "single_doc", "multi_doc", "table", "procedural",
-    "no_evidence", "permission_denied",
-}
+_SUPPORTED_QUERY_TYPES = RAG_QUERY_TYPES
 
 
 class CorpusSnapshotMissingError(FileNotFoundError):
@@ -301,13 +299,17 @@ def _case_result_payload(item: Any, artifact_uri: str) -> dict[str, Any]:
     actual = item.actual if isinstance(item.actual, dict) else {}
     scores = dict(item.metrics or {})
     scores.update(_answer_generation_token_scores(actual))
+    trace = actual.get("trace")
+    trace_id = actual.get("trace_id")
+    if not trace_id and isinstance(trace, dict):
+        trace_id = trace.get("trace_id")
     return {
         "case_id": item.case_id,
         "status": item.status,
         "scores": scores,
         "failure_stage": item.error_stage or "",
         "latency_ms": max(0, int(item.duration_ms or 0)),
-        "trace_id": str(actual.get("trace_id", "")),
+        "trace_id": str(trace_id or ""),
         "artifact_uri": artifact_uri,
     }
 

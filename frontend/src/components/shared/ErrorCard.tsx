@@ -8,10 +8,8 @@
  *
  * 数据来源：`describeApiError`（src/api/errors.ts 的降级链，永不抛错）。
  * 行动指引按「RAG 拒答语义码 → ErrorKind」两级映射：
- * - RAG_NO_EVIDENCE / RAG_PERMISSION_DENIED / RAG_VERSION_CONFLICT：
- *   后端 C4 错误码接通后（响应体携带 code 字段）**无需改本组件即点亮**；
- *   接通前这三个码不会被后端发送，映射只是预登记的契约（不写假入口——
- *   权限申请页/版本历史页当前不存在，故只给文案不带跳转）。
+ * - RAG 拒答语义码由 SSE done.answer_status 转成行动指引；权限申请页和
+ *   版本历史页当前不存在，因此只给文案，不伪造跳转入口。
  * - HTTP 401/403/429/超时/网络等已由 errors.ts 既有机制覆盖（FALLBACK_BY_STATUS
  *   + CLIENT_ERRORS，有测试锁定），本卡片按 kind 给行动指引。
  *
@@ -22,14 +20,9 @@
 import { useState } from "react";
 import { describeApiError, type ResolvedError } from "@/api/errors";
 import { getIdempotencyOperationStatus, type IdempotencyOperationSummary } from "@/api/idempotency";
+import { RAG_REJECTION_ACTIONS } from "@/lib/ragAnswer";
 
-/** RAG 拒答语义码 → 行动指引（预登记契约，后端 C4 接通前不命中） */
-export const RAG_REJECTION_ACTIONS: Record<string, string> = {
-  RAG_NO_EVIDENCE: "知识库中未找到依据：换个问法重试，或补充更多背景信息",
-  RAG_PERMISSION_DENIED: "该知识对当前角色受限：申请访问权限或联系管理员",
-  RAG_VERSION_CONFLICT: "命中多版本/过期版本制度：请确认制度版本或查看历史版本",
-  RAG_HALLUCINATION: "答案未通过事实一致性校验已被拦截：请换个问法或补充背景信息",
-};
+export { RAG_REJECTION_ACTIONS } from "@/lib/ragAnswer";
 
 /** 按 ErrorKind 给行动指引（401/403/429/超时/网络等，errors.ts 既有机制的呈现层） */
 export const KIND_ACTIONS: Record<string, string> = {
@@ -160,7 +153,7 @@ export default function ErrorCard({
 
       <div className="mt-2 rounded-lg bg-gray-50 px-3 py-2">
         <p className="text-xs leading-relaxed text-gray-600">
-          <span className="font-medium text-gray-700">我能做什么：</span>
+          <span className="font-medium text-gray-700">下一步：</span>
           {fb.actionText}
         </p>
       </div>

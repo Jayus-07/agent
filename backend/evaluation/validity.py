@@ -182,6 +182,32 @@ def classify_report_validity(report: Any) -> RunValidityVerdict:
             {"total": len(results)},
         )
 
+    sql_gold_failures = [
+        result for result in results
+        if getattr(result, "module", "") == "sql"
+        and getattr(result, "error_stage", "") == "sql_gold"
+    ]
+    if sql_gold_failures:
+        failure = sql_gold_failures[0]
+        actual = getattr(failure, "actual", None) or {}
+        category = str(actual.get("gold_failure_category") or "infrastructure")
+        validity_by_category = {
+            "dataset": RunValidity.INVALID_DATASET,
+            "environment": RunValidity.INVALID_ENV,
+            "infrastructure": RunValidity.INVALID_INFRA,
+        }
+        validity = validity_by_category.get(category, RunValidity.INVALID_INFRA)
+        return RunValidityVerdict(
+            validity,
+            f"sql_gold_{category}_failure",
+            {
+                "case_id": getattr(failure, "case_id", ""),
+                "gold_status": actual.get("gold_status"),
+                "gold_failure_category": category,
+                "failure_count": len(sql_gold_failures),
+            },
+        )
+
     # Planner 只在 Live 模式有评测意义。单个模型/预算/运行时错误就意味着
     # 这轮 Planner 样本没有真实模型结果，不能沿用通用「少数 error 可忽略」
     # 门槛，也不能把代理降级话术或运行时兜底记进模型质量通过率。

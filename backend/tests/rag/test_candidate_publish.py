@@ -4,7 +4,10 @@
 任意时刻至多一个发布者（输者明确 superseded）；重试不得重复发布。
 """
 
+import errno
+import hashlib
 import os
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +17,9 @@ from backend.rag.indexing.publish import (
     CandidateStores,
     CompositeVectorStore,
     SupersededCandidate,
+    _commit_staging_file,
+    _bm25_global_lock,
+    _release_bm25_global_lock,
     publish_candidate,
     switch_bm25_snapshot,
 )
@@ -281,6 +287,31 @@ def test_publish_resume_after_commit_keeps_expected_base(tmp_path, monkeypatch):
     assert result == "published"
 
 
+def test_publish_same_generation_retry_keeps_ids_reused_by_new_chunks(
+    tmp_path, monkeypatch,
+):
+    _patch_switch(monkeypatch)
+    stores, main_v, _main_d, _, idx = _stores(gen="g1", tmp_path=tmp_path)
+    registry, run_store = FakeRegistry(), FakeRunStore()
+    chunk_real = FakeChunkStoreReal()
+    monkeypatch.setattr(
+        "backend.rag.indexing.chunk_store.get_chunk_store", lambda: chunk_real)
+    path = str(tmp_path / "docs" / "kb" / "dept" / "a.md")
+    old_row = {
+        "active_generation": "g1", "doc_id": "doc-1",
+        "chunk_ids": '["c1", "stale"]', "doc_db_id": "",
+        "doc_type": "general",
+    }
+    registry.rows[path] = old_row
+
+    _publish(
+        tmp_path, stores, idx, registry, run_store,
+        old_row=old_row, old_chunk_ids=["c1", "stale"],
+    )
+
+    assert main_v.deleted_ids == [["stale"]]
+
+
 def test_publish_zero_chunks_rejected(tmp_path, monkeypatch):
     _patch_switch(monkeypatch)
     stores, main_v, _, _, idx = _stores(tmp_path=tmp_path)
@@ -291,6 +322,26 @@ def test_publish_zero_chunks_rejected(tmp_path, monkeypatch):
     # 零 chunk 在 mark publishing 之前就拒绝（failed 终态由外层 settle 落）
     assert "u1" not in run_store.status
     assert registry.rows == {}
+
+
+def test_publish_does_not_mark_success_when_active_vectors_are_missing(
+    tmp_path, monkeypatch,
+):
+    _patch_switch(monkeypatch)
+    stores, _, _, _, idx = _stores(tmp_path=tmp_path)
+    stores.main_vectordb.get = lambda where=None: {
+        "ids": [], "documents": [], "metadatas": [],
+    }
+    registry, run_store = FakeRegistry(), FakeRunStore()
+    chunk_real = FakeChunkStoreReal()
+    monkeypatch.setattr(
+        "backend.rag.indexing.chunk_store.get_chunk_store", lambda: chunk_real)
+
+    with pytest.raises(CandidatePublishError, match="chunk 向量不完整"):
+        _publish(tmp_path, stores, idx, registry, run_store)
+
+    assert run_store.status["u1"] == "publishing"
+    assert chunk_real.flushed == {}
 
 
 def test_financial_snapshot_keeps_old_vectors(tmp_path, monkeypatch):
@@ -358,6 +409,42 @@ def test_buffering_chunk_store_flush_semantics(tmp_path):
     assert buf.flush(real) == 0
 
 
+def test_bm25_global_lock_is_removed_after_release(tmp_path):
+    lock_path = tmp_path / ".publish.lock"
+
+    lock_fd = _bm25_global_lock(tmp_path)
+    assert lock_path.exists()
+
+    _release_bm25_global_lock(lock_fd, lock_path)
+
+    assert not lock_path.exists()
+
+
+def test_bm25_global_lock_release_does_not_remove_replacement_lock(
+    tmp_path, monkeypatch,
+):
+    lock_path = tmp_path / ".publish.lock"
+    old_fd = _bm25_global_lock(tmp_path)
+    original_close = os.close
+    replacement_fds = []
+
+    def close_then_replace(fd):
+        original_close(fd)
+        lock_path.unlink()
+        new_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        replacement_fds.append(new_fd)
+
+    monkeypatch.setattr("backend.rag.indexing.publish.os.close", close_then_replace)
+    try:
+        _release_bm25_global_lock(old_fd, lock_path)
+        assert lock_path.exists()
+    finally:
+        monkeypatch.setattr("backend.rag.indexing.publish.os.close", original_close)
+        for new_fd in replacement_fds:
+            original_close(new_fd)
+        lock_path.unlink(missing_ok=True)
+
+
 def test_composite_view_concatenates_main_and_candidate():
     class S:
         def __init__(self, ids, texts, metas):
@@ -370,3 +457,76 @@ def test_composite_view_concatenates_main_and_candidate():
     assert out["ids"] == ["a", "b"] and out["documents"] == ["t1", "t2"]
     with pytest.raises(NotImplementedError):
         comp.add_documents([])
+
+
+def test_cleanup_candidate_by_generation_removes_bm25_sibling_stage(
+    tmp_path, monkeypatch,
+):
+    from backend.rag.indexing import publish
+    from backend.rag.vectorstore import pgvector_store
+
+    dropped = []
+
+    class FakeVectorStore:
+        def __init__(self, *, persist_directory, embedding_function=None):
+            self.persist_directory = persist_directory
+
+        def drop_collection(self, collection):
+            dropped.append((self.persist_directory, collection))
+
+    monkeypatch.setattr(
+        pgvector_store, "PgVectorKnowledgeStore", FakeVectorStore,
+    )
+    generation = "g-cleanup"
+    main_bm25_dir = tmp_path / "bm25"
+    main_bm25_dir.mkdir()
+    published = main_bm25_dir / "PUBLISHED.json"
+    published.write_text("{}", encoding="utf-8")
+    staging_dir = tmp_path / f"staging-{generation}"
+    staging_dir.mkdir()
+    (staging_dir / "index.pkl").write_bytes(b"candidate")
+
+    publish.cleanup_candidate_by_generation(
+        generation,
+        chroma_path="chroma",
+        doc_db_path="doc_db",
+        bm25_index_dir=str(main_bm25_dir),
+    )
+
+    assert not staging_dir.exists()
+    assert published.exists()
+    assert dropped == [
+        ("chroma", f"chroma::cand:{generation}"),
+        ("doc_db", f"doc_db::cand:{generation}"),
+    ]
+
+
+def test_commit_staging_file_falls_back_to_atomic_same_volume_copy(
+    tmp_path, monkeypatch,
+):
+    source = tmp_path / "staging" / "upload.txt"
+    target = tmp_path / "docs" / "upload.txt"
+    source.parent.mkdir()
+    target.parent.mkdir()
+    source.write_bytes("新的完整原件".encode("utf-8"))
+    target.write_bytes("旧文件".encode("utf-8"))
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    real_replace = os.replace
+    failed_cross_device = False
+
+    def replace_with_cross_device_once(src, dst):
+        nonlocal failed_cross_device
+        if Path(src) == source and not failed_cross_device:
+            failed_cross_device = True
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr("backend.rag.indexing.publish.os.replace",
+                        replace_with_cross_device_once)
+
+    _commit_staging_file(str(source), str(target), expected)
+
+    assert failed_cross_device
+    assert target.read_bytes() == "新的完整原件".encode("utf-8")
+    assert not source.exists()
+    assert list(target.parent.glob("*.publishing")) == []

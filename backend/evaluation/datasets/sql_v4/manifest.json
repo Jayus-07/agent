@@ -1,0 +1,10 @@
+{
+  "version": "4.0",
+  "case_count": 45,
+  "module": "sql",
+  "schema_description": "NL2SQL 版本化候选集：继承 sql_v3 的 SC-117 退款率排名修正；SC-121 限定上月与本月两个自然月并保留无销售额月份；SC-127 排除未来日期并把无订单销量按零计算。",
+  "created": "2026-11-15",
+  "parent_dataset": "sql_v3",
+  "content_hash": "39c0b4e9fe86f513",
+  "notes": "候选集，不覆盖默认 SQL 数据集。需通过共享业务库上的结果级评测后再决定是否准入。"
+}

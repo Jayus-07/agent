@@ -191,6 +191,8 @@ def test_coverage_audit_detects_missing_table_cell_and_row():
     report = coverage_audit(ast, chunks)
     assert report["uncovered_count"] == 1
     assert report["table_cells_uncovered"] >= 1
+    missing_rows = report["uncovered_samples"][0]["missing_row_samples"]
+    assert missing_rows[0]["cells"] == ["B002", "梨", "200"]
 
 
 def test_sampled_coverage_never_claims_full_document_percentage():
@@ -249,6 +251,53 @@ def test_index_identity_overwrite_keeps_parent_linkage():
     for c in chunks:
         if c.metadata["granularity"] == "leaf":
             assert c.metadata["parent_chunk_id"] in new_parent_ids
+
+
+def test_index_identity_clears_removed_parent_reference():
+    """Parent 被过滤或排在子块之后时，引用仍与本次分块清单一致。"""
+    from langchain_core.documents import Document
+
+    from backend.rag.indexing.indexer import apply_index_chunk_identity
+
+    chunks = [
+        Document(
+            page_content="父块排在后面",
+            metadata={
+                "chunk_id": "leaf-before-parent",
+                "granularity": "leaf",
+                "parent_chunk_id": "parent-later",
+            },
+        ),
+        Document(
+            page_content="可用父块",
+            metadata={"chunk_id": "parent-later", "granularity": "parent"},
+        ),
+        Document(
+            page_content="被过滤的旧父块编号恰好撞上新分块编号",
+            metadata={
+                "chunk_id": "leaf-with-stale-parent",
+                "granularity": "leaf",
+                "parent_chunk_id": "docX_2",
+            },
+        ),
+        Document(
+            page_content="仍关联父块的叶子",
+            metadata={
+                "chunk_id": "leaf-with-valid-parent",
+                "granularity": "leaf",
+                "parent_chunk_id": "parent-later",
+            },
+        ),
+    ]
+
+    apply_index_chunk_identity(chunks, "docX")
+
+    assert [chunk.metadata["chunk_id"] for chunk in chunks] == [
+        "docX_0", "docX_1", "docX_2", "docX_3",
+    ]
+    assert chunks[0].metadata["parent_chunk_id"] == "docX_1"
+    assert chunks[2].metadata["parent_chunk_id"] == ""
+    assert chunks[3].metadata["parent_chunk_id"] == "docX_1"
 
 
 def test_parent_expansion_end_to_end_after_index_identity():

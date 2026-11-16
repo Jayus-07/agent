@@ -306,7 +306,9 @@ def test_legacy_source_mapping_cannot_pass_release_gate():
 )
 def test_managed_report_rejects_less_privileged_readers(monkeypatch, role, actor):
     import asyncio
+
     from fastapi import HTTPException
+
     from backend.app.api.deps import OperatorIdentity
     from backend.app.api.routes import evaluation
 
@@ -335,6 +337,7 @@ def test_idempotent_replay_does_not_redispatch_or_clear_cancel(monkeypatch):
 
 def test_workers_and_api_share_eval_reports_mount():
     from pathlib import Path
+
     import yaml
 
     compose = yaml.safe_load((Path(__file__).resolve().parents[3] / "docker-compose.yml").read_text(encoding="utf-8"))
@@ -351,9 +354,10 @@ def test_workers_and_api_share_eval_reports_mount():
 
 def test_worker_prompt_snapshot_uses_worker_event_loop(monkeypatch):
     import asyncio
-    from backend.tasks.celery_app import refresh_worker_prompt_snapshot
+
     from backend.infra import async_utils
     from backend.prompts.service import prompt_service
+    from backend.tasks.celery_app import refresh_worker_prompt_snapshot
 
     called = []
     async def refresh():
@@ -373,6 +377,7 @@ def test_rag_evaluation_worker_has_sufficient_memory_and_ragas_dependency():
     （旧断言 768m 在两个文件上均已失真，合并桌面评测分支时暴露）。
     """
     from pathlib import Path
+
     import yaml
 
     root = Path(__file__).resolve().parents[3]
@@ -399,24 +404,41 @@ def test_evaluation_task_distinguishes_automatic_retry_from_terminal_failure():
     assert task_view(record)['status'] == 'FAILED'
 
 
-def test_synthesis_uses_visible_chunks_directly_and_keeps_request_budget(monkeypatch, tmp_path):
+def test_synthesis_uses_visible_snapshot_content_and_keeps_request_budget(monkeypatch, tmp_path):
     # ragas 是可选依赖（pyproject extras），CI 的 free contract 环境不安装。
     pytest.importorskip("ragas")
     import asyncio
     from contextlib import nullcontext
     from types import SimpleNamespace
-    from ragas.testset.synthesizers.single_hop.specific import SingleHopSpecificQuerySynthesizer
+
+    import ragas.testset
+    from ragas.testset.synthesizers.generate import calculate_split_values
+
     from backend.evaluation import corpus_snapshots, managed_execution, ragas_bridge
     from backend.evaluation.dataset import synthetic
+    from backend.evaluation_v2 import repository
     from backend.infra import async_utils
     from backend.infra.llm import budget, registry_store
     from backend.observability.tracer import trace_collector
-    from backend.evaluation_v2 import repository
     from backend.rag.indexing import doc_registry
 
     monkeypatch.setenv('RAG_DATA_DIR', str(tmp_path))
-    rows = {'documents': ['隐藏原文' * 100, '可见原文甲' * 100, '重复甲' * 100, '可见原文乙' * 100],
-            'metadatas': [{'doc_id': value} for value in ('hidden', 'doc-a', 'doc-a', 'doc-b')]}
+    rows = {
+        'documents': [
+            '隐藏原文' * 100,
+            '可见原文甲' * 100,
+            '重复甲' * 200,
+            '重复甲' * 200,
+            '可见原文乙' * 100,
+        ],
+        'metadatas': [
+            {'doc_id': 'hidden', 'chunk_index': 0},
+            {'doc_id': 'doc-a', 'chunk_index': 1},
+            {'doc_id': 'doc-a', 'chunk_index': 0},
+            {'doc_id': 'doc-a', 'chunk_index': 2},
+            {'doc_id': 'doc-b', 'chunk_index': 0},
+        ],
+    }
     monkeypatch.setattr(corpus_snapshots, 'load', lambda _: {'kb_id': 'kb', 'snapshot_id': 'a' * 24, 'visible_ids': ['doc-a', 'doc-b']})
     monkeypatch.setattr(corpus_snapshots, 'pipeline', lambda _: SimpleNamespace(vectordb=SimpleNamespace(get=lambda: rows)))
     monkeypatch.setattr(managed_execution, 'validate_kb', lambda _: {})
@@ -441,6 +463,7 @@ def test_synthesis_uses_visible_chunks_directly_and_keeps_request_budget(monkeyp
     monkeypatch.setattr(registry_store, 'refresh_registry', refresh)
     monkeypatch.setattr(async_utils, 'run_on_worker_loop', lambda coroutine: asyncio.run(coroutine))
     monkeypatch.setattr(ragas_bridge, '_init_configured_llm', lambda: SimpleNamespace(set_run_config=lambda _: None))
+    monkeypatch.setattr(ragas_bridge, '_init_embeddings', lambda: object())
     budget_ids, calls, boundaries, finishes = [], [], [], []
     def scope(identity, **kwargs):
         budget_ids.append((identity, kwargs))
@@ -450,33 +473,278 @@ def test_synthesis_uses_visible_chunks_directly_and_keeps_request_budget(monkeyp
     monkeypatch.setattr(trace_collector, 'start_span', lambda *args, **kwargs: object())
     monkeypatch.setattr(trace_collector, 'end_span', lambda *args, **kwargs: None)
     monkeypatch.setattr(trace_collector, 'finish', lambda *args, **kwargs: finishes.append(kwargs))
-    async def sample(self, scenario):
-        from ragas.testset.synthesizers.single_hop.base import SingleHopScenario
-        assert isinstance(scenario, SingleHopScenario)
-        content = scenario.nodes[0].properties['page_content']
-        calls.append(content)
-        return SimpleNamespace(user_input=f'业务问题{len(calls)}', reference='可信答案', reference_contexts=[content])
-    monkeypatch.setattr(SingleHopSpecificQuerySynthesizer, 'generate_sample', sample)
+    class Generator:
+        def __init__(self, *, llm, embedding_model, persona_list, llm_context):
+            assert llm is not None and embedding_model is not None
+            assert len(persona_list) == 1 and '简体中文' in llm_context
+
+        def generate_with_chunks(
+            self, documents, *, testset_size, query_distribution, run_config, raise_exceptions,
+        ):
+            assert len(documents) == 3
+            assert [document.metadata['doc_id'] for document in documents] == [
+                'doc-a', 'doc-b', 'doc-a',
+            ]
+            assert all(len(document.page_content) <= synthetic.MAX_RAGAS_DOCUMENT_CHARS for document in documents)
+            assert testset_size == 5 and raise_exceptions is True
+            assert run_config.max_workers == 1
+            assert all('简体中文' in synthesizer.generate_query_reference_prompt.instruction for synthesizer, _ in query_distribution)
+            assert all(not synthesizer.generate_query_reference_prompt.examples for synthesizer, _ in query_distribution)
+            splits, _ = calculate_split_values(
+                [probability for _synthesizer, probability in query_distribution],
+                testset_size,
+            )
+            counts = {
+                synthesizer.name: amount
+                for (synthesizer, _probability), amount in zip(query_distribution, splits, strict=True)
+            }
+            assert counts == {
+                'single_hop_specific_query_synthesizer': 3,
+                'multi_hop_abstract_query_synthesizer': 1,
+                'multi_hop_specific_query_synthesizer': 1,
+            }
+            calls.extend(document.page_content for document in documents)
+            samples = []
+            for (synthesizer, _probability), amount in zip(query_distribution, splits, strict=True):
+                assert "原文没有明确数量时，直接列出要求，不要自行概括数量" in (
+                    synthesizer.generate_query_reference_prompt.instruction
+                )
+                for _ in range(amount):
+                    contexts = [documents[0].page_content]
+                    if synthesizer.name.startswith('multi_hop_'):
+                        contexts = [
+                            f'<1-hop>\n\n{documents[0].page_content}',
+                            f'<2-hop>\n\n{documents[1].page_content}',
+                        ]
+                    samples.append(SimpleNamespace(
+                        synthesizer_name=synthesizer.name,
+                        eval_sample=SimpleNamespace(
+                            user_input=f'业务问题{len(samples) + 1}',
+                            reference='可信答案',
+                            reference_contexts=contexts,
+                        ),
+                    ))
+            return SimpleNamespace(samples=samples)
+
+    monkeypatch.setattr(ragas.testset, 'TestsetGenerator', Generator)
     request = {'snapshot_id': 'a' * 24, 'task_id': 'task-probe', 'tenant_id': 'default', 'actor': 'user:1', 'count': 5,
+               'query_counts': {'single_hop_specific': 3, 'multi_hop_abstract': 1, 'multi_hop_specific': 1},
                'manifest': {'dataset_key': 'synthetic_probe', 'name': '候选题', 'version': '1.0.0'}}
     result = synthetic.generate(request, boundary=boundaries.append)
     assert result['review'] == 'pending_review' and result['case_count'] == 5
     assert result['v2_candidate_count'] == 5 and len(stored_v2) == 5
     assert 'expected' not in stored_v2[0] and stored_v2[0]['observed_answer'] == ''
+    assert {item['metadata']['query_type'] for item in stored_v2} == {
+        'single_hop_specific', 'multi_hop_abstract', 'multi_hop_specific',
+    }
+    assert {item['metadata']['generation_method'] for item in stored_v2} == {'ragas_mixed'}
+    assert {tuple(sorted(item['metadata']['dataset_query_counts'].items())) for item in stored_v2} == {
+        (('multi_hop_abstract', 1), ('multi_hop_specific', 1), ('single_hop_specific', 3)),
+    }
     assert stored_v2[0]['proposed_evidence'][0]['doc_version'] in {'version-a', 'version-b'}
-    assert budget_ids == [('eval-synthesis:task-probe', {'user_id': '1', 'tenant_id': 'default'})]
-    assert len(calls) == 5 and all('隐藏' not in text and '重复' not in text for text in calls)
-    assert len(boundaries) == 7 and len(finishes) == 1
+    assert all(
+        not evidence['quote'].startswith('<')
+        for item in stored_v2
+        for evidence in item['proposed_evidence']
+    )
+    assert budget_ids == [('eval-synthesis:task-probe', {
+        'user_id': '1',
+        'tenant_id': 'default',
+        'max_retries': synthetic.RAGAS_REQUEST_RETRY_LIMIT,
+        'max_fallbacks': synthetic.RAGAS_REQUEST_FALLBACK_LIMIT,
+    })]
+    assert len(calls) == 3 and all('隐藏' not in text for text in calls)
+    assert any('重复甲' in text for text in calls)
+    assert calls[0].startswith('重复甲')
+    assert sum(text.startswith('重复甲') for text in calls) == 1
+    assert calls[1].startswith('可见原文乙')
+    assert len(boundaries) == 3 and len(finishes) == 1
     with pytest.raises(ValueError, match='1–5'):
         synthetic.generate({**request, 'count': 6}, boundary=boundaries.append)
 
 
+def test_ragas_source_documents_respect_context_budget_cap():
+    from backend.evaluation.dataset import synthetic
+
+    visible_ids = [f"doc-{index}" for index in range(8)]
+    rows = {
+        "documents": ["采购申请必须留存审批记录。" * 60 for _ in visible_ids],
+        "metadatas": [
+            {"doc_id": doc_id, "chunk_index": 0}
+            for doc_id in visible_ids
+        ],
+    }
+
+    documents = synthetic._build_ragas_source_documents(rows, visible_ids)
+
+    assert len(documents) == synthetic.MAX_RAGAS_SOURCE_DOCUMENTS == 4
+    assert [item.metadata["doc_id"] for item in documents] == visible_ids[:4]
+    assert all(
+        len(item.page_content) <= synthetic.MAX_RAGAS_DOCUMENT_CHARS
+        for item in documents
+    )
+
+
+def test_ragas_source_chunks_split_into_bounded_exact_spans():
+    from backend.evaluation.dataset import synthetic
+
+    source = '制度条款。\n' * 1_000
+    chunks = synthetic._split_ragas_source_chunk(source)
+
+    assert len(chunks) >= 3
+    assert all(
+        synthetic.MIN_RAGAS_DOCUMENT_CHARS <= len(chunk) <= synthetic.MAX_RAGAS_DOCUMENT_CHARS
+        for chunk in chunks
+    )
+    assert ''.join(chunks) == source
+
+
+def test_ragas_synthesis_request_checks_type_counts_and_presets():
+    from pydantic import ValidationError
+
+    from backend.app.api.routes.evaluation_imports import SynthesisRequest
+    from backend.evaluation.dataset.synthetic import default_query_counts
+
+    assert default_query_counts(5) == {
+        'single_hop_specific': 3,
+        'multi_hop_abstract': 1,
+        'multi_hop_specific': 1,
+    }
+    assert default_query_counts(1) == {
+        'single_hop_specific': 0,
+        'multi_hop_abstract': 1,
+        'multi_hop_specific': 0,
+    }
+    request = {
+        'snapshot_id': 'a' * 24,
+        'manifest': package()['manifest'],
+        'count': 5,
+        'query_counts': {
+            'single_hop_specific': 3,
+            'multi_hop_abstract': 1,
+            'multi_hop_specific': 1,
+        },
+        'request_id': 'request-probe',
+    }
+    assert SynthesisRequest.model_validate(request).query_counts == request['query_counts']
+    defaulted_request = SynthesisRequest.model_validate({
+        'snapshot_id': 'a' * 24,
+        'manifest': package()['manifest'],
+        'count': 1,
+        'request_id': 'default-probe',
+    })
+    assert defaulted_request.query_counts == default_query_counts(1)
+    assert defaulted_request.dataset_query_counts == default_query_counts(1)
+    with pytest.raises(ValidationError, match='各题型数量之和'):
+        SynthesisRequest.model_validate({**request, 'query_counts': {'single_hop_specific': 4}})
+    with pytest.raises(ValidationError, match='三种题型'):
+        SynthesisRequest.model_validate({**request, 'query_counts': {'unknown': 5}})
+    with pytest.raises(ValidationError, match='至少计划一种多跳'):
+        SynthesisRequest.model_validate({**request, 'query_counts': {'single_hop_specific': 5}})
+    single_hop_batch = SynthesisRequest.model_validate({
+        **request,
+        'query_counts': {'single_hop_specific': 5},
+        'dataset_query_counts': {
+            'single_hop_specific': 10,
+            'multi_hop_abstract': 5,
+            'multi_hop_specific': 5,
+        },
+    })
+    assert single_hop_batch.query_counts == {'single_hop_specific': 5}
+    with pytest.raises(ValidationError, match='不能超过 20 题'):
+        SynthesisRequest.model_validate({
+            **request,
+            'dataset_query_counts': {
+                'single_hop_specific': 10,
+                'multi_hop_abstract': 5,
+                'multi_hop_specific': 6,
+            },
+        })
+
+
+def test_generated_payload_fails_closed_when_ragas_misses_requested_type():
+    from types import SimpleNamespace
+
+    from backend.evaluation.dataset.synthetic import generated_payload
+
+    sample = SimpleNamespace(
+        synthesizer_name='single_hop_specific_query_synthesizer',
+        eval_sample=SimpleNamespace(
+            user_input='如何申请？',
+            reference='提交申请。',
+            reference_contexts=['提交申请。'],
+        ),
+    )
+    document = SimpleNamespace(page_content='提交申请。', metadata={'doc_id': 'doc-1'})
+    with pytest.raises(ValueError, match='实际生成题型与请求配额不一致'):
+        generated_payload(
+            {'dataset_key': 'synthetic_probe', 'version': '1.0.0'},
+            [sample],
+            [document],
+            expected_query_counts={
+                'single_hop_specific': 0,
+                'multi_hop_abstract': 1,
+                'multi_hop_specific': 0,
+            },
+        )
+
+
+def test_managed_ragas_multihop_case_requires_two_distinct_evidence_quotes():
+    payload = package()
+    payload['cases'][0]['query_type'] = 'multi_hop_specific'
+    payload['cases'][0]['expected']['evidence'] = [{'doc_id': 'doc-1', 'quote': '第一段证据'}]
+    bad = assets.validate_upload('cases.json', json.dumps(payload).encode(), {})
+    assert not bad['valid']
+    assert any('两段不同证据' in item['message'] for item in bad['errors'])
+
+    payload['cases'][0]['expected']['evidence'].append({'doc_id': 'doc-2', 'quote': '第二段证据'})
+    valid = assets.validate_upload('cases.json', json.dumps(payload).encode(), {})
+    assert valid['valid']
+
+
+@pytest.mark.parametrize(
+    'query_type',
+    [
+        'single_hop',
+        'multi_hop',
+        'ambiguous',
+        'version_conflict',
+        'adversarial',
+        'table',
+        'procedural',
+    ],
+)
+def test_managed_import_accepts_curated_rag_question_types(query_type):
+    payload = package()
+    payload['cases'][0]['query_type'] = query_type
+    if query_type == 'multi_hop':
+        payload['cases'][0]['expected']['evidence'].append(
+            {'doc_id': 'doc-2', 'quote': '另一段支持答案的证据'}
+        )
+
+    valid = assets.validate_upload('cases.json', json.dumps(payload).encode(), {})
+
+    assert valid['valid'], valid['errors']
+
+
+@pytest.mark.parametrize('query_type', ['no_evidence', 'permission_denied'])
+def test_managed_refusal_types_cannot_be_uploaded_as_answer_cases(query_type):
+    payload = package()
+    payload['cases'][0]['query_type'] = query_type
+
+    invalid = assets.validate_upload('cases.json', json.dumps(payload).encode(), {})
+
+    assert not invalid['valid']
+    assert any('拒答原因、无答案或权限题型' in item['message'] for item in invalid['errors'])
+
+
 @pytest.mark.parametrize('dispatch_type', ['initial', 'resume', 'recovery', 'admin_retry'])
 def test_dispatch_preserves_cancel_and_pause_flags(monkeypatch, dispatch_type):
-    from backend.models.task import TaskRecord
-    from backend.tasks import task_manager, agent_tasks
-    from backend.services import task_service
     from types import SimpleNamespace
+
+    from backend.models.task import TaskRecord
+    from backend.services import task_service
+    from backend.tasks import agent_tasks, task_manager
 
     record = TaskRecord(id='control-probe', user_id='1', graph_name='rag_eval')
     monkeypatch.setattr(task_manager, 'clear_flags', lambda _: pytest.fail('派发不得清除已经送达的控制意图'))

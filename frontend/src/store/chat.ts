@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
-import type { Session, Message, ChatMode, SSEStreamEvent, TodoItem, TokenUsage, ClarificationEvent } from '@/lib/types'
+import type { Session, Message, ChatMode, SSEStreamEvent, TodoItem, TokenUsage, ClarificationEvent, SQLResultSet } from '@/lib/types'
 import type { HandoffEvent } from '@/types/handoff'
 import { parseHandoffEvent } from '@/types/handoff'
 import { isTerminalEvent, reduceStreamCore } from '@/store/stream-reduce'
@@ -74,7 +74,8 @@ interface ChatState {
   replaceLastAssistant: (content: string, sessionId?: string, sources?: any[], usage?: import('@/lib/types').TokenUsage,
     thinking?: string, thinkingSeconds?: number, traceId?: string,
     ragMeta?: { answerStatus?: string; confidence?: number; replySource?: string },
-    pause?: import('@/lib/types').PausedEvent) => void
+    pause?: import('@/lib/types').PausedEvent,
+    sqlResults?: SQLResultSet[]) => void
 
   /** done 时固化执行过程快照到尾部 assistant 消息（CompletionLine 回看用） */
   attachTrace: (sessionId: string, trace: import('@/lib/types').AgentTrace) => void
@@ -122,6 +123,8 @@ function emptyStreamState(): Partial<ChatState> {
 }
 
 export const useChatStore = create<ChatState>((set, get) => {
+  // 异步历史恢复期间可能发生多次导航；版本号可识别切走后又切回的过期响应。
+  let sessionNavigationVersion = 0
   const initialSession = createSession()
   return {
     sessions: [initialSession],
@@ -156,6 +159,7 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     // —— 会话 ——
     newSession: () => {
+      sessionNavigationVersion += 1
       const s = createSession()
       set((state) => ({
         sessions: [s, ...state.sessions],
@@ -167,6 +171,7 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     switchSession: (id) => {
       if (id !== get().currentId) {
+        sessionNavigationVersion += 1
         set({ ...emptyStreamState(), currentId: id, sessionModel: null })
       }
     },
@@ -180,6 +185,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     deleteSession: (id) => {
+      if (get().currentId === id) sessionNavigationVersion += 1
       set((state) => {
         const remaining = state.sessions.filter((s) => s.id !== id)
         if (remaining.length === 0) {
@@ -348,7 +354,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       })
     },
 
-    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds, traceId, ragMeta, pause) => {
+    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds, traceId, ragMeta, pause, sqlResults) => {
       set((state) => ({
         sessions: state.sessions.map((s) => {
           const sid = targetId(state, sessionId)
@@ -360,6 +366,7 @@ export const useChatStore = create<ChatState>((set, get) => {
               ...msgs[lastIdx],
               content,
               sources: sources || msgs[lastIdx].sources,
+              sqlResults: sqlResults ?? msgs[lastIdx].sqlResults,
               // RAG 拒答语义码/置信度/回复归因（done 帧透传）：
               // ?? 保留历史恢复消息已有值，undefined 不覆盖
               answerStatus: ragMeta?.answerStatus ?? msgs[lastIdx].answerStatus,
@@ -381,10 +388,12 @@ export const useChatStore = create<ChatState>((set, get) => {
     // —— 从后端加载持久化会话历史消息 ——
     loadHistory: async (sessionId: string) => {
       const loadingFromId = get().currentId
+      const loadingNavigationVersion = sessionNavigationVersion
       try {
         const { getSessionMessages } = await import('@/api/memory')
         const msgs = await getSessionMessages(sessionId)
-        if (get().currentId === loadingFromId) set({ historyError: null })
+        if (sessionNavigationVersion === loadingNavigationVersion
+            && get().currentId === loadingFromId) set({ historyError: null })
         if (!msgs || msgs.length === 0) return
 
         // 历史双写修复：旧数据每轮问答被前端+后端各存了一次，且中止轮次会留下空回答。
@@ -394,13 +403,36 @@ export const useChatStore = create<ChatState>((set, get) => {
           const content = typeof m.content === 'string' ? m.content : ''
           if (m.role === 'assistant' && !content.trim()) continue
           const prev = restored[restored.length - 1]
-          if (prev && prev.role === m.role && prev.content === content) continue
-          restored.push({
+          const message: Message = {
             id: nanoid(),
             role: m.role === 'assistant' ? 'assistant' : 'user',
             content,
             timestamp: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
-          })
+            sources: Array.isArray(m.sources) ? m.sources : undefined,
+            sqlResults: Array.isArray(m.sql_results)
+              ? m.sql_results as SQLResultSet[]
+              : undefined,
+            answerStatus: typeof m.answer_status === 'string' ? m.answer_status : undefined,
+            confidence: typeof m.confidence === 'number' && Number.isFinite(m.confidence)
+              ? m.confidence
+              : undefined,
+            replySource: typeof m.reply_source === 'string' ? m.reply_source : undefined,
+          }
+          if (prev && prev.role === message.role && prev.content === content) {
+            // 旧的前后端双写可能只有较晚副本带有结构化结果；去重时合并答案展示元数据。
+            if (prev.role === 'assistant' && message.role === 'assistant') {
+              restored[restored.length - 1] = {
+                ...prev,
+                sources: message.sources?.length ? message.sources : prev.sources,
+                sqlResults: message.sqlResults?.length ? message.sqlResults : prev.sqlResults,
+                answerStatus: message.answerStatus ?? prev.answerStatus,
+                confidence: message.confidence ?? prev.confidence,
+                replySource: message.replySource ?? prev.replySource,
+              }
+            }
+            continue
+          }
+          restored.push(message)
         }
         if (restored.length === 0) return
 
@@ -413,6 +445,9 @@ export const useChatStore = create<ChatState>((set, get) => {
               ),
             }
           }
+          const shouldSelectSession = sessionNavigationVersion === loadingNavigationVersion
+            && state.currentId === loadingFromId
+          if (shouldSelectSession) sessionNavigationVersion += 1
           // 远程会话不在本地 store（侧边栏用自己的缓存渲染，不入 store）——
           // 不存在则新建会话实体，否则消息永远挂不上去（会话恢复失效的根因）。
           const firstUser = restored.find((m) => m.role === 'user')
@@ -431,12 +466,13 @@ export const useChatStore = create<ChatState>((set, get) => {
               },
               ...state.sessions,
             ],
-            ...(state.currentId === loadingFromId ? { currentId: sessionId } : {}),
+            ...(shouldSelectSession ? { currentId: sessionId } : {}),
           }
         })
       } catch (e) {
         // 不再静默：记忆库故障必须留下痕迹，否则历史消息凭空消失且无从排查
-        if (get().currentId === loadingFromId) {
+        if (sessionNavigationVersion === loadingNavigationVersion
+            && get().currentId === loadingFromId) {
           set({ historyError: e instanceof Error ? e.message : '加载历史消息失败' })
         }
       }

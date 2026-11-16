@@ -14,7 +14,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from backend.observability.gateway_log_ingest import _parse_ts, _row_from_entry
+from backend.observability.gateway_log_ingest import (
+    _LAST_ID_KEY,
+    _STREAM_KEY,
+    _checkpoint_consumed,
+    _parse_ts,
+    _row_from_entry,
+)
 
 
 def _fields(payload: dict) -> dict:
@@ -76,6 +82,26 @@ def test_row_from_entry_truncates_hostile_fields():
     assert len(row[7]) == 2048   # uri
     assert len(row[12]) == 512   # ua
     assert row[9] == 404
+
+
+def test_checkpoint_is_saved_before_consumed_stream_is_trimmed():
+    class _Redis:
+        def __init__(self):
+            self.calls = []
+
+        def set(self, key, value):
+            self.calls.append(("set", key, value))
+
+        def xtrim(self, key, *, minid, approximate):
+            self.calls.append(("xtrim", key, minid, approximate))
+
+    redis = _Redis()
+    _checkpoint_consumed(redis, "1715-1")
+
+    assert redis.calls == [
+        ("set", _LAST_ID_KEY, "1715-1"),
+        ("xtrim", _STREAM_KEY, "1715-1", True),
+    ]
 
 
 # ── 查询端点降级 ──

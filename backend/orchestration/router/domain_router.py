@@ -113,6 +113,29 @@ class DomainRouter:
             }
 
         context = state.get("routing_context")
+        if product_id == "agent":
+            from backend.orchestration.router.rule_router import (
+                is_knowledge_evidence_followup,
+                is_knowledge_evidence_request,
+            )
+
+            is_knowledge_followup = is_knowledge_evidence_followup(
+                query,
+                context if isinstance(context, Mapping) else None,
+            )
+            if is_knowledge_followup or is_knowledge_evidence_request(query):
+                return {
+                    "domain": "knowledge",
+                    "subflow": None,
+                    "confidence": 0.95,
+                    "score_type": "contextual_rule",
+                    "source": "rule",
+                    "reasoning": (
+                        "知识库主题的原文核对追问，继续走知识库域"
+                        if is_knowledge_followup
+                        else "业务主题要求核对原文依据，走知识库域"
+                    ),
+                }
         prediction = self._classifier.classify(
             query,
             context if isinstance(context, Mapping) else None,

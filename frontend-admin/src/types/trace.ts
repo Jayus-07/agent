@@ -102,13 +102,15 @@ export interface Span {
   /** LLM 调用明细（type=llm_call 时有值） */
   llm_call?: {
     model: string;
-    temperature: number;
-    prompt_text: string;
-    response_text: string;
-    prompt_tokens: number;
-    completion_tokens: number;
+    provider?: string;
+    role?: string;
+    temperature?: number;
+    prompt_text?: string;
+    response_text?: string;
+    prompt_tokens?: number;
+    completion_tokens?: number;
     /** deprecated：原生 USD（Billing V2） */
-    cost_usd: number;
+    cost_usd?: number;
     /** 记账本位币（CNY）：唯一展示主口径（2026-10-07） */
     cost_cny?: number;
     /** HTTP 响应状态（metrics.http_status；采集链当前无写入点，默认 null） */

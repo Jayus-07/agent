@@ -1,15 +1,10 @@
 """测试集校验器 — 枚举校验、schema 验证、来源比例检查。"""
 
+from backend.evaluation.dataset.query_types import RAG_QUERY_TYPES
 from backend.evaluation.models import MODULE_KINDS, TestCase
 
 _VALID_ANSWER_TYPES = {"factual", "numeric", "procedural", "comparative", ""}
-_VALID_QUERY_TYPES = {
-    "single_doc", "multi_hop", "adversarial", "negative", "table",
-    "chunk_level", "long_doc", "comparative", "procedural", "aggregation",
-    "conditional_reasoning", "negation_exclusion", "implicit_condition", "",
-    # managed 上传题集的 ImportCase.query_type 契约，需由守卫测试同步覆盖。
-    "multi_doc", "no_evidence", "permission_denied",
-}
+_VALID_QUERY_TYPES = RAG_QUERY_TYPES | {""}
 _VALID_TIERS = {"smoke", "core", "hard", "regression", ""}
 _VALID_SOURCES = {"curated", "adversarial", "production_log", "regression", "",
                   # cs-v2 锁版（2026-09-19）：生成器归档见 datasets/cs/v2.deprecated

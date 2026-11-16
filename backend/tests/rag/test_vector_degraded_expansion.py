@@ -3,22 +3,26 @@
 实测背景：DashScope embedding 间歇 Connection error 时，RRF 融合只剩
 BM25 路、分数塌陷到 0.065 量级，AdaptiveRetriever 的"低置信跳过
 Expansion"在残缺分数上误判 → parent 上下文未补全 → leaf 碎片缺标题
-实体 → 实体覆盖校验假拒答。本文件钉死三个行为：
+实体 → 实体覆盖校验假拒答。本文件钉死四个行为：
   1. 全部 query 的 embedding 检索失败 → 置 vector_degraded 信号；
   2. 部分成功（原始 query 成功）→ 不置信号；
   3. vector_degraded 置位时，AdaptiveRetriever 低置信分数不再跳过
      Context Expansion（未置位时保持原跳过行为）。
+  4. Doc 级 embedding Provider 失败时安全降级，内部异常仍向上传播。
 """
+from types import SimpleNamespace
+
 import pytest
 
 from backend.rag.base import CustomRetriever
 from backend.rag.context import (
+    RagRequestState,
     clear_context,
     get_context,
     is_vector_degraded,
     set_context,
 )
-from backend.rag.retrieval.retrievers import AdaptiveRetriever
+from backend.rag.retrieval.retrievers import AdaptiveRetriever, ChunkLevelRetriever
 from backend.rag.retrieval.retrievers import _Staging  # noqa: F401  确认模块可导入
 
 
@@ -76,8 +80,14 @@ def test_all_queries_fail_marks_vector_degraded():
         clear_context()
 
 
-def test_partial_success_keeps_signal_off():
+def test_partial_success_keeps_signal_off(monkeypatch):
     """原始 query 成功、扩展失败 → 不置降级信号（向量分存在，尺度正常）。"""
+    # 本测试只核对向量召回和降级标记；真实共享 Registry 里的生命周期状态
+    # 与假造的 d1 文档无关，因此在测试中放行审核过滤，避免受本机资料状态影响。
+    monkeypatch.setattr(
+        "backend.rag.retrieval.hybrid._filter_review_blocked",
+        lambda docs: docs,
+    )
     set_context(
         __import__("backend.rag.context", fromlist=["RagRequestState"]).RagRequestState(
             metadata_filter={}, intent_label="", query=""
@@ -87,6 +97,60 @@ def test_partial_success_keeps_signal_off():
         r = _make_retriever(fail_all=False)
         docs = r.retrieve("差旅住宿费标准", k=3, expanded_queries=["差旅 住宿 限额"])
         assert len(docs) == 3
+        assert is_vector_degraded() is False
+    finally:
+        clear_context()
+
+
+def test_doc_candidate_embedding_provider_failure_marks_vector_degraded():
+    """Stage 1 的 embedding Provider 失败要放行后续 BM25 安全降级。"""
+    import httpx
+    from openai import APIConnectionError
+
+    class _FailingDocDB:
+        def similarity_search(self, *_args, **_kwargs):
+            request = httpx.Request("POST", "http://embedding.invalid/v1/embeddings")
+            raise APIConnectionError(request=request)
+
+    set_context(RagRequestState())
+    retriever = ChunkLevelRetriever(
+        doc_db=_FailingDocDB(),
+        vectordb=object(),
+        chunk_retriever=object(),
+        bm25=object(),
+        person_index={},
+    )
+    try:
+        docs = retriever._authorized_doc_search(
+            SimpleNamespace(query="退款审批门槛", authorized=None),
+            flt={"tenant_id": "default"},
+        )
+
+        assert docs == []
+        assert is_vector_degraded() is True
+    finally:
+        clear_context()
+
+
+def test_doc_candidate_unexpected_errors_are_not_treated_as_provider_outage():
+    class _BrokenDocDB:
+        def similarity_search(self, *_args, **_kwargs):
+            raise ValueError("invalid internal filter")
+
+    set_context(RagRequestState())
+    retriever = ChunkLevelRetriever(
+        doc_db=_BrokenDocDB(),
+        vectordb=object(),
+        chunk_retriever=object(),
+        bm25=object(),
+        person_index={},
+    )
+    try:
+        with pytest.raises(ValueError, match="invalid internal filter"):
+            retriever._authorized_doc_search(
+                SimpleNamespace(query="退款审批门槛", authorized=None),
+                flt={"tenant_id": "default"},
+            )
         assert is_vector_degraded() is False
     finally:
         clear_context()
@@ -102,6 +166,11 @@ class _GateProbe:
 def _build_adaptive(monkeypatch, *, degraded: bool, scores: list[float]) -> tuple:
     """构造 AdaptiveRetriever + 捕获扩展分支。score 来源 rrf_score。"""
     from langchain_core.documents import Document
+    # 该测试只验证是否执行全文扩展，不依赖本机 Registry 中的 d1 发布状态。
+    monkeypatch.setattr(
+        "backend.rag.retrieval.review_filter.apply_review_visibility",
+        lambda docs, **_kwargs: docs,
+    )
 
     chunks = [
         Document(

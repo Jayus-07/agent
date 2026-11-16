@@ -6,6 +6,12 @@ import { evaluationService, type EvaluationV2RunCaseDetail } from '@/api/evaluat
 import { ApiError, errMessage } from '@/api/client'
 import { StatusBadge, TableWrap, Td, Th, ctl } from './proto/evalUi'
 
+const RAG_QUERY_TYPE_LABELS: Record<string, string> = {
+  single_hop_specific: '单跳具体',
+  multi_hop_abstract: '多跳抽象',
+  multi_hop_specific: '多跳具体',
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
@@ -68,7 +74,9 @@ function MetricsTable({ title, items }: { title: string; items: Array<[string, u
 function CaseDetailContent({ detail }: { detail: EvaluationV2RunCaseDetail }) {
   const expected = asRecord(detail.result.expected)
   const actual = asRecord(detail.result.actual)
+  const pipeline = asRecord(actual.pipeline)
   const query = firstValue(expected, ['query', 'question']) ?? firstValue(actual, ['query', 'question'])
+  const queryType = firstValue(pipeline, ['query_type']) ?? firstValue(actual, ['query_type'])
   const reference = firstValue(expected, ['reference_answer', 'expected_answer', 'ground_truth', 'answer', 'expected_behavior'])
   const requiredFacts = firstValue(expected, ['required_facts', 'facts'])
   const expectedEvidence = firstValue(expected, ['evidence', 'ground_truth_context', 'citations', 'evidence_refs'])
@@ -98,6 +106,7 @@ function CaseDetailContent({ detail }: { detail: EvaluationV2RunCaseDetail }) {
     <div className="flex flex-wrap gap-x-5 gap-y-2 rounded-md bg-bg-elevated p-3 text-xs text-text-secondary">
       <span>用例修订：r{detail.case_revision}</span>
       <span>状态：<StatusBadge status={detail.result.status} /></span>
+      {queryType !== null && <span>RAG 题型：{RAG_QUERY_TYPE_LABELS[textValue(queryType)] || textValue(queryType)}</span>}
       <span>时延：{typeof detail.latency_ms === 'number' ? `${detail.latency_ms} ms` : '—'}</span>
       <span>费用：{detail.cost_status === 'not_reported_by_legacy_runner' ? '旧 Runner 未归因' : `${detail.cost_amount ?? '—'} ${detail.cost_currency ?? ''}`.trim()}</span>
     </div>

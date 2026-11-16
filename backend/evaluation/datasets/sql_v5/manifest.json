@@ -1,0 +1,10 @@
+{
+  "version": "5.0",
+  "case_count": 45,
+  "module": "sql",
+  "schema_description": "NL2SQL 版本化候选集：继承 sql_v4 的退款率、自然月与空集合修正；进一步将客户、商品、分类和竞品的聚合/去重限定到稳定主键，避免同名实体合并。",
+  "created": "2026-11-15",
+  "parent_dataset": "sql_v4",
+  "content_hash": "aac85ffa295b7473",
+  "notes": "候选集，不覆盖默认 SQL 数据集。需通过共享业务库上的结果级评测后再决定是否准入。"
+}

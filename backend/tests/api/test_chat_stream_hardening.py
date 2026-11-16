@@ -81,6 +81,7 @@ class _CapturingAgent:
 
 @pytest.fixture()
 def client(monkeypatch):
+    import backend.config.auth as identity_cfg
     import backend.app.api.middleware.auth as auth_mw
     import backend.app.api.routes.chat as chat_mod
     import backend.app.api.routes.agent_chat_tasks as long_tasks
@@ -89,6 +90,8 @@ def client(monkeypatch):
     monkeypatch.setattr(long_tasks, "cancel_previous", lambda *a: None)
     monkeypatch.setattr(chat_mod, "get_multi_agent", lambda: _EchoAgent())
     monkeypatch.setattr(auth_mw, "API_KEY", "test")
+    # 固定模拟网关信任标记，避免本机 GATEWAY_TRUST_SECRET 改变身份解析结果。
+    monkeypatch.setattr(identity_cfg, "GATEWAY_TRUST_SECRET", "test-gateway-trust")
     from backend.app.server import app
 
     return TestClient(app)
@@ -250,8 +253,11 @@ class TestAbortSessionFallback:
 
     @staticmethod
     def _identity_headers() -> dict[str, str]:
+        from backend.config.auth import GATEWAY_TRUST_HEADER
+
         return {
             "X-API-Key": "test",
+            GATEWAY_TRUST_HEADER: "test-gateway-trust",
             "X-Auth-Type": "jwt",
             "X-User-Id": "trusted-abort-user",
             "X-Tenant-Id": "tenant-abort",
@@ -279,6 +285,41 @@ class TestAbortSessionFallback:
         assert resp.status_code == 200
         assert resp.json()["status"] == "aborted"
         assert evt.is_set(), "前缀兜底必须触发 stop_event"
+
+    def test_agent_abort_stops_only_the_registered_agent_session(self, client):
+        import backend.app.api.routes.chat as chat_mod
+        from backend.core.product_context import (
+            AGENT_PRODUCT,
+            identity_scope_key,
+            namespace_session_id,
+        )
+
+        session_id = "agent-owned-session"
+        scoped_session = namespace_session_id(AGENT_PRODUCT, session_id)
+        scoped = (
+            f"{identity_scope_key(AGENT_PRODUCT, 'trusted-abort-user', 'tenant-abort')}::"
+            f"{scoped_session}"
+        )
+        request_id = "agent-owned-request"
+        key = chat_mod._request_key(scoped, request_id)
+        evt = threading.Event()
+        chat_mod._active_stops[key] = evt
+        chat_mod._active_stop_owners[key] = (
+            AGENT_PRODUCT.product_id, "trusted-abort-user", "tenant-abort",
+        )
+        try:
+            response = client.post(
+                "/chat/agent/abort",
+                json={"session_id": session_id, "request_id": request_id},
+                headers=self._identity_headers(),
+            )
+        finally:
+            chat_mod._active_stops.pop(key, None)
+            chat_mod._active_stop_owners.pop(key, None)
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "aborted"
+        assert evt.is_set(), "Agent 专属入口须按产品+身份+session+request 精确中止"
 
     @pytest.mark.parametrize(
         "identity_override",
@@ -349,6 +390,7 @@ class TestProductChatEntrypoints:
         self, client, monkeypatch, path, expected_product,
         expected_domain, spoofed_domain,
     ):
+        from backend.config.auth import GATEWAY_TRUST_HEADER
         import backend.app.api.routes.chat as chat_mod
 
         agent = _CapturingAgent()
@@ -364,6 +406,7 @@ class TestProductChatEntrypoints:
             headers={
                 "X-API-Key": "test", "X-User-Id": "trusted-user",
                 "X-Tenant-Id": "tenant-a", "X-Auth-Type": "jwt",
+                GATEWAY_TRUST_HEADER: "test-gateway-trust",
             },
         )
 
@@ -379,10 +422,17 @@ class TestProductChatEntrypoints:
         assert kwargs["persist_memory"] is True
 
     def test_agent_route_rejects_missing_tenant(self, client):
+        from backend.config.auth import GATEWAY_TRUST_HEADER
+
         response = client.post(
             "/chat/agent/stream",
             json={"question": "你好", "session_id": "no-tenant"},
-            headers={"X-API-Key": "test", "X-User-Id": "trusted-user"},
+            headers={
+                "X-API-Key": "test",
+                "X-User-Id": "trusted-user",
+                "X-Auth-Type": "jwt",
+                GATEWAY_TRUST_HEADER: "test-gateway-trust",
+            },
         )
         assert response.status_code == 403
 

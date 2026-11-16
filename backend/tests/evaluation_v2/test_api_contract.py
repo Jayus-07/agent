@@ -10,7 +10,6 @@ from pydantic import ValidationError
 from starlette.requests import Request
 
 from backend.app.api.deps import OperatorIdentity
-from backend.app.exceptions import http_exception_handler
 from backend.app.api.identity import Identity
 from backend.app.api.routes.evaluation_imports import synthesize_dataset
 from backend.app.api.routes.evaluation_v2 import (
@@ -29,14 +28,15 @@ from backend.app.api.routes.evaluation_v2 import (
     create_eval_run,
     create_evaluator_version,
     export_dataset_version,
-    get_eval_run_case_detail,
     get_dataset_version_coverage,
+    get_eval_run_case_detail,
     list_candidates,
     list_suites,
     preview_dataset_import,
     publish_dataset_version,
     verify_evidence_anchors,
 )
+from backend.app.exceptions import http_exception_handler
 from backend.evaluation.corpus_snapshots import EmptyCorpusError
 from backend.shared.error_protocol import ErrorCode, error_envelope_from_exception
 
@@ -337,6 +337,144 @@ def test_non_rag_review_keeps_sql_contract_and_skips_kb_evidence(monkeypatch):
     assert captured["kwargs"]["evidence"] == []
 
 
+def test_rejected_rag_review_keeps_candidate_evidence_without_verifying_it(monkeypatch):
+    from starlette.requests import Request
+
+    import backend.app.api.routes.evaluation_v2 as routes
+
+    captured = {}
+
+    async def direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(routes.asyncio, "to_thread", direct_to_thread)
+    monkeypatch.setattr(
+        routes.repository,
+        "get_candidate_review_context",
+        lambda *_args: {"domain": "rag", "payload": {"input": {"query": "测试问题"}}},
+    )
+    monkeypatch.setattr(
+        routes.repository,
+        "review_candidate",
+        lambda *args, **kwargs: captured.update({"args": args, "kwargs": kwargs})
+        or {"review_status": "rejected"},
+    )
+    monkeypatch.setattr(
+        routes,
+        "verify_evidence_anchors",
+        lambda *_args: pytest.fail("拒绝候选不应把引用标成已核验"),
+    )
+    body = routes.CandidateReview.model_validate({
+        "expected_revision": 1,
+        "verdict": "rejected",
+        "rationale": "拒绝：题型与问题实际需要的推理步骤不符。",
+        "evidence": [{
+            "kb_id": "kb-test",
+            "doc_id": "doc-test",
+            "doc_version": "v1",
+            "quote": "候选原始引用。",
+        }],
+    })
+
+    result = asyncio.run(routes.review_candidate(
+        candidate_id=uuid.UUID("42000000-0000-4000-8000-000000000003"),
+        body=body,
+        request=Request({"type": "http", "headers": []}),
+        identity=Identity(user_id="alice", tenant_id="tenant-a"),
+        actor=OperatorIdentity(role="admin", actor="user:alice"),
+    ))
+
+    assert result["review_status"] == "rejected"
+    assert captured["kwargs"]["evidence"] == [{
+        "kb_id": "kb-test",
+        "doc_id": "doc-test",
+        "doc_version": "v1",
+        "anchor_id": None,
+        "quote": "候选原始引用。",
+    }]
+
+
+def test_ragas_multihop_review_persists_fact_to_verified_anchor_mapping(monkeypatch):
+    from starlette.requests import Request
+
+    import backend.app.api.routes.evaluation_v2 as routes
+    from backend.evaluation_v2.review_quality import RAGAS_QUALITY_CHECKS
+
+    captured = {}
+
+    async def direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(routes.asyncio, "to_thread", direct_to_thread)
+    monkeypatch.setattr(
+        routes.repository,
+        "get_candidate_review_context",
+        lambda *_args: {
+            "domain": "rag",
+            "payload": {
+                "input": {"query": "结合两条规则应该怎么处理？"},
+                "metadata": {
+                    "generation_method": "ragas_mixed",
+                    "query_type": "multi_hop_specific",
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "backend.app.api.identity.resolve_principal",
+        lambda _request: "trusted-principal",
+    )
+
+    def verify(claims, actor, principal):
+        assert actor == "user:alice"
+        assert principal == "trusted-principal"
+        return [
+            {**claim, "anchor_id": f"anchor-{index + 1}", "verified_by": actor}
+            for index, claim in enumerate(claims)
+        ]
+
+    monkeypatch.setattr(routes, "verify_evidence_anchors", verify)
+    monkeypatch.setattr(
+        routes.repository,
+        "review_candidate",
+        lambda *args, **kwargs: captured.update({"args": args, "kwargs": kwargs})
+        or {"review_status": "approved"},
+    )
+    body = routes.CandidateReview.model_validate({
+        "expected_revision": 1,
+        "verdict": "approved",
+        "rationale": "已逐条核对两条事实和对应原文锚点，问题确实需要组合后才能回答。",
+        "expected": {
+            "behavior": "answer",
+            "reference_answer": "规则一与规则二共同决定最终处理方式。",
+            "required_facts": ["规则一要求核验资格", "规则二要求提交凭证"],
+        },
+        "evidence": [
+            {"kb_id": "kb-test", "doc_id": "doc-1", "doc_version": "v1", "quote": "规则一原文。"},
+            {"kb_id": "kb-test", "doc_id": "doc-2", "doc_version": "v1", "quote": "规则二原文。"},
+        ],
+        "fact_evidence_bindings": [
+            {"fact_index": 0, "evidence_indices": [0]},
+            {"fact_index": 1, "evidence_indices": [1]},
+        ],
+        "quality_checks": {key: True for key in RAGAS_QUALITY_CHECKS},
+    })
+
+    result = asyncio.run(routes.review_candidate(
+        candidate_id=uuid.UUID("42000000-0000-4000-8000-000000000004"),
+        body=body,
+        request=Request({"type": "http", "headers": []}),
+        identity=Identity(user_id="alice", tenant_id="tenant-a"),
+        actor=OperatorIdentity(role="admin", actor="user:alice"),
+    ))
+
+    assert result["review_status"] == "approved"
+    assert captured["kwargs"]["fact_evidence_bindings"] == [
+        {"fact_index": 0, "fact": "规则一要求核验资格", "anchor_ids": ["anchor-1"]},
+        {"fact_index": 1, "fact": "规则二要求提交凭证", "anchor_ids": ["anchor-2"]},
+    ]
+
+
 def test_candidate_queue_is_hidden_from_viewers():
     with pytest.raises(HTTPException) as exc:
         asyncio.run(list_candidates(
@@ -348,6 +486,73 @@ def test_candidate_queue_is_hidden_from_viewers():
         ))
 
     assert exc.value.status_code == 403
+
+
+def test_candidate_review_history_requires_admin_and_passes_tenant_scope(monkeypatch):
+    import backend.app.api.routes.evaluation_v2 as routes
+
+    captured = {}
+
+    async def direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(routes.asyncio, "to_thread", direct_to_thread)
+    monkeypatch.setattr(
+        routes.repository,
+        "list_candidate_annotations",
+        lambda tenant_id, candidate_id: captured.update({
+            "tenant_id": tenant_id,
+            "candidate_id": candidate_id,
+        }) or [{"verdict": "approved", "rationale": "核对完成"}],
+    )
+    candidate_id = uuid.UUID("42000000-0000-4000-8000-000000000002")
+
+    result = asyncio.run(routes.list_candidate_reviews(
+        candidate_id=candidate_id,
+        identity=Identity(user_id="alice", tenant_id="tenant-a"),
+        actor=OperatorIdentity(role="admin", actor="user:alice"),
+    ))
+
+    assert result["items"][0]["verdict"] == "approved"
+    assert captured == {
+        "tenant_id": "tenant-a",
+        "candidate_id": str(candidate_id),
+    }
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.list_candidate_reviews(
+            candidate_id=candidate_id,
+            identity=Identity(user_id="viewer", tenant_id="tenant-a"),
+            actor=OperatorIdentity(role="viewer", actor="user:viewer"),
+        ))
+    assert exc.value.status_code == 403
+
+
+def test_candidate_list_passes_dataset_scope_to_repository(monkeypatch):
+    import backend.app.api.routes.evaluation_v2 as routes
+
+    captured = {}
+
+    async def direct_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(routes.asyncio, "to_thread", direct_to_thread)
+    monkeypatch.setattr(
+        routes.repository,
+        "list_candidates",
+        lambda tenant_id, **kwargs: captured.update({"tenant_id": tenant_id, **kwargs}) or [],
+    )
+    result = asyncio.run(routes.list_candidates(
+        review_status="approved",
+        dataset_key="rag_core",
+        limit=50,
+        offset=0,
+        identity=Identity(user_id="alice", tenant_id="tenant-a"),
+        actor=OperatorIdentity(role="admin", actor="user:alice"),
+    ))
+
+    assert result["items"] == []
+    assert captured["tenant_id"] == "tenant-a"
+    assert captured["dataset_key"] == "rag_core"
 
 
 def test_candidate_payload_rejects_direct_expected_value():
@@ -750,6 +955,7 @@ def test_evidence_anchor_is_derived_from_authorized_current_source(monkeypatch):
     )
 
     assert verified[0]["anchor_id"] == "chunk-7"
+    assert verified[0]["quote"] == "提前三个工作日提交申请。"
     assert verified[0]["source_content_hash"] == "a" * 64
     assert verified[0]["verified_by"] == "user:alice"
 
@@ -815,6 +1021,7 @@ def test_evidence_anchor_id_disambiguates_overlapping_chunks(monkeypatch):
         chunk_store=ChunkStore(),
     )
     assert verified[0]["anchor_id"] == "answer-only"
+    assert verified[0]["quote"] == "提前三个工作日提交申请。"
 
     claims[0]["quote"] = "错误的证据引用"
     with pytest.raises(ValueError, match="不属于指定原文锚点"):

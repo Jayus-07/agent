@@ -114,6 +114,102 @@ def test_reject_failure_keeps_pending_and_source_file(tmp_path, monkeypatch):
     assert result["warnings"]
 
 
+def test_archive_orphan_pending_only_when_source_and_indexes_are_absent(
+    tmp_path, monkeypatch,
+):
+    from backend.rag.indexing import review_service
+
+    doc_id = "orphan-1"
+    source = tmp_path / "missing.md"
+    registry = _FakeRegistry(doc_id, str(source))
+    monkeypatch.setattr(review_service, "_orphan_artifact_residue", lambda _doc_id: [])
+    invalidated = []
+    monkeypatch.setattr(
+        review_service, "_invalidate_review_cache",
+        lambda: invalidated.append("review"),
+    )
+    monkeypatch.setattr(
+        review_service, "_invalidate_answer_cache",
+        lambda _kb_id: invalidated.append("answer"),
+    )
+
+    result = review_service.archive_orphan_pending_doc(doc_id, registry=registry)
+
+    assert result["ok"] is True
+    assert result["new_status"] == "deleted"
+    assert "pgvector" in result["archive_reason"]
+    assert registry.updated == [(doc_id, "deleted")]
+    assert invalidated == ["review", "answer"]
+
+
+def test_archive_orphan_keeps_pending_when_any_artifact_remains(tmp_path, monkeypatch):
+    from backend.rag.indexing import review_service
+
+    doc_id = "orphan-2"
+    source = tmp_path / "missing.md"
+    registry = _FakeRegistry(doc_id, str(source))
+    monkeypatch.setattr(
+        review_service, "_orphan_artifact_residue",
+        lambda _doc_id: ["pgvector 残留 1 条"],
+    )
+
+    result = review_service.archive_orphan_pending_doc(doc_id, registry=registry)
+
+    assert result["ok"] is False
+    assert registry.doc["status"] == "pending_review"
+    assert registry.updated == []
+
+
+def test_archive_orphan_keeps_pending_when_source_still_exists(tmp_path, monkeypatch):
+    from backend.rag.indexing import review_service
+
+    doc_id = "orphan-3"
+    source = tmp_path / "source.md"
+    source.write_text("must not archive", encoding="utf-8")
+    registry = _FakeRegistry(doc_id, str(source))
+    checked = []
+    monkeypatch.setattr(
+        review_service, "_orphan_artifact_residue",
+        lambda _doc_id: checked.append(True) or [],
+    )
+
+    result = review_service.archive_orphan_pending_doc(doc_id, registry=registry)
+
+    assert result["ok"] is False
+    assert registry.doc["status"] == "pending_review"
+    assert checked == []
+
+
+def test_rag_service_archives_guarded_orphan_without_loading_pipeline(monkeypatch):
+    from backend.rag.indexing import doc_registry, review_service, upload_path_guard
+    from backend.services import rag_server
+
+    registry = _FakeRegistry("orphan-4", "/tmp/docs/kb/dept/missing.md")
+    monkeypatch.setattr("backend.config.DOC_REGISTRY_PATH", "/unused")
+    monkeypatch.setattr(doc_registry, "DocumentRegistry", lambda _path: registry)
+    monkeypatch.setattr("backend.config.rag.RAG_UPLOAD_PATH_GUARD", True)
+    monkeypatch.setattr(
+        upload_path_guard, "test_artifact_path_reason",
+        lambda _path: "test_artifact_path",
+    )
+    monkeypatch.setattr(
+        rag_server, "_get_pipeline",
+        lambda: (_ for _ in ()).throw(AssertionError("pipeline must not load")),
+    )
+    monkeypatch.setattr(
+        review_service, "archive_orphan_pending_doc",
+        lambda doc_id, *, registry: {
+            "ok": True, "doc_id": doc_id, "new_status": "deleted",
+        },
+    )
+
+    result = asyncio.run(rag_server.review_pending_doc(
+        "orphan-4", rag_server.PendingReviewDecision(action="reject"),
+    ))
+
+    assert result == {"ok": True, "doc_id": "orphan-4", "new_status": "deleted"}
+
+
 def test_approve_only_changes_registry_and_invalidates_review_cache(monkeypatch):
     from backend.rag.indexing import review_service
 

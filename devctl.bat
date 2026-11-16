@@ -7,9 +7,9 @@ setlocal
 ::   devctl.bat start   [backend^|admin^|web^|all]
 ::   devctl.bat stop    [backend^|admin^|web^|all] [/y]
 ::   devctl.bat restart [backend^|admin^|web^|all] [/y]
-::   devctl.bat rebuild [/y]        - backend only: build + up -d all backend
-::                                    services; the ONLY path that applies code
-::                                    / .env changes to the containers
+::   devctl.bat rebuild [backend^|admin^|web^|all] [/y]
+::                                  - rebuild the selected code services;
+::                                    defaults to all
 ::   shortcuts: dev-start.bat / dev-stop.bat / dev-restart.bat / dev-rebuild.bat
 ::   implementation: dev-svc.bat
 ::   NOTE: ASCII-only (cmd parses .bat in ANSI/GBK)

@@ -3487,6 +3487,7 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
 
             missing_rows = 0
             missing_cells = 0
+            missing_row_samples: list[dict] = []
             for signature, required_count in source_row_counts.items():
                 raw_cells = row_cells_by_signature[signature]
                 # 每个带源行身份的 Leaf 只计一次；不能把同一个 Leaf 同时
@@ -3515,7 +3516,16 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
                         )
                     )
                 if matching_bodies < required_count:
-                    missing_rows += required_count - matching_bodies
+                    missing_count = required_count - matching_bodies
+                    missing_rows += missing_count
+                    if len(missing_row_samples) < 3:
+                        missing_row_samples.append({
+                            "cells": [
+                                mask_sensitive_text(cell, limit=80)
+                                for cell in raw_cells[:8]
+                            ],
+                            "missing_count": missing_count,
+                        })
                 for cell in raw_cells:
                     if not any(
                         _normalize(cell, mask_pii=body_is_masked) in body
@@ -3536,6 +3546,11 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
                     "preview": mask_sensitive_text(text[:80]),
                     "missing_rows": missing_rows,
                     "missing_cells": missing_cells,
+                    "page": (
+                        int(getattr(node, "page_number", 0) or 0)
+                        or (node.source_locator or {}).get("page")
+                    ),
+                    "missing_row_samples": missing_row_samples,
                 })
 
         audited_count = len(leaves)

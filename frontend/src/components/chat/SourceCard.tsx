@@ -5,6 +5,7 @@ import { FileText, ClipboardList, FolderKanban, BarChart3, User, File } from 'lu
 import type { Source } from '@/lib/types'
 import { formatSourcePages } from '@/lib/ragAnswer'
 import SourcePreviewDrawer from './SourcePreviewDrawer'
+import { getSourcePreviewKind } from './sourcePreview'
 
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   manual: ClipboardList,
@@ -24,7 +25,15 @@ const colorMap: Record<string, string> = {
   general: 'bg-gray-100 text-gray-600',
 }
 
-export default function SourceCard({ sources }: { sources: Source[] }) {
+export default function SourceCard({
+  sources,
+  showCitationIndex = false,
+  showScore = true,
+}: {
+  sources: Source[]
+  showCitationIndex?: boolean
+  showScore?: boolean
+}) {
   const [preview, setPreview] = useState<Source | null>(null)
   if (!sources || sources.length === 0) return null
 
@@ -45,30 +54,65 @@ export default function SourceCard({ sources }: { sources: Source[] }) {
             s.department ? `部门: ${s.department}` : '',
             s.section ? `章节: ${s.section}` : '',
             pagesLabel,
-            s.score != null ? `相关度: ${s.score}` : '',
+            s.version_id ? `版本: ${s.version_id}` : '',
+            s.effective_from || s.effective_to
+              ? `有效期: ${s.effective_from || '未注明'} 至 ${s.effective_to || '至今'}`
+              : '',
+            showScore && s.score != null ? '相关度: ' + s.score : '',
           ].filter(Boolean)
-          // 原文预览（P1）：有 doc_id 且有页码（PDF）→ chip 可点开快照抽屉
-          const previewable = Boolean(s.doc_id && s.pages && s.pages.length > 0)
+          const validityLabel = s.effective_from
+            ? s.effective_to
+              ? `有效期 ${s.effective_from} 至 ${s.effective_to}`
+              : `自 ${s.effective_from} 生效`
+            : s.effective_to
+              ? `截至 ${s.effective_to}`
+              : ''
+          // 原文预览只开放已有鉴权接口可直接展示的 PDF 和文本格式。
+          const previewable = Boolean(s.doc_id && getSourcePreviewKind(s.filename))
           return (
             <button
               type="button"
               key={i}
               disabled={!previewable}
               onClick={() => setPreview(s)}
-              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-left ${colorClass} ${
+              className={`inline-flex max-w-full flex-wrap items-center gap-1 rounded-md px-2 py-1 text-xs text-left ${colorClass} ${
                 previewable ? 'cursor-pointer hover:ring-2 hover:ring-black/10' : 'cursor-default'
               }`}
               title={previewable ? `${titleParts.join(' — ')}（点击查看原文）` : titleParts.join(' — ')}
             >
               <Icon className="h-3 w-3" />
+              {showCitationIndex && typeof s.index === 'number' && (
+                <span className="rounded bg-white/70 px-1 text-[10px] font-semibold">[{s.index}]</span>
+              )}
               <span className="max-w-[200px] truncate">{s.filename}</span>
+              {s.section && (
+                <span className="max-w-[160px] truncate rounded bg-white/70 px-1 text-[10px]" title={s.section}>
+                  {s.section}
+                </span>
+              )}
               {pagesLabel && (
                 <span className="rounded bg-white/70 px-1 text-[10px]">{pagesLabel}</span>
               )}
               {s.department && (
                 <span className="rounded bg-white/70 px-1 text-[10px]">{s.department}</span>
               )}
-              {s.score != null && (
+              {s.version_id && (
+                <span
+                  className="max-w-[180px] truncate rounded bg-white/70 px-1 text-xs"
+                  title={`版本 ${s.version_id}`}
+                >
+                  版本 {s.version_id}
+                </span>
+              )}
+              {validityLabel && (
+                <span
+                  className="max-w-[220px] truncate rounded bg-white/70 px-1 text-xs"
+                  title={validityLabel}
+                >
+                  {validityLabel}
+                </span>
+              )}
+              {showScore && s.score != null && (
                 <span className="ml-0.5 rounded bg-white/70 px-1 text-[10px] font-mono">
                   {s.score}
                 </span>

@@ -51,7 +51,7 @@ class _RuleRouter:
     def __init__(self, decision=None):
         self.decision = decision
 
-    def route(self, _query):
+    def route(self, _query, **_kwargs):
         return self.decision
 
 

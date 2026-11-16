@@ -19,7 +19,7 @@ import { deriveDomainLabel, deriveRunKind, runKindBadgeClass } from "@/lib/obser
  * GraphTopology 等区块组件）：
  *   ① 错在哪——问题与结果 + 错误诊断卡（含「错误题加入候选评测集」入口）
  *   ② 慢在哪——Span 甘特时间线（SpanGantt，含未埋点黑洞）
- *   ③ 答了什么——LLM 调用明细（含 Rerank/多查询等全部 llm_call 与跳过阶段）
+ *   ③ 答了什么——模型调用明细；区分聊天生成与 embedding / rerank Provider 调用
  *   ④ 花了多少——概要侧卡（成本/Token/模型/Prompt 版本/SLA 语义修正）
  * 内容读取审计由后端 get_trace 写入；SLA 对失败运行显示「未参与判定」。
  */
@@ -35,6 +35,16 @@ function traceReadFailure(error: unknown): { title: string; message: string } {
 
 function fmtMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
+function spanRole(span: Span): string {
+  const role = span.metrics?.role ?? span.attributes?.role;
+  return typeof role === "string" ? role.trim().toLowerCase() : "";
+}
+
+function spanMetricLabel(span: Span, key: string): string {
+  const value = span.metrics?.[key];
+  return typeof value === "string" ? value.trim() : "";
 }
 
 /**
@@ -288,7 +298,7 @@ export default function TraceDetailPage() {
             </section>
 
             <section>
-              <h2 className="mb-3 text-sm font-semibold text-slate-700">③ 答了什么 · LLM 调用（含多查询 / Provider 尝试）</h2>
+              <h2 className="mb-3 text-sm font-semibold text-slate-700">③ 模型调用明细（生成 / 重排）</h2>
               <div className="space-y-3">
                 {skippedStages.length > 0 && (
                   <div className="rounded-md border border-dashed border-slate-300 px-3 py-2 text-xs text-slate-600" role="note">
@@ -298,20 +308,31 @@ export default function TraceDetailPage() {
                 {llmSpans.length === 0 && (
                   <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">本次 Trace 未记录 LLM 调用。</div>
                 )}
-                {llmSpans.map((s) => (
-                  <div key={s.id} className="rounded-lg border border-slate-200 bg-white p-4">
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                      <Sparkles size={14} className="text-slate-400" aria-hidden="true" />
-                      <strong className="text-slate-800">{s.name || "LLM 调用"}</strong>
-                      <span>{s.llm_call?.model || "未记录模型"}</span>
-                      {s.llm_call && <span>Token {safeNum(s.llm_call.prompt_tokens)} / {safeNum(s.llm_call.completion_tokens)}</span>}
-                      {s.llm_call?.cost_cny != null && <span>{formatCost(s.llm_call.cost_cny)}</span>}
-                      <span className="text-slate-400">{fmtMs(s.duration_ms)}</span>
+                {llmSpans.map((s) => {
+                  const role = spanRole(s);
+                  const specialized = role === "rerank" || role === "embedding";
+                  const model = specialized
+                    ? spanMetricLabel(s, "model") || spanMetricLabel(s, "model_name")
+                    : s.llm_call?.model || spanMetricLabel(s, "model");
+                  const provider = specialized
+                    ? spanMetricLabel(s, "provider")
+                    : s.llm_call?.provider || spanMetricLabel(s, "provider");
+                  return (
+                    <div key={s.id} className="rounded-lg border border-slate-200 bg-white p-4">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                        <Sparkles size={14} className="text-slate-400" aria-hidden="true" />
+                        <strong className="text-slate-800">{s.name || (specialized ? "模型 Provider 调用" : "LLM 调用")}</strong>
+                        <span>{model || "未记录模型"}</span>
+                        {specialized && provider && <span>Provider {provider}</span>}
+                        {!specialized && s.llm_call && <span>Token {safeNum(s.llm_call.prompt_tokens)} / {safeNum(s.llm_call.completion_tokens)}</span>}
+                        {!specialized && s.llm_call?.cost_cny != null && <span>{formatCost(s.llm_call.cost_cny)}</span>}
+                        <span className="text-slate-400">{fmtMs(s.duration_ms)}</span>
+                      </div>
+                      {!specialized && s.llm_call?.prompt_text && <p className="mt-2 whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-xs text-slate-600"><b className="font-medium">Prompt</b>{"\n"}{s.llm_call.prompt_text}</p>}
+                      {!specialized && s.llm_call?.response_text && <p className="mt-2 whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-xs text-slate-600"><b className="font-medium">Response</b>{"\n"}{s.llm_call.response_text}</p>}
                     </div>
-                    {s.llm_call?.prompt_text && <p className="mt-2 whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-xs text-slate-600"><b className="font-medium">Prompt</b>{"\n"}{s.llm_call.prompt_text}</p>}
-                    {s.llm_call?.response_text && <p className="mt-2 whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-xs text-slate-600"><b className="font-medium">Response</b>{"\n"}{s.llm_call.response_text}</p>}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           </div>

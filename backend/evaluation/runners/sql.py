@@ -26,7 +26,6 @@ from decimal import Decimal
 
 from backend.evaluation.models import EvalResult, TestCase
 from backend.evaluation.registry import register_runner
-from backend.shared.logger import logger
 
 # 不可重试且意味着"正确拒绝"的状态在用例 expected_status 中显式声明；
 # 这里只定义正向用例的成功状态。
@@ -44,17 +43,32 @@ def _extract_tables(sql_text: str | None) -> set[str]:
     return {f"{s}.{t}".lower() for s, t in _TABLE_RE.findall(sql_text)}
 
 
-def _norm_value(v) -> str:
-    """结果值归一化：Decimal/日期/浮点统一为可比较字符串。"""
+def _norm_value(v) -> tuple[str, str]:
+    """保留 SQL 类型语义并规范数值表示，避免把真实差异舍入掉。"""
     if v is None:
-        return ""
-    if isinstance(v, Decimal):
-        return str(round(float(v), 4))
-    if isinstance(v, float):
-        return str(round(v, 4))
+        return "null", ""
+    if isinstance(v, bool):
+        return "bool", "true" if v else "false"
+    if isinstance(v, (Decimal, int, float)):
+        number = Decimal(str(v))
+        if number.is_nan():
+            return "number", "nan"
+        if number.is_infinite():
+            return "number", "-infinity" if number.is_signed() else "infinity"
+        if number.is_zero():
+            return "number", "0"
+        sign, digits, exponent = number.as_tuple()
+        normalized_digits = list(digits)
+        while normalized_digits and normalized_digits[-1] == 0:
+            normalized_digits.pop()
+            exponent += 1
+        coefficient = "".join(str(digit) for digit in normalized_digits)
+        return "number", f"{sign}:{coefficient}:{exponent}"
     if isinstance(v, (datetime, date)):
-        return v.isoformat()
-    return str(v)
+        return type(v).__name__, v.isoformat()
+    if isinstance(v, str):
+        return "string", v
+    return type(v).__name__, str(v)
 
 
 def _rows_to_tuples(rows: list[dict], columns: list[str]) -> list[tuple]:
@@ -182,29 +196,55 @@ def _eval_positive_case(case: TestCase, result, exp: dict) -> EvalResult:
         )
 
     # gold SQL 先过 validator → 与生成 SQL 相同的 LIMIT/引号归一化
-    from backend.sql.sql_validator import sql_validator
+    from backend.sql.sql_validator import ValidationError, sql_validator
     from backend.sql.executor import execute_sql_struct
 
     try:
         safe_gold, _, _ = sql_validator.validate(gold_sql)
-        gold_res = execute_sql_struct(safe_gold, {})
-    except Exception as e:
-        logger.warning(f"[SQL Eval] gold SQL 执行失败，降级为 router 判定: {e}")
-        gold_res = None
-
-    if gold_res is not None and gold_res.status in _SUCCESS_STATUSES:
-        ordered = "ORDER BY" in gold_sql.upper()
-        match = _results_match(
-            gold_res.rows, gold_res.columns, result.rows, result.columns,
-            ordered=ordered,
+    except ValidationError as exc:
+        return _gold_sql_failure_result(
+            case, result, exp, metrics,
+            gold_status="validation_error",
+            gold_error=str(exc),
+            failure_category="dataset",
         )
-        metrics["execution_match"] = 1.0 if match else 0.0
-        passed = match
-        error_msg = None if match else "生成 SQL 结果集与 gold_sql 不一致"
-    else:
-        # 库不可用 / gold 执行失败 → 降级为 router 命中判定
-        passed = router_hit is not None and router_hit == 1.0
-        error_msg = None if passed else f"router 未命中全部期望表: {sorted(expected_tables - selected)}"
+    except Exception as exc:
+        return _gold_sql_failure_result(
+            case, result, exp, metrics,
+            gold_status="validation_error",
+            gold_error=str(exc),
+            failure_category="infrastructure",
+        )
+
+    try:
+        gold_res = execute_sql_struct(safe_gold, {})
+    except Exception as exc:
+        return _gold_sql_failure_result(
+            case, result, exp, metrics,
+            gold_status="execution_error",
+            gold_error=str(exc),
+            failure_category="infrastructure",
+        )
+
+    if gold_res.status not in _SUCCESS_STATUSES:
+        failure_category = _gold_sql_failure_category(
+            gold_res.status, getattr(gold_res, "error_type", None),
+        )
+        return _gold_sql_failure_result(
+            case, result, exp, metrics,
+            gold_status=gold_res.status,
+            gold_error=getattr(gold_res, "error", None),
+            failure_category=failure_category,
+        )
+
+    ordered = "ORDER BY" in gold_sql.upper()
+    match = _results_match(
+        gold_res.rows, gold_res.columns, result.rows, result.columns,
+        ordered=ordered,
+    )
+    metrics["execution_match"] = 1.0 if match else 0.0
+    passed = match
+    error_msg = None if match else "生成 SQL 结果集与 gold_sql 不一致"
 
     return EvalResult(
         case_id=case.id, module="sql",
@@ -214,6 +254,48 @@ def _eval_positive_case(case: TestCase, result, exp: dict) -> EvalResult:
                 "sql": result.sql_text},
         metrics=metrics,
         error_msg=error_msg,
+    )
+
+
+def _gold_sql_failure_category(status: str, error_type: str | None) -> str:
+    """将参考 SQL 执行失败归到数据集、环境或基础设施问题。"""
+    if status == "validation_error" or error_type == "syntax":
+        return "dataset"
+    if status == "permission_denied" or error_type in {
+        "privilege", "readonly_violation", "schema_mismatch",
+        "column_not_found", "function_not_found",
+    }:
+        return "environment"
+    return "infrastructure"
+
+
+def _gold_sql_failure_result(
+    case: TestCase,
+    result,
+    exp: dict,
+    metrics: dict[str, float | None],
+    *,
+    gold_status: str,
+    gold_error: str | None,
+    failure_category: str,
+) -> EvalResult:
+    """参考 SQL 不可执行时中止此用例，禁止退化成只看路由表的通过。"""
+    return EvalResult(
+        case_id=case.id,
+        module="sql",
+        status="error",
+        expected=exp,
+        actual={
+            "status": result.status,
+            "row_count": result.row_count,
+            "sql": result.sql_text,
+            "gold_status": gold_status,
+            "gold_error": gold_error,
+            "gold_failure_category": failure_category,
+        },
+        metrics=metrics,
+        error_msg=f"gold_sql 无法执行，无法核验查询结果：{gold_error or gold_status}",
+        error_stage="sql_gold",
     )
 
 

@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 
 from backend.evaluation.dataset import load_dataset, validate_dataset
-from backend.evaluation.models import MODULE_KINDS, TestCase as EvaluationCase
+from backend.evaluation.models import MODULE_KINDS
+from backend.evaluation.models import TestCase as EvaluationCase
 
 
 def test_all_registered_canonical_datasets_pass_schema_validation():
@@ -50,10 +51,35 @@ def test_rag_query_type_still_uses_rag_taxonomy():
 
 @pytest.mark.parametrize(
     "query_type",
-    ["single_doc", "multi_doc", "table", "procedural", "no_evidence", "permission_denied"],
+    [
+        "single_doc",
+        "multi_doc",
+        "single_hop",
+        "single_hop_specific",
+        "multi_hop",
+        "multi_hop_abstract",
+        "multi_hop_specific",
+        "table",
+        "procedural",
+        "no_evidence",
+        "permission_denied",
+        "negative",
+        "adversarial",
+        "ambiguous",
+        "version_conflict",
+        "chunk_level",
+        "long_doc",
+        "comparative",
+        "aggregation",
+        "conditional_reasoning",
+        "negation_exclusion",
+        "implicit_condition",
+    ],
 )
 def test_rag_validator_accepts_every_managed_upload_query_type(query_type):
-    from backend.evaluation.dataset.imports import ImportCase
+    from typing import get_args
+
+    from backend.evaluation.dataset.query_types import RagQueryType
 
     case = EvaluationCase(
         id=f"managed-{query_type}",
@@ -63,7 +89,7 @@ def test_rag_validator_accepts_every_managed_upload_query_type(query_type):
         metadata={"query_type": query_type},
     )
 
-    assert query_type in ImportCase.model_fields["query_type"].annotation.__args__
+    assert query_type in get_args(RagQueryType)
     assert validate_dataset([case]) == []
 
 

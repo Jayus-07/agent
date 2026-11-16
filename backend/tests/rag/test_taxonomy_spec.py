@@ -90,3 +90,34 @@ def test_travel_filename_v9_set_classifies_thirty_real_documents_as_travel_guide
         for name in filenames
     ]
     assert actual == ["travel_guide"] * len(filenames)
+
+
+def test_gulangyu_history_document_is_classified_as_travel():
+    from backend.rag.preprocessing.metadata import (
+        classify_doc_type,
+        detect_business_domain,
+    )
+
+    filename = "厦门-鼓浪屿历史背景.md"
+    source_text = (
+        "联合国教科文组织将鼓浪屿描述为位于九龙江口、面向厦门市的一座小岛。"
+        "厦门于1843年开辟为通商口岸，鼓浪屿于1903年成为国际居留地。"
+    )
+
+    assert classify_doc_type(source_text, filename=filename) == "travel_guide"
+    assert detect_business_domain(source_text)[0] == "travel"
+
+
+def test_travel_expense_reimbursement_is_classified_as_financial():
+    """差旅财务规则应压过样本里的订单号和拆单词。"""
+    from backend.rag.preprocessing.metadata import detect_business_domain
+
+    source_text = (
+        "虚构差旅与费用报销规则。报销记录须包含测试订单号和费用类型，"
+        "不能通过拆单绕过财务限额。"
+    )
+
+    domain, _, detail = detect_business_domain(source_text, return_detail=True)
+
+    assert domain == "financial"
+    assert detail["scores"]["financial"] > detail["scores"]["order"]

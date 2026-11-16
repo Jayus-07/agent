@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
+import Link from 'next/link'
 import { Upload, Loader2, CheckCircle2, XCircle, FileText, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import { knowledgeService } from '@/api/knowledge'
 import { fetchRaw, randomId } from '@/api/client'
@@ -43,6 +44,7 @@ interface FileReport {
   name: string
   status: 'running' | 'success' | 'duplicate' | 'failed'
   error?: string
+  traceId?: string
   /** 阶段耗时（成功/duplicate 时填充） */
   stageElapsed?: Record<string, number>
   /** 后端真实总耗时（覆盖 stageElapsed 之和，避免幽灵时间） */
@@ -271,7 +273,13 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
           successCount++
         } else {
           failedCount++
-          updateReport(i, { status: 'failed', error: res.error || '上传失败', currentStage: null, stageMessage: '' })
+          updateReport(i, {
+            status: 'failed',
+            error: res.error || '上传失败',
+            traceId: res.trace_id,
+            currentStage: null,
+            stageMessage: '',
+          })
         }
       } catch (e) {
         failedCount++
@@ -466,7 +474,22 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                         <FileText size={13} className={`shrink-0 ${r.status === 'failed' ? 'text-red-400' : 'text-accent'}`} />
                         <span className={`truncate font-medium flex-1 ${r.status === 'failed' ? 'text-red-700' : r.status === 'duplicate' ? 'text-text-muted' : 'text-text-primary'}`}>{r.name}</span>
                         {r.status === 'duplicate' ? <span className="text-[10px] text-amber-500 shrink-0">已存在，跳过</span>
-                          : r.status === 'failed' ? <span className="text-[10px] text-red-400 shrink-0" title={r.error || '上传失败'}>{r.error ? r.error.slice(0, 40) : '失败'}</span>
+                          : r.status === 'failed' ? (
+                            <>
+                              <span className="text-[10px] text-red-400 shrink-0" title={r.error || '上传失败'}>
+                                {r.error ? r.error.slice(0, 40) : '失败'}
+                              </span>
+                              {r.traceId && (
+                                <Link
+                                  href={`/knowledge/operations/traces/${encodeURIComponent(r.traceId)}`}
+                                  className="text-[10px] text-accent hover:underline shrink-0"
+                                  title={`Trace ID：${r.traceId}`}
+                                >
+                                  查看 Trace
+                                </Link>
+                              )}
+                            </>
+                          )
                           : r.status === 'running' && r.currentStage ? <span className="text-[10px] text-accent shrink-0">{STAGES.find(x => x.key === r.currentStage)?.label ?? r.currentStage}…</span>
                           : r.status === 'success' && <span className="text-text-muted text-[10px] tabular-nums shrink-0">{totalMs > 0 ? fmtMs(totalMs) : '<1ms'}</span>}
                       </div>

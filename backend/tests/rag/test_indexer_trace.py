@@ -1,7 +1,8 @@
 """P1.1 — backend/rag/indexing/indexer.py 的 trace 集成测试
 
-覆盖 Knowledge Index Trace 6 个标准 span:
-  index_upload → index_parse → index_chunk → index_embed → index_vector_db → index_metadata
+覆盖 Knowledge Index Trace 7 个标准 span:
+  index_upload → index_parse → index_chunk → index_metadata → index_doc_embed
+  → index_embed → index_vector_db
 + failure paths (parse fail / embed retry 全失败)
 
 2d627d7 重构后使用公共 fresh_collector fixture（见 tests/fixtures/sqlite_tracer.py）。
@@ -9,11 +10,13 @@
 
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from langchain_core.documents import Document
 
-from backend.rag.indexing.indexer import IncrementalIndexer
+from backend.rag.indexing.indexer import IncrementalIndexer, _parse_trace_page_metrics
 import backend.rag.indexing.indexer as indexer_mod
 import backend.rag.indexing.stages.embedding_stage as embed_stage_mod
 from backend.observability.tracer import (
@@ -83,6 +86,37 @@ def _find_span(trace, span_id):
     raise AssertionError(f"span '{span_id}' not found in trace (have: {[s.span_id for s in trace.spans]})")
 
 
+def test_pdf_trace_page_count_falls_back_to_parser_ast():
+    chunks = [Document(page_content="PDF chunk", metadata={})]
+
+    assert _parse_trace_page_metrics(
+        chunks, ".pdf", SimpleNamespace(pdf_page_count=501),
+    ) == (501, True)
+
+
+def test_non_pdf_trace_page_count_is_not_applicable():
+    chunks = [Document(page_content="Text chunk", metadata={"page_count": 3})]
+
+    assert _parse_trace_page_metrics(chunks, ".txt") == (0, False)
+
+
+def test_doc_level_embedding_budget_failure_is_visible_in_trace(
+    indexer, tmp_text_file, fresh_collector,
+):
+    """整篇向量调用失败时，Trace 应显示具体失败阶段。"""
+    from backend.infra.llm.budget import RequestBudgetExceeded
+
+    indexer.doc_db.add_texts.side_effect = RequestBudgetExceeded("request_tokens")
+
+    with pytest.raises(RequestBudgetExceeded, match="request_tokens"):
+        indexer._index_file(tmp_text_file)
+
+    trace = fresh_collector.list(1, include_spans=True)[0]
+    failed_span = _find_span(trace, "index_doc_embed")
+    assert failed_span.status == "error"
+    assert "request_tokens" in failed_span.metrics["error"]
+
+
 # ==========================================================
 # 1. 正常路径 — 6 个 span 全部创建并 close
 # ==========================================================
@@ -102,12 +136,85 @@ class TestHappyPath:
         assert root.parent_id is None
         assert root.status == "success"
 
-    def test_all_six_spans_present(self, indexer, tmp_text_file, fresh_collector):
+    def test_candidate_trace_displays_logical_filename(
+        self,
+        indexer,
+        tmp_path,
+        tmp_text_file,
+        fresh_collector,  # noqa: F811 - pytest fixture 与模块级导入同名
+    ):
+        """候选索引 Trace 显示正式文件名，不显示随机暂存文件名。"""
+        logical_path = tmp_path / "正式文件名.txt"
+
+        indexer._index_file(tmp_text_file, identity_path=str(logical_path))
+        trace = fresh_collector.list(1, include_spans=True)[0]
+
+        assert trace.question == logical_path.name
+        assert _find_span(trace, "index_upload").name == f"Index {logical_path.name}"
+        assert _find_span(trace, "index_parse").name == f"Parse {logical_path.name}"
+        indexed_chunks = indexer.vectordb.add_documents.call_args.args[0]
+        assert indexed_chunks
+        assert all(
+            chunk.metadata["document_title"] == logical_path.stem
+            for chunk in indexed_chunks
+        )
+
+    def test_candidate_chunk_title_does_not_keep_normalized_stage_filename(
+        self,
+        indexer,
+        tmp_path,
+        tmp_text_file,
+    ):
+        """Temp names normalized by the parser must not leak into chunk metadata."""
+        staged_path = tmp_path / (
+            "stage-llm-pilot-f1bc4b05dc704c048ba5a70ea57b98ad.txt"
+        )
+        staged_path.write_bytes(Path(tmp_text_file).read_bytes())
+        logical_path = tmp_path / "LLM切分闭环隔离试点-20261115-08f636b0.txt"
+
+        indexer._index_file(str(staged_path), identity_path=str(logical_path))
+
+        indexed_chunks = indexer.vectordb.add_documents.call_args.args[0]
+        assert indexed_chunks
+        assert all(
+            chunk.metadata["document_title"] == logical_path.stem
+            for chunk in indexed_chunks
+        )
+        assert all(
+            chunk.metadata["source_file"] == logical_path.name
+            for chunk in indexed_chunks
+        )
+
+    def test_reindex_keeps_registry_active_generation_on_chunks(
+        self,
+        indexer,
+        tmp_text_file,
+        fresh_collector,  # noqa: F811 - pytest fixture 与模块级导入同名
+    ):
+        """普通重索引沿用 Registry 发布代次，避免详情与 Trace 丢失追溯。"""
+        indexer.registry.get_by_path.return_value = {
+            "active_generation": "generation-7",
+        }
+
+        indexer._index_file(
+            tmp_text_file,
+            reindex_ctx={"old_chunk_ids": ["old-chunk"]},
+        )
+
+        indexed_chunks = indexer.vectordb.add_documents.call_args.args[0]
+        assert indexed_chunks
+        assert all(
+            chunk.metadata["index_generation"] == "generation-7"
+            for chunk in indexed_chunks
+        )
+
+    def test_all_seven_spans_present(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
         trace = fresh_collector.list(1, include_spans=True)[0]
 
         expected = {"index_upload", "index_parse", "index_chunk",
-                    "index_embed", "index_vector_db", "index_metadata"}
+                    "index_metadata", "index_doc_embed", "index_embed",
+                    "index_vector_db"}
         actual = {s.span_id for s in trace.spans}
         assert expected.issubset(actual), f"missing: {expected - actual}"
 
@@ -119,6 +226,7 @@ class TestHappyPath:
             "index_upload": SpanKind.INDEX_UPLOAD.value,
             "index_parse": SpanKind.INDEX_PARSE.value,
             "index_chunk": SpanKind.INDEX_CHUNK.value,
+            "index_doc_embed": SpanKind.INDEX_EMBED.value,
             "index_embed": SpanKind.INDEX_EMBED.value,
             "index_vector_db": SpanKind.INDEX_VECTOR_DB.value,
             "index_metadata": SpanKind.INDEX_METADATA.value,
@@ -131,7 +239,7 @@ class TestHappyPath:
         indexer._index_file(tmp_text_file)
         trace = fresh_collector.list(1, include_spans=True)[0]
 
-        for sid in ("index_parse", "index_chunk", "index_embed",
+        for sid in ("index_parse", "index_chunk", "index_doc_embed", "index_embed",
                     "index_vector_db", "index_metadata"):
             span = _find_span(trace, sid)
             assert span.parent_id == "index_upload", f"{sid} parent mismatch"
@@ -383,3 +491,25 @@ class TestUploadIdCorrelation:
 
         trace = fresh_collector.list(1, include_spans=True)[0]
         assert trace.tags.get("upload_id") == "up-abc-123"
+
+
+def test_candidate_indexing_does_not_skip_incomplete_same_hash_active_doc(
+    indexer, tmp_text_file,
+):
+    """候选发布必须重建同哈希文档，完整性由上传入口先行核对。"""
+    file_hash = hashlib.sha256(Path(tmp_text_file).read_bytes()).hexdigest()
+    indexer.candidate_mode = True
+    indexer.registry.get_by_path.return_value = {
+        "doc_id": "doc-existing",
+        "file_hash": file_hash,
+        "status": "active",
+        "chunk_count": 3,
+    }
+    indexer._chunk_store_override = MagicMock()
+    indexer._chunk_store_override.delete_by_doc_id.return_value = 0
+    indexer._chunk_store_override.insert_batch.return_value = 3
+
+    result = indexer._index_file(tmp_text_file, file_hash=file_hash)
+
+    assert result["chunk_ids"]
+    assert result.get("skipped") is not True

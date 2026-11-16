@@ -144,6 +144,7 @@ class SpanKind(str, Enum):
     RERANK = "rerank"
     CITATION = "citation"
     FAITHFULNESS = "faithfulness"
+    EVALUATION = "evaluation"
 
     # Evidence Gate（对齐方案 §0 / §3；type 字符串小写与 _TYPE_INFER 对齐）
     RETRIEVAL_GATE = "retrieval_gate"
@@ -1069,13 +1070,18 @@ class TraceCollector:
                 record.provider = best.get("provider") or ""
 
         # ── llm_call span 指标补齐：按时间最近邻配对（调用 ts ↔ span start）──
+        from backend.observability.trace_roles import is_llm_generation_span
+
         llm_rows = sorted(
             (r for r in rows if (r.get("component") or "llm") == "llm"),
             key=lambda r: _ts_key(r.get("ts", "")),
         )
         if llm_rows:
             pending = [r for r in llm_rows if r.get("total_tokens")]
-            llm_spans = [s for s in record.spans if s.type == "llm_call"]
+            llm_spans = [
+                s for s in record.spans
+                if s.type == "llm_call" and is_llm_generation_span(s)
+            ]
             for span in llm_spans:
                 has_tokens = (span.metrics.get("total_tokens")
                               or span.metrics.get("prompt_tokens")

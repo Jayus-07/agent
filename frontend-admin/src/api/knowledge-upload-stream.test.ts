@@ -70,14 +70,14 @@ describe("knowledgeService 上传 SSE 流可靠性（batch4a）", () => {
   it("收到 error 终态事件是任务失败语义，不触发重连", async () => {
     apiMock.fetchRaw.mockResolvedValueOnce(
       new Response(
-        `data: ${JSON.stringify({ stage: "error", message: "解析失败" })}\n\n`,
+        `data: ${JSON.stringify({ stage: "error", message: "解析失败", trace_id: "trace-42" })}\n\n`,
         { status: 200 },
       ),
     );
 
     const result = await knowledgeService.uploadDocument(new File(["x"], "a.pdf"));
 
-    expect(result).toEqual({ ok: false, error: "解析失败" });
+    expect(result).toEqual({ ok: false, error: "解析失败", trace_id: "trace-42" });
     expect(apiMock.fetchRaw).toHaveBeenCalledTimes(1);
   });
 

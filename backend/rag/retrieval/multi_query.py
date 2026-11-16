@@ -1063,7 +1063,16 @@ class MultiQueryRetriever(BaseRetriever):
             logger.warning(
                 f"[MultiQuery] LLM 改写失败，降级到 hybrid 单路检索: {query[:30]}"
             )
-            return self.base_retriever.invoke(query)
+            docs = list(self.base_retriever.invoke(query) or [])
+            if not docs:
+                from backend.rag.retrieval_budget import RetrievalUnavailableError
+
+                raise RetrievalUnavailableError(
+                    "查询改写模型不可用，单路检索也没有命中，无法确认知识库中没有相关资料"
+                )
+            for doc in docs:
+                doc.metadata["_retrieval_partial"] = True
+            return docs
 
         from concurrent.futures import TimeoutError, as_completed
         from backend.infra.thread_pools import submit_rag_task
@@ -1284,12 +1293,14 @@ class MultiQueryRetriever(BaseRetriever):
             },
             status=fanout_status,
         )
+        retrieval_incomplete = bool(error_count or timeout_count)
 
         # 注入 evidence_groups 到首个 doc，供 prompt 模板使用
         if docs:
             docs[0].metadata["_evidence_groups"] = evidence_groups
-            if fanout_timed_out:
-                docs[0].metadata["_mq_partial"] = True  # Phase 5：部分成功留痕
+            if retrieval_incomplete:
+                for doc in docs:
+                    doc.metadata["_mq_partial"] = True
             # Phase B（PR #52）：把本次实际提交且合法的查询列表交给最终
             # Rerank。只在真有改写（>1 条）时挂载——未触发、改写失败或只剩
             # 原始 query 时，Rerank 必须保持单查询行为，不得凭空放大评分。
@@ -1304,4 +1315,10 @@ class MultiQueryRetriever(BaseRetriever):
             f"{len(queries)}变体 → {len(docs)}docs"
             + ("（fan-out 部分成功）" if fanout_timed_out else "")
         )
+        if not docs and retrieval_incomplete:
+            from backend.rag.retrieval_budget import RetrievalUnavailableError
+
+            raise RetrievalUnavailableError(
+                "所有多查询检索路径均失败或超时，结果不可用"
+            )
         return docs

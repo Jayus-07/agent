@@ -69,6 +69,62 @@ def test_budget_observe_mode_records_without_blocking():
     assert snapshot.exceeded == ()
 
 
+def test_scoped_generation_budget_overrides_retry_and_fallback_limits(monkeypatch):
+    from backend.infra.llm import budget as budget_module
+    from backend.infra.llm.budget import RequestBudgetExceeded
+
+    budget_module.clear_request_budget()
+    limits = _limits(max_total_tokens=28000, max_cost="0.42", max_retries=2)
+    assert limits.max_fallbacks == 1
+    monkeypatch.setattr(budget_module, "_config_mode", lambda: "enforce")
+    monkeypatch.setattr(budget_module, "_config_limits", lambda: limits)
+
+    with budget_module.scoped_request_budget(
+        "trace-budget-ragas-retry-override",
+        max_retries=4,
+        max_fallbacks=2,
+    ) as budget:
+        assert budget is not None
+        assert budget.limits.max_retries == 4
+        assert budget.limits.max_fallbacks == 2
+        assert budget.limits.max_total_tokens == 28000
+        assert budget.limits.max_cost == limits.max_cost
+
+        budget.reserve("primary")
+        for _ in range(4):
+            budget.reserve("retry")
+        with pytest.raises(RequestBudgetExceeded, match="request_retries"):
+            budget.reserve("retry")
+        budget.reserve("fallback")
+        with budget_module.scoped_request_budget(
+            "trace-budget-ragas-retry-override",
+            max_retries=4,
+            max_fallbacks=2,
+        ) as resumed_budget:
+            assert resumed_budget is budget
+            assert resumed_budget.snapshot().fallbacks == 1
+            resumed_budget.reserve("fallback")
+            with pytest.raises(
+                RequestBudgetExceeded, match="request_fallbacks"
+            ):
+                resumed_budget.reserve("fallback")
+
+    budget_module.clear_request_budget()
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_scoped_fallback_override_requires_a_positive_integer(value):
+    from backend.infra.llm import budget as budget_module
+
+    budget_module.clear_request_budget()
+    with pytest.raises(ValueError, match="max_fallbacks 必须是正整数"):
+        with budget_module.scoped_request_budget(
+            "trace-budget-invalid-fallback-override",
+            max_fallbacks=value,
+        ):
+            raise AssertionError("非法的回退上限不应建立预算")
+
+
 def test_budget_observe_does_not_apply_pg_hard_block():
     from backend.infra.llm.budget import RequestBudget
     from backend.infra.llm.quota import QuotaExceeded
@@ -307,8 +363,8 @@ def test_request_budget_off_does_not_create_request_state(monkeypatch):
 
 def test_token_tracker_shares_request_budget(monkeypatch, tmp_path):
     from backend.infra.llm import budget as budget_module
-    from backend.infra.token_tracker import TokenTracker
     from backend.infra.llm.budget import RequestBudgetExceeded
+    from backend.infra.token_tracker import TokenTracker
 
     budget_module.clear_request_budget()
     monkeypatch.setattr(

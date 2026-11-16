@@ -461,7 +461,7 @@ def build_rejection_response(
     ) if decision.reason else ""
 
     if self_correction_attempted:
-        msg += "\n（已尝试改写提问重新检索，仍未找到可靠答案）"
+        msg += "\n我也换种问法查过，但仍未找到能支持可靠回答的资料。"
 
     reject_info = RejectInfo(
         rejected=True,

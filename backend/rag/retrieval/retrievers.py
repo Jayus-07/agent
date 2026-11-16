@@ -562,11 +562,55 @@ class ChunkLevelRetriever(BaseRetriever):
         """
         if k is None:
             k = RAG_DOC_CANDIDATE_K
-        docs = (self.doc_db.similarity_search(st.query, k=k, filter=flt)
-                if flt else self.doc_db.similarity_search(st.query, k=k))
+        try:
+            docs = (self.doc_db.similarity_search(st.query, k=k, filter=flt)
+                    if flt else self.doc_db.similarity_search(st.query, k=k))
+        except Exception as exc:
+            from backend.rag.vectorstore.pgvector_store import (
+                IndexEmbeddingMismatchError,
+            )
+
+            if isinstance(exc, IndexEmbeddingMismatchError) or not (
+                self._is_embedding_provider_error(exc)
+            ):
+                raise
+            from backend.rag.context import mark_vector_degraded
+
+            mark_vector_degraded()
+            logger.warning(
+                "[ChunkLevelRetriever] Doc 级 embedding 服务不可用，"
+                f"跳过向量候选选择并继续安全降级 (error={type(exc).__name__})"
+            )
+            return []
         if st.authorized is not None:
             docs = [d for d in docs if d.metadata.get("kb_id") in st.authorized]
         return docs
+
+    @staticmethod
+    def _is_embedding_provider_error(error: BaseException) -> bool:
+        """只把已知 Provider/HTTP 传输错误视作可降级的向量故障。"""
+        try:
+            from openai import APIError
+
+            if isinstance(error, APIError):
+                return True
+        except ImportError:  # pragma: no cover — OpenAI SDK 是运行依赖
+            pass
+        try:
+            import httpx
+
+            if isinstance(error, httpx.HTTPError):
+                return True
+        except ImportError:  # pragma: no cover — HTTPX 是运行依赖
+            pass
+        try:
+            import requests
+
+            if isinstance(error, requests.exceptions.RequestException):
+                return True
+        except ImportError:  # pragma: no cover — 部分测试环境不安装 requests
+            pass
+        return isinstance(error, (TimeoutError, ConnectionError))
 
     def _stage1_select_docs(self, st: "_Staging") -> None:
         """Stage 1：Doc 级候选选择（人名索引 → filter/相似度/关键词门控）。

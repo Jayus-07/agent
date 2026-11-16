@@ -1,16 +1,25 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { getTraceById } from "@/lib/observability/source";
 import type { TraceRecord, Span } from "@/types/trace";
 import { statusBadge, formatTime, formatRelative } from "@/types/trace";
 import { knowledgeService } from "@/api/knowledge";
+import type { KnowledgeDoc, ProcessingRunDetail } from "@/api/knowledge";
 import { X, Loader2 } from "lucide-react";
 import {
   getLogicalStageSpans, getMetadataPerformanceWarning, getMetadataStageDuration,
-  getQualityScore, getQualityScoreBreakdown, getQualityWarning, groupSpansByType,
+  formatTracePageCount, getQualityScore, getQualityScoreBreakdown, getQualityWarning,
+  getTraceCostDisplay, groupSpansByType,
+  getEmbeddingCountsFromSpans,
+  getTraceDocumentTitle,
+  getTraceDocumentId,
+  getTraceDocumentIdentityError,
+  getRegistryDocumentIdentityError,
+  getProcessingRunDetailError,
 } from "../trace-metrics";
+import ProcessingRunDetailView from "../processing-run-detail";
 import {
   getChunkHeading,
   SIMULATED_QUESTIONS_LABEL,
@@ -47,6 +56,13 @@ const DOC_TYPE_CN: Record<string, string> = {
   faq: "常见问题", product_spec: "商品规格", listing: "商品上架", sop: "操作流程",
   training: "培训文档", ad_policy: "广告政策", security: "安全文档",
   customer_data: "客户数据", contract_template: "合同模板", general: "通用文档",
+  travel_guide: "旅游指南",
+};
+
+const BUSINESS_DOMAIN_CN: Record<string, string> = {
+  product: "商品", order: "订单", inventory: "库存", logistics: "物流",
+  advertising: "广告", customer: "客户", supplier: "供应商", analytics: "数据分析",
+  data: "数据治理", financial: "财务", hr: "人事", travel: "旅游", general: "通用",
 };
 
 const CHUNK_STRATEGY_CN: Record<string, string> = {
@@ -66,8 +82,27 @@ const CHUNK_METHOD_CN: Record<string, string> = {
 interface ChunkDetail { chunk_index: number; content: string; char_count: number; keywords: string; llm_keywords?: string; llm_model?: string; granularity?: string; parent_scope?: string; document_title?: string; section_title?: string; section_titles?: string[]; chunk_type?: string; doc_type?: string; simulated_questions?: string[]; }
 
 export default function DocTracePage() {
-  const { id } = useParams<{ id: string }>(); const router = useRouter();
+  const { id } = useParams<{ id: string }>(); const router = useRouter(); const searchParams = useSearchParams();
+  const documentName = searchParams.get("documentName") || "";
+  const documentIdParam = searchParams.get("docId") || "";
+  const returnTab = searchParams.get("returnTab") === "documents" || (!searchParams.has("returnTab") && Boolean(documentIdParam))
+    ? "documents"
+    : "operations";
+  const returnPageParam = Number(searchParams.get("returnPage") || "1");
+  const returnParams = new URLSearchParams({ tab: returnTab });
+  if (returnTab === "documents" && Number.isSafeInteger(returnPageParam) && returnPageParam > 1) {
+    returnParams.set("doc_page", String(returnPageParam));
+  }
+  const returnHref = `/knowledge/workbench?${returnParams.toString()}`;
+  const fileHashParam = searchParams.get("fileHash") || "";
+  const runIdParam = searchParams.get("runId") || "";
+  const viewParam = searchParams.get("view") || "";
   const [trace, setTrace] = useState<TraceRecord | null>(null);
+  const [registryDocument, setRegistryDocument] = useState<KnowledgeDoc | null>(null);
+  const [documentIdentityError, setDocumentIdentityError] = useState("");
+  const [processingRun, setProcessingRun] = useState<ProcessingRunDetail | null>(null);
+  const [processingRunHistoryFallback, setProcessingRunHistoryFallback] = useState(false);
+  const [processingRunError, setProcessingRunError] = useState("");
   const [loading, setLoading] = useState(true);
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
   const [expandedMeta, setExpandedMeta] = useState<Set<string>>(new Set());
@@ -76,7 +111,189 @@ export default function DocTracePage() {
   const [chunkDetailLoading, setChunkDetailLoading] = useState(false);
   const [chunkDetailError, setChunkDetailError] = useState("");
 
-  useEffect(() => { let c=false; (async()=>{const t=await getTraceById(id); if(!c){setTrace(t);setLoading(false);}})(); return ()=>{c=true;}; }, [id]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setTrace(null);
+    setRegistryDocument(null);
+    setDocumentIdentityError("");
+    setProcessingRun(null);
+    setProcessingRunHistoryFallback(false);
+    setProcessingRunError("");
+
+    const loadDocumentIdentity = async () => {
+      if (!documentIdParam) {
+        if (!cancelled) setDocumentIdentityError("入口未提供文件 ID，无法核对文档登记");
+        return;
+      }
+      try {
+        const response = await knowledgeService.getDocument(documentIdParam);
+        const detail = response?.doc as KnowledgeDoc | undefined;
+        const identityError = response?.ok
+          ? getRegistryDocumentIdentityError(
+            detail, documentIdParam, documentName || undefined, fileHashParam || undefined,
+          )
+          : String(response?.error || "文档登记详情读取失败");
+        if (cancelled) return;
+        if (!detail) {
+          setRegistryDocument(null);
+          setDocumentIdentityError(identityError || "文档登记详情未返回");
+          return;
+        }
+        setRegistryDocument(detail);
+        setDocumentIdentityError(identityError || "");
+      } catch {
+        if (!cancelled) setDocumentIdentityError("文档登记详情读取失败");
+      }
+    };
+
+    const loadRunDetail = async (
+      options: { expectedTraceId?: string; allowHistoryFallback?: boolean } = {},
+    ) => {
+      if (!documentIdParam) {
+        if (!cancelled) setProcessingRunError("缺少文件 ID，无法核对历史处理记录");
+        return;
+      }
+      const allowHistoryFallback = options.allowHistoryFallback ?? true;
+      let firstError = "";
+      if (runIdParam) {
+        try {
+          const detail = await knowledgeService.getProcessingRun(documentIdParam, runIdParam);
+          const identityError = getProcessingRunDetailError(
+            detail, documentIdParam, runIdParam, fileHashParam, options.expectedTraceId,
+          );
+          const hasSteps = Array.isArray(detail?.steps) && detail.steps.length > 0;
+          if (!identityError && hasSteps) {
+            if (!cancelled) {
+              setProcessingRun(detail);
+              setProcessingRunHistoryFallback(false);
+            }
+            return;
+          }
+          firstError = identityError || "该运行没有保存阶段明细";
+        } catch {
+          firstError = "最近一次处理运行读取失败";
+        }
+      } else {
+        firstError = "入口未提供处理运行 ID，无法核对 Trace 与运行记录";
+      }
+
+      if (!allowHistoryFallback) {
+        if (!cancelled) setProcessingRunError(firstError || "处理运行与 Trace 未通过身份核验");
+        return;
+      }
+      if (!fileHashParam) {
+        if (!cancelled) {
+          setProcessingRunError(firstError || "文件未提供 SHA-256，无法核对历史处理版本");
+        }
+        return;
+      }
+
+      try {
+        const history = await knowledgeService.getProcessingRuns(
+          documentIdParam, { page: 1, page_size: 100 },
+        );
+        const candidates = (Array.isArray(history?.items) ? history.items : [])
+          .filter((run: ProcessingRunDetail) => (
+            run?.run_id
+            && run.run_id !== runIdParam
+            && String(run.file_hash || "").toLowerCase() === fileHashParam.toLowerCase()
+          ));
+        for (const candidate of candidates) {
+          try {
+            const detail = await knowledgeService.getProcessingRun(
+              documentIdParam, candidate.run_id,
+            );
+            const identityError = getProcessingRunDetailError(
+              detail, documentIdParam, candidate.run_id, fileHashParam,
+            );
+            if (identityError || !Array.isArray(detail?.steps) || detail.steps.length === 0) {
+              continue;
+            }
+            if (!cancelled) {
+              setProcessingRun(detail);
+              setProcessingRunHistoryFallback(true);
+              setProcessingRunError("");
+            }
+            return;
+          } catch {
+            // 单条历史记录不可读时，继续核对下一条同 SHA 记录。
+          }
+        }
+        if (!cancelled) {
+          setProcessingRunError(
+            firstError
+              ? `${firstError}；未找到 SHA 一致且保存了阶段的历史运行`
+              : "未找到与当前文件 SHA 一致且保存了阶段明细的处理运行",
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setProcessingRunError(
+            firstError
+              ? `${firstError}；历史处理记录读取失败`
+              : "历史处理记录读取失败",
+          );
+        }
+      }
+    };
+
+    void (async () => {
+      if (viewParam === "unavailable") {
+        await Promise.all([
+          loadDocumentIdentity(),
+          loadRunDetail({ allowHistoryFallback: true }),
+        ]);
+        if (!cancelled) setLoading(false);
+        return;
+      }
+      if (viewParam === "processing-run") {
+        await Promise.all([
+          loadDocumentIdentity(),
+          loadRunDetail({ allowHistoryFallback: true }),
+        ]);
+        if (!cancelled) setLoading(false);
+        return;
+      }
+
+      const foundTrace = await getTraceById(id);
+      if (cancelled) return;
+      if (foundTrace) {
+        const traceIdError = foundTrace.id === id
+          ? null
+          : "Trace API 返回的 ID 与页面请求不匹配";
+        const documentIdError = documentIdParam
+          ? getTraceDocumentIdentityError(getTraceDocumentId(foundTrace), documentIdParam)
+          : null;
+        const identityError = traceIdError || documentIdError;
+        if (!identityError) {
+          setTrace(foundTrace);
+          await Promise.all([
+            loadDocumentIdentity(),
+            loadRunDetail({ expectedTraceId: foundTrace.id, allowHistoryFallback: false }),
+          ]);
+          if (!cancelled) setLoading(false);
+          return;
+        }
+        setProcessingRunError(identityError);
+      }
+      if (documentIdParam) {
+        await Promise.all([
+          loadDocumentIdentity(),
+          loadRunDetail({ allowHistoryFallback: true }),
+        ]);
+        if (!cancelled && foundTrace && documentIdParam
+          && getTraceDocumentIdentityError(getTraceDocumentId(foundTrace), documentIdParam)) {
+          setProcessingRunError((current) => current ? `Trace 已拒绝展示（文档 ID 不匹配）；运行记录读取失败：${current}` : "Trace 文档 ID 不匹配");
+        }
+      } else if (!foundTrace) {
+        setProcessingRunError("Trace 详情不存在或已过期，且没有关联的处理运行 ID");
+      }
+      if (!cancelled) setLoading(false);
+    })();
+
+    return () => { cancelled = true; };
+  }, [id, documentIdParam, documentName, fileHashParam, runIdParam, viewParam]);
   useEffect(() => { if (!chunkPanelOpen) return; const onKey=(e:KeyboardEvent)=>{if(e.key==="Escape")setChunkPanelOpen(false)}; window.addEventListener("keydown",onKey); return ()=>window.removeEventListener("keydown",onKey); }, [chunkPanelOpen]);
 
   const childSpans = useMemo(() => { if(!trace)return[]; return (trace.spans||[]).filter(s=>s.parent_id!==null).sort((a,b)=>spanOrder(a)-spanOrder(b)); }, [trace]);
@@ -129,28 +346,163 @@ export default function DocTracePage() {
   const docIdFromTags = trace?.tags?.doc_id||"";
   const docIdFromSpans = useMemo(() => { if(docIdFromTags)return""; for(const s of trace?.spans||[]){const m=s.metrics as Record<string,unknown>|undefined; if(m?.doc_id)return String(m.doc_id);} return""; }, [trace, docIdFromTags]);
   const docId = docIdFromTags||docIdFromSpans;
+  const traceDocumentId = trace ? getTraceDocumentId(trace) : null;
+  const traceKnowledgeBaseId = trace?.tags?.kb_id || "";
+  const traceSla = trace?.sla;
+  const registryKnowledgeBaseId = registryDocument?.kb_id || "";
+  const knowledgeBaseIdentityError = !traceKnowledgeBaseId && !registryKnowledgeBaseId
+    ? "Trace 与文档登记均未记录知识库 ID，无法确认所属知识库"
+    : !traceKnowledgeBaseId
+      ? "Trace 未记录知识库 ID，无法与文档登记核对"
+      : !registryKnowledgeBaseId
+        ? "文档登记未记录知识库 ID，无法与 Trace 核对"
+        : traceKnowledgeBaseId !== registryKnowledgeBaseId
+          ? "Trace 知识库 ID 与文档登记不一致"
+          : "";
+  const registryFileHash = String(
+    registryDocument?.file_hash || registryDocument?.hash || registryDocument?.sha256 || "",
+  );
+  const identityVerified = Boolean(
+    registryDocument
+    && !documentIdentityError
+    && processingRun
+    && runIdParam
+    && processingRun.run_id === runIdParam
+    && !processingRunError
+    && fileHashParam
+    && registryFileHash
+    && registryFileHash.toLowerCase() === fileHashParam.toLowerCase()
+    && processingRun.file_hash
+    && String(processingRun.file_hash).toLowerCase() === fileHashParam.toLowerCase()
+    && documentIdParam
+    && traceDocumentId === documentIdParam
+    && trace?.id === id
+    && !knowledgeBaseIdentityError,
+  );
+  const registryDocumentName = registryDocument?.file_name || registryDocument?.name || "";
+  const traceDocumentTitle = registryDocumentName
+    || documentName
+    || getTraceDocumentTitle(trace?.question || "");
+  const identityRows = [
+    { label: "文件名", value: traceDocumentTitle, source: registryDocumentName ? "项目文档登记" : documentName ? "入口参数，未核验" : "未记录" },
+    { label: "doc_id", value: traceDocumentId || "Trace 未记录" },
+    { label: "文档登记 ID", value: registryDocument?.doc_id || registryDocument?.id || "未核验" },
+    { label: "知识库 ID", value: traceKnowledgeBaseId || "Trace 未记录" },
+    { label: "文档登记知识库 ID", value: registryKnowledgeBaseId || "未核验" },
+    { label: "Trace ID", value: trace?.id || "Trace 未记录" },
+    { label: "run_id", value: processingRun?.run_id || (runIdParam ? "未核验" : "未记录") },
+    { label: "文件 SHA-256", value: processingRun?.file_hash || (fileHashParam ? "未核验" : "未记录") },
+    { label: "文档登记 SHA-256", value: registryFileHash || "未核验" },
+    { label: "处理操作", value: processingRun?.operation || "未记录" },
+    { label: "处理状态", value: processingRun?.status || (runIdParam ? "未核验" : "未记录") },
+    { label: "处理开始", value: processingRun?.started_at ? formatTime(processingRun.started_at) : "未记录" },
+    { label: "处理结束", value: processingRun?.finished_at ? formatTime(processingRun.finished_at) : "未记录" },
+    { label: "SLA 阈值", value: traceSla ? `${traceSla.threshold_ms} ms` : "未记录" },
+    { label: "SLA 结果", value: traceSla ? (traceSla.breached ? "已超限" : "未超限") : "未记录" },
+  ];
+  const identityWarnings = [
+    documentIdentityError,
+    processingRunError,
+    knowledgeBaseIdentityError,
+    !fileHashParam ? "入口未提供文件 SHA-256，无法核对文件版本" : "",
+  ]
+    .filter(Boolean);
   const handleOpenChunkDetail = async () => { if(!docId)return; setChunkPanelOpen(true);setChunkDetailLoading(true);setChunkDetailError(""); try{const res=await knowledgeService.getChunkDetail(docId); setChunkDetailData((res as any)?.chunks??(res as any)?.data?.chunks??[]);}catch(e){setChunkDetailError((e as Error).message);}finally{setChunkDetailLoading(false);} };
 
   if(loading) return <div className="flex-1 flex items-center justify-center"><p className="text-sm text-slate-400">加载中…</p></div>;
-  if(!trace) return <div className="flex-1 flex items-center justify-center"><div className="text-center"><p className="text-slate-400">Trace {id} 不存在或已过期</p><button onClick={()=>router.back()} className="mt-3 text-sm text-violet-600 hover:text-violet-500">← 返回</button></div></div>;
+  if (!trace && processingRun) {
+    return <ProcessingRunDetailView
+      detail={processingRun}
+      documentName={documentName}
+      expectedDocId={documentIdParam}
+      expectedFileHash={fileHashParam}
+      registryDocument={registryDocument}
+      registryIdentityError={documentIdentityError}
+      runIdentityError={processingRunError}
+      historyFallback={processingRunHistoryFallback}
+      onBack={() => router.push(returnHref)}
+      backLabel={returnTab === "documents" ? "文档" : "操作日志"}
+    />;
+  }
+  if (!trace) return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-2xl mx-auto px-6 py-10">
+        <button onClick={() => router.push(returnHref)} className="text-xs text-slate-400 hover:text-slate-600">← 返回{ returnTab === "documents" ? "文档" : "操作日志" }</button>
+        <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-5">
+          <div className="text-sm font-semibold text-amber-900">处理详情未留存</div>
+          <p className="mt-2 text-sm text-slate-700">{documentName || "未记录文件名"}</p>
+          <p className="mt-2 text-xs leading-relaxed text-amber-800">{processingRunError || `Trace ${id} 不存在或已过期`}</p>
+          {searchParams.get("operation") && (
+            <p className="mt-3 text-xs text-slate-600">最后操作：{searchParams.get("operation")}；时间：{searchParams.get("operationAt") || "未记录"}</p>
+          )}
+          <p className="mt-3 text-xs leading-relaxed text-slate-500">当前记录不足以还原处理阶段。请保留该文件现状；下一次受控重建成功后，可从新运行记录追溯，不会补造历史详情。</p>
+        </div>
+      </div>
+    </div>
+  );
 
   const badge = statusBadge(trace.status??"success");
+  const traceCost = getTraceCostDisplay({
+    costCny: overview.costCny,
+    costUsd: overview.costUsd,
+    totalTokens: overview.totalTokens,
+    calls: overview.llmCalls,
+  });
   const toggleTypeExpand = (type:string) => { const next=new Set(expandedTypes); next.has(type)?next.delete(type):next.add(type); setExpandedTypes(next); };
   const toggleMeta = (key:string) => { const next=new Set(expandedMeta); next.has(key)?next.delete(key):next.add(key); setExpandedMeta(next); };
-  function summaryMetrics(spans: Span[]): string { const merged:Record<string,unknown>={}; for(const s of spans){if(!s.metrics)continue; for(const [k,v] of Object.entries(s.metrics)){if(k==="chunk_id"||k==="attempt")continue; if(merged[k]===undefined)merged[k]=v;}} const e=Object.entries(merged); if(!e.length)return""; return e.map(([k,v])=>`${k}: ${typeof v==="number"?v:String(v)}`).join(" · "); }
+  function summaryMetrics(spans: Span[]): string {
+    const merged: Record<string, unknown> = {};
+    for (const span of spans) {
+      if (!span.metrics) continue;
+      for (const [key, value] of Object.entries(span.metrics)) {
+        if (key === "chunk_id" || key === "attempt") continue;
+        if (merged[key] === undefined) merged[key] = value;
+      }
+    }
+    const entries = Object.entries(merged);
+    if (!entries.length) return "";
+    return entries.map(([key, value]) => {
+      if (key === "page_count") {
+        return `${key}: ${formatTracePageCount(value, merged.page_count_applicable)}`;
+      }
+      return `${key}: ${typeof value === "number" ? value : String(value)}`;
+    }).join(" · ");
+  }
 
   return (
     <div className="flex-1 overflow-y-auto"><div className="max-w-3xl mx-auto px-6 py-8 space-y-5">
-      <button onClick={()=>router.push("/knowledge/workbench?tab=operations")} className="text-xs text-slate-400 hover:text-slate-600">← 返回操作日志</button>
+      <button onClick={()=>router.push(returnHref)} className="text-xs text-slate-400 hover:text-slate-600">← 返回{ returnTab === "documents" ? "文档" : "操作日志" }</button>
 
       {/* Overview */}
       <div>
-        <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-3"><h1 className="text-base font-semibold text-slate-800">{trace.question}</h1><span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span></div><span className="text-xs text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span></div>
+        <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-3"><h1 className="text-base font-semibold text-slate-800">{traceDocumentTitle}</h1><span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span></div><span className="text-xs text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span></div>
+        <section aria-labelledby="trace-identity-heading" className="mb-3 rounded-xl border border-slate-200 bg-white p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 id="trace-identity-heading" className="text-xs font-medium text-slate-600">文件与处理身份</h2>
+            <span role="status" className={`rounded px-2 py-1 text-[10px] font-semibold ${identityVerified ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
+              {identityVerified ? "身份核验通过" : "身份未核验"}
+            </span>
+          </div>
+          <dl className="grid grid-cols-1 gap-x-5 gap-y-3 sm:grid-cols-2">
+            {identityRows.map((item) => (
+              <div key={item.label} className="min-w-0">
+                <dt className="text-[10px] text-slate-400">{item.label}</dt>
+                <dd className="mt-0.5 break-all font-mono text-xs text-slate-700">{item.value}</dd>
+                {"source" in item && <dd className="mt-0.5 text-[9px] text-slate-400">来源：{item.source}</dd>}
+              </div>
+            ))}
+          </dl>
+          {identityWarnings.length > 0 && (
+            <p role="alert" className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+              未核验原因：{identityWarnings.join("；")}
+            </p>
+          )}
+        </section>
         <div className="grid grid-cols-4 gap-2 mb-2">
-          {[{label:'文件大小',value:overview.fileSize>0?`${(overview.fileSize/1024).toFixed(1)}KB`:'-',sub:`${overview.fileSize} bytes`},{label:'Chunks',value:overview.chunkCount>0?String(overview.chunkCount):'-',sub:'文本分块数'},{label:'Tokens',value:overview.totalTokens>0?overview.totalTokens.toLocaleString():'-',sub:'prompt+completion'},{label:'成本',value:overview.costCny>0?`¥${overview.costCny.toFixed(4)}`:(overview.costUsd>0?`$${overview.costUsd.toFixed(4)}`:'-'),sub:`llm_usage 台账 ${overview.llmCalls} 次调用`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 font-mono">{c.value}</div><div className="text-[9px] text-slate-400">{c.sub}</div></div>))}
+          {[{label:'文件大小',value:overview.fileSize>0?`${(overview.fileSize/1024).toFixed(1)}KB`:'-',sub:`${overview.fileSize} bytes`},{label:'Chunks',value:overview.chunkCount>0?String(overview.chunkCount):'-',sub:'文本分块数'},{label:'Tokens',value:overview.totalTokens>0?overview.totalTokens.toLocaleString():'-',sub:'prompt+completion'},{label:'成本',value:traceCost.value,sub:traceCost.detail}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 font-mono">{c.value}</div><div className="text-[9px] text-slate-400">{c.sub}</div></div>))}
         </div>
         <div className="grid grid-cols-4 gap-2">
-          {[{label:'文档类型',value:DOC_TYPE_CN[overview.docType]||overview.docType||'-'},{label:'业务领域',value:overview.businessDomain||'-'},{label:'模型',value:overview.model||trace.model?.name||'-',sub:overview.models.length>0?`${overview.models.length} 个模型 · ${overview.llmCalls} 次调用`:undefined},{label:'总耗时',value:trace.duration_ms>0?`${(trace.duration_ms/1000).toFixed(1)}s`:'-',sub:`${childSpans.length} spans · ${trace.id?.slice(0,8)}`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 truncate">{c.value}</div>{c.sub&&<div className="text-[9px] text-slate-400">{c.sub}</div>}{c.label==='模型'&&overview.models.length>1&&<div className="mt-1 pt-1 border-t border-slate-100 space-y-0.5">{overview.models.map(m=>(<div key={m.component+m.model} className="flex items-center justify-between gap-2 text-[9px]"><span className="text-slate-500 truncate">{m.component}: {m.model}</span><span className="font-mono text-slate-400 shrink-0">{m.total_tokens.toLocaleString()} tok{m.cost_cny>0?` · ¥${m.cost_cny.toFixed(4)}`:''}</span></div>))}</div>}</div>))}
+          {[{label:'文档类型',value:DOC_TYPE_CN[overview.docType]||overview.docType||'未记录'},{label:'业务领域',value:BUSINESS_DOMAIN_CN[overview.businessDomain]||overview.businessDomain||'未记录'},{label:'模型',value:overview.model||trace.model?.name||'-',sub:overview.models.length>0?`${overview.models.length} 个模型 · ${overview.llmCalls} 次调用`:undefined},{label:'总耗时',value:trace.duration_ms>0?`${(trace.duration_ms/1000).toFixed(1)}s`:'-',sub:`${childSpans.length} spans · ${trace.id?.slice(0,8)}`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 truncate">{c.value}</div>{c.sub&&<div className="text-[9px] text-slate-400">{c.sub}</div>}{c.label==='模型'&&overview.models.length>1&&<div className="mt-1 pt-1 border-t border-slate-100 space-y-0.5">{overview.models.map(m=>(<div key={m.component+m.model} className="flex items-center justify-between gap-2 text-[9px]"><span className="text-slate-500 truncate">{m.component}: {m.model}</span><span className="font-mono text-slate-400 shrink-0">{m.total_tokens.toLocaleString()} tok{m.cost_cny>0?` · ¥${m.cost_cny.toFixed(4)}`:''}</span></div>))}</div>}</div>))}
         </div>
       </div>
 
@@ -253,7 +605,7 @@ export default function DocTracePage() {
             }
 
             // embedding
-            if(type==="embedding"){const s=spans[0];const attempted=s.metrics?.attempted as number||0;const succeeded=s.metrics?.succeeded as number||0;const failed=s.metrics?.failed as number||0;const embModel=(overview.models||[]).find(m=>m.component==='embedding')?.model||trace?.tags?.embedding_model||"";return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span><span className="text-xs text-slate-400">成功 <span className="font-mono text-green-600">{succeeded}</span>{failed>0&&<span className="ml-1">失败 <span className="font-mono text-red-500">{failed}</span></span>}<span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted}</span></span></span>{embModel&&<span className="ml-auto text-[10px] text-slate-300 shrink-0">模型: {embModel}</span>}</div></div>);}
+            if(type==="embedding"){const {attempted,succeeded,failed}=getEmbeddingCountsFromSpans(spans);const embModel=(overview.models||[]).find(m=>m.component==='embedding')?.model||trace?.tags?.embedding_model||"";return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span><span className="text-xs text-slate-400">{attempted===null&&succeeded===null?"Trace 未记录计数":<><span>成功 <span className="font-mono text-green-600">{succeeded===null?"—":succeeded.toLocaleString()}</span></span>{failed!==null&&failed>0&&<span className="ml-1">失败 <span className="font-mono text-red-500">{failed.toLocaleString()}</span></span>}<span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted===null?"—":attempted.toLocaleString()}</span></span></>}</span>{embModel&&<span className="ml-auto text-[10px] text-slate-300 shrink-0">模型: {embModel}</span>}</div></div>);}
 
             // dedup
             if(type==="dedup"){const s=spans[0];const cached=s.metrics?.cached as boolean|undefined;const existingDocId=s.metrics?.existing_doc_id as string||"";return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>{cached?<span className="text-xs text-amber-600">⚡ 命中缓存 → doc {existingDocId}</span>:<span className="text-xs text-slate-400">未命中缓存 → 进入完整索引流程</span>}</div></div>);}

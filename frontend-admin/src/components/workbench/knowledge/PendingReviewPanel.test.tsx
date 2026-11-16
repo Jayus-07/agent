@@ -51,4 +51,34 @@ describe('PendingReviewPanel', () => {
     expect(container.querySelector('[data-role-gate]')).not.toBeNull()
     expect(container.textContent).toContain('制度文档.pdf')
   })
+
+  it('孤立知识库记录只允许归档，不显示批准按钮', async () => {
+    vi.spyOn(knowledgeService, 'getPendingDocs').mockResolvedValue({
+      items: [{
+        id: 'orphan-1',
+        doc_id: 'doc_a_1',
+        file_name: 'doc_a.md',
+        doc_type: 'general',
+        business_domain: 'general',
+        confidence: 0,
+        kb_id: 'deleted_kb',
+        quality_score: 0,
+        updated_at: '2026-11-13 10:00:00',
+        orphaned_kb: true,
+        orphan_reason: '知识库目录中没有此标识',
+      }],
+      total: 1,
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    mounted = { root, container }
+
+    act(() => root.render(<PendingReviewPanel />))
+    await act(async () => { await Promise.resolve() })
+
+    expect(container.textContent).toContain('孤立登记')
+    expect(container.textContent).toContain('归档孤立记录')
+    expect(Array.from(container.querySelectorAll('button')).some(button => button.textContent?.trim() === '批准')).toBe(false)
+  })
 })

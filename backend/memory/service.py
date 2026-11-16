@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import math
 import time
 
 from langchain_core.messages import SystemMessage
@@ -77,6 +78,206 @@ def _metric_safe(fn, **labels) -> None:
         fn(**labels)
     except Exception:  # pragma: no cover - 观测面异常不外泄
         pass
+
+
+_HISTORY_SQL_MAX_SETS = 3
+_HISTORY_SQL_MAX_COLUMNS = 12
+_HISTORY_SQL_MAX_ROWS = 20
+_HISTORY_SQL_MAX_CELL_CHARS = 160
+_HISTORY_SQL_MAX_PAYLOAD_BYTES = 48 * 1024
+_JS_MAX_SAFE_INTEGER = 9_007_199_254_740_991
+
+
+def _history_sql_cell(value):
+    """把历史 SQL 单元格限制为有限的 JSON 标量。"""
+    if value is None or isinstance(value, (str, bool)):
+        safe_value = value
+    elif isinstance(value, int):
+        safe_value = str(value) if abs(value) > _JS_MAX_SAFE_INTEGER else value
+    elif isinstance(value, float):
+        safe_value = value if math.isfinite(value) else str(value)
+    else:
+        # 新结果卡只存标量；嵌套/未知对象视为损坏单元格，不外带对象内容。
+        return None, True
+
+    if isinstance(safe_value, str) and len(safe_value) > _HISTORY_SQL_MAX_CELL_CHARS:
+        return safe_value[:_HISTORY_SQL_MAX_CELL_CHARS - 1] + "…", True
+    return safe_value, False
+
+
+def _safe_history_sql_results(value) -> list[dict]:
+    """历史记录中的 SQL 结果按 SSE 卡片契约白名单化、裁剪和限容。"""
+    if not isinstance(value, list):
+        return []
+
+    results = []
+    for raw_result in value[:_HISTORY_SQL_MAX_SETS * 4]:
+        if len(results) >= _HISTORY_SQL_MAX_SETS:
+            break
+        if not isinstance(raw_result, dict):
+            continue
+        raw_columns = raw_result.get("columns")
+        if not isinstance(raw_columns, list):
+            continue
+        columns = [column.strip()[:80] for column in raw_columns
+                   if isinstance(column, str) and column.strip()][:_HISTORY_SQL_MAX_COLUMNS]
+        if not columns:
+            continue
+
+        raw_rows = raw_result.get("rows")
+        if not isinstance(raw_rows, list):
+            raw_rows = []
+        rows = []
+        truncated_cells = bool(raw_result.get("truncated_cells"))
+        for raw_row in raw_rows[:_HISTORY_SQL_MAX_ROWS]:
+            if isinstance(raw_row, dict):
+                values = [raw_row.get(column) for column in columns]
+                if any(column not in raw_row for column in columns):
+                    truncated_cells = True
+            elif isinstance(raw_row, (list, tuple)):
+                values = list(raw_row[:len(columns)])
+                if len(raw_row) > len(columns):
+                    truncated_cells = True
+                if len(raw_row) < len(columns):
+                    truncated_cells = True
+            else:
+                continue
+            safe_row = []
+            for cell in values:
+                safe_cell, was_truncated = _history_sql_cell(cell)
+                safe_row.append(safe_cell)
+                truncated_cells = truncated_cells or was_truncated
+            safe_row.extend([None] * (len(columns) - len(safe_row)))
+            rows.append(safe_row)
+
+        raw_total = raw_result.get("total_rows")
+        if (not isinstance(raw_total, int) or isinstance(raw_total, bool)
+                or raw_total < 0):
+            raw_total = raw_result.get("total")
+        has_reported_total = (
+            isinstance(raw_total, int) and not isinstance(raw_total, bool)
+            and raw_total >= 0
+        )
+        total_rows = (
+            max(raw_total, len(raw_rows))
+            if has_reported_total else len(raw_rows)
+        )
+        total_rows_known = (
+            raw_result.get("total_rows_known") is True
+            and has_reported_total
+            and raw_total >= len(raw_rows)
+        )
+        omitted_columns = raw_result.get("omitted_columns")
+        if (not isinstance(omitted_columns, int) or isinstance(omitted_columns, bool)
+                or omitted_columns < 0):
+            omitted_columns = 0
+        omitted_columns = max(omitted_columns, len(raw_columns) - len(columns))
+        safe_result = {
+            "title": str(raw_result.get("title") or "查询结果").strip()[:120] or "查询结果",
+            "columns": columns,
+            "rows": rows,
+            "total_rows": total_rows,
+            "total_rows_known": total_rows_known,
+            "omitted_columns": omitted_columns,
+        }
+        if truncated_cells:
+            safe_result["truncated_cells"] = True
+        if raw_result.get("payload_truncated") is True:
+            safe_result["payload_truncated"] = True
+        results.append(safe_result)
+
+    while results and len(json.dumps(results, ensure_ascii=False).encode("utf-8")) \
+            > _HISTORY_SQL_MAX_PAYLOAD_BYTES:
+        last_with_rows = next((item for item in reversed(results) if item["rows"]), None)
+        if last_with_rows:
+            last_with_rows["rows"].pop()
+            last_with_rows["payload_truncated"] = True
+        else:
+            results.pop()
+    return results
+
+
+def _history_message_payload(message) -> dict:
+    """历史 API 只透出受控的答案展示元数据，不暴露其他消息元数据。"""
+    payload = {
+        "id": message.id,
+        "role": message.role,
+        "content": message.content,
+        "created_at": message.created_at.isoformat(),
+    }
+    metadata = getattr(message, "message_metadata", None)
+    response_metadata = metadata.get("response_metadata") if isinstance(metadata, dict) else None
+    if message.role != "assistant" or not isinstance(response_metadata, dict):
+        return payload
+
+    sql_results = response_metadata.get("sql_results")
+    safe_sql_results = _safe_history_sql_results(sql_results)
+    if safe_sql_results:
+        payload["sql_results"] = safe_sql_results
+
+    sources = response_metadata.get("sources")
+    safe_sources = []
+    if isinstance(sources, list):
+        for source in sources[:20]:
+            if not isinstance(source, dict):
+                continue
+            filename = source.get("filename")
+            if not isinstance(filename, str) or not filename.strip():
+                continue
+            doc_type = source.get("doc_type")
+            type_label = source.get("type_label")
+            safe_source = {
+                "filename": filename.strip()[:256],
+                "doc_type": doc_type[:64] if isinstance(doc_type, str) else "general",
+                "type_label": type_label[:64] if isinstance(type_label, str) else "general",
+                "score": None,
+            }
+            index = source.get("index")
+            if isinstance(index, int) and not isinstance(index, bool) and index > 0:
+                safe_source["index"] = index
+            score = source.get("score")
+            if (isinstance(score, (int, float)) and not isinstance(score, bool)
+                    and 0 <= score <= 1 and math.isfinite(float(score))):
+                safe_source["score"] = float(score)
+            for field, max_length in (("department", 80), ("section", 500), ("doc_id", 128)):
+                value = source.get(field)
+                if isinstance(value, str) and value.strip():
+                    safe_source[field] = value.strip()[:max_length]
+            for field, max_length in (
+                ("version_id", 128),
+                ("effective_from", 64),
+                ("effective_to", 64),
+            ):
+                value = source.get(field)
+                if isinstance(value, str) and value.strip():
+                    safe_source[field] = value.strip()[:max_length]
+            pages = source.get("pages")
+            if isinstance(pages, list):
+                safe_pages = [page for page in pages[:20]
+                              if isinstance(page, int) and not isinstance(page, bool)
+                              and page > 0]
+                if safe_pages:
+                    safe_source["pages"] = safe_pages
+            safe_sources.append(safe_source)
+    if safe_sources:
+        payload["sources"] = safe_sources
+
+    answer_status = response_metadata.get("answer_status")
+    if isinstance(answer_status, str) and answer_status in {
+        "rag_no_evidence", "rag_permission_denied", "rag_hallucination",
+        "rag_retrieval_degraded",
+    }:
+        payload["answer_status"] = answer_status
+    confidence = response_metadata.get("confidence")
+    if (isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+            and 0 <= confidence <= 1 and math.isfinite(float(confidence))):
+        payload["confidence"] = float(confidence)
+    reply_source = response_metadata.get("reply_source")
+    if isinstance(reply_source, str) and reply_source in {
+        "knowledge_base", "data_analysis", "realtime_query", "system_notice",
+    }:
+        payload["reply_source"] = reply_source
+    return payload
 
 
 class MemoryTurnIdempotencyConflict(ValueError):
@@ -418,7 +619,8 @@ class MemoryService:
     async def end_turn(self, session_id: str, question: str, answer: str,
                        user_id: str = "default", tenant_id: str = "",
                        idempotency_key: str = "", product: str = "",
-                       trace_id: str = "") -> None:
+                       trace_id: str = "",
+                       answer_metadata: dict | None = None) -> None:
         # L2 消息、请求收据与 L3 outbox 在同一事务提交；source id 来自本轮用户消息。
         from backend.memory.models.memory import (
             MemoryExtractionJob,
@@ -491,8 +693,11 @@ class MemoryService:
                         raise RuntimeError("记忆轮次收据引用的消息不完整")
                 else:
                     # 不允许后台任务回查“最新用户消息”；并发 turn 必须绑定本轮 ID。
+                    save_turn_kwargs = {"product": product}
+                    if answer_metadata:
+                        save_turn_kwargs["assistant_metadata"] = answer_metadata
                     q_msg, a_msg = await srepo.save_turn(
-                        session_id, question, answer, product=product)
+                        session_id, question, answer, **save_turn_kwargs)
                     if key_hash and q_msg.id is not None and a_msg.id is not None:
                         db_session.add(MemoryTurnReceipt(
                             tenant_id=tenant_id,
@@ -1310,9 +1515,7 @@ class MemoryService:
                 return {
                     "session_id": session_id,
                     "messages": [
-                        {"id": m.id, "role": m.role, "content": m.content,
-                         "created_at": m.created_at.isoformat()}
-                        for m in msgs
+                        _history_message_payload(message) for message in msgs
                     ],
                 }
             except Exception as e:

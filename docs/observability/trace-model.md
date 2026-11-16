@@ -30,6 +30,7 @@ Trace
 - `memory`
 - `agent`
 - `http`
+- `workflow`：用于评测答案生成、质量评分和结果整理等有边界的处理阶段。
 
 强约束以 `backend/observability/tracer.py` 的 `SpanKind` 枚举为准；`type` 为自由字符串
 仅做历史数据兼容。Planner/Reporter 等编排步骤现为 `type="agent"` 的具名 span
@@ -98,12 +99,18 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 - 注意：默认 `full` 档下读取路径不做脱敏，因此**写入侧不得落用户原文**这一约束
   仍然成立——SQL 的两处含 `question[:500]` 的埋点继续不纳入集成树。
 
+### Trace 留存与采样
+
+- `TRACE_SAMPLING_RATE` 控制普通成功 Trace 的留存比例；错误 Trace 始终保留。
+- `workflow_name="rag_eval"` 的评测 Trace 始终保留，不受成功 Trace 采样率影响。V2 逐题结果保存 Trace ID 并提供详情链接，因此不能抽样丢弃被结果引用的评测 Trace。
+
 ## 当前实现（更正）
 
 - Tracer: `backend/observability/tracer.py`（`TraceCollector`；contextvar + thread 双轨）
 - 持久化: `backend/observability/trace_store_pg.py`（PostgreSQL；SQLite 轨已于 2026-09-17 删除）
 - API: `backend/app/api/routes/observability.py`；DTO: `routes/_trace_dto.py`
 - 授权: `backend/app/api/routes/_trace_authz.py`
+- `knowledge_index` Trace 的标题和索引阶段 Span 名称使用正式逻辑路径中的文件名；候选索引不把随机暂存文件名作为页面标题。
 
 ## 开发时的 Span 生命周期与归因门禁
 

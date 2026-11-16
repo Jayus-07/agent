@@ -9,6 +9,7 @@ import {
 describe('ragAnswer 语义归一', () => {
   it('后端蛇形码 → ErrorCard 行动指引键（大写）', () => {
     expect(toRejectionActionKey('rag_no_evidence')).toBe('RAG_NO_EVIDENCE')
+    expect(toRejectionActionKey('rag_retrieval_degraded')).toBe('RAG_RETRIEVAL_DEGRADED')
     expect(toRejectionActionKey('rag_permission_denied')).toBe('RAG_PERMISSION_DENIED')
     expect(toRejectionActionKey('rag_hallucination')).toBe('RAG_HALLUCINATION')
   })

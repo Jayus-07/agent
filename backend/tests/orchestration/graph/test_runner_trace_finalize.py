@@ -65,6 +65,7 @@ class _FakeMemory:
     def __init__(self):
         self.end_turn_calls = []
         self.end_turn_idempotency_keys = []
+        self.end_turn_answer_metadata = []
 
     # 签名与 MemoryManager.start_session/end_turn 对齐（#420 起带 product/domain，
     # 缺参会让 runner 的记忆加载 TypeError 连锁失败整个套件）；
@@ -77,10 +78,11 @@ class _FakeMemory:
 
     def end_turn(self, session_id, question, answer, user_id="default",
                  tenant_id="", idempotency_key="", product="", trace_id="",
-                 **_kwargs):
+                 answer_metadata=None, **_kwargs):
         self.last_answer = answer
         self.end_turn_calls.append((session_id, question, answer))
         self.end_turn_idempotency_keys.append(idempotency_key)
+        self.end_turn_answer_metadata.append(answer_metadata)
 
 
 def _root(record):
@@ -229,6 +231,46 @@ def test_normal_completion_finishes_once_with_answer(_spy_finish):
     root = _root(record)
     assert root.end_time != ""
     assert root.status == "success"
+
+
+def test_normal_completion_persists_the_same_rag_display_metadata_as_sse(_spy_finish):
+    import threading
+
+    rag_output = (
+        '<!--RAGMETA{"answer_status":"rag_retrieval_degraded",'
+        '"confidence":0.42}-->\n回答依据有限。\n\n'
+        "### 参考文献\n\n"
+        "1. **员工手册.pdf** (制度规范) — 第 4 页 · 请假制度 "
+        "<!--doc:policy-doc--><!--source_meta:version_id=v2;"
+        "effective_from=2026-01-01;effective_to=2026-12-31-->\n"
+    )
+    rag_step = {
+        "1": {
+            "step_id": "1", "capability": "rag.search", "status": "success",
+            "output": rag_output,
+        },
+    }
+    graph = _StaticGraph([
+        {"router": {"route_mode": "plan", "cs_context": {}}},
+        {"supervisor": {"step_results": rag_step}},
+        {"reporter": {"final_answer": "回答依据有限。"}},
+    ])
+    system = _make_system(graph)
+
+    events = list(system.stream_events(
+        "年假怎么申请？", "s-rag", kb_id="default", user_id="u-rag",
+        stop_event=threading.Event(),
+    ))
+
+    done = next(event["data"] for event in events if event["event"] == "done")
+    saved = system._memory.end_turn_answer_metadata[0]
+    assert saved["answer_status"] == done["answer_status"] == "rag_retrieval_degraded"
+    assert saved["confidence"] == done["confidence"] == 0.42
+    assert saved["sources"] == done["sources"]
+    assert saved["sources"][0]["version_id"] == "v2"
+    assert saved["sources"][0]["effective_from"] == "2026-01-01"
+    assert saved["sources"][0]["effective_to"] == "2026-12-31"
+    assert saved["reply_source"] == done["reply_source"] == "knowledge_base"
 
 
 def test_main_checkpointer_uses_opaque_unique_thread_id_per_turn():

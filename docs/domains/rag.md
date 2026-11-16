@@ -40,11 +40,15 @@ BM25 pickle 只可来自受信任服务目录：SHA256 缺失或不匹配均拒�
 按既有子 Trace 关联记录 HTTP 往返与服务外差值。该差值不能单独归因于网络、
 连接池或上游排队；先按实际 Trace 定位，不预设历史 4 秒缺口的根因。
 
-检索结果作为生成依据；遵循当前 Evidence Gate、引用和拒答契约。索引不可用、证据不足、模型拒答与基础设施错误要按既有结果类型处理，不能将无证据回答伪装为有效检索结果。
+检索结果作为生成依据；遵循当前 Evidence Gate、引用和拒答契约。索引不可用、证据不足、模型拒答与基础设施错误要按既有结果类型处理，不能将无证据回答伪装为有效检索结果。Doc 级嵌入 Provider/HTTP 故障或重排服务本轮超时，导致本轮无法可靠核验并最终拒答时，使用 `answer_status=rag_retrieval_degraded`，提示用户本轮未能核实且不代表知识库没有资料；真实无命中仍使用 `rag_no_evidence`。权限拒绝与事实校验拒绝继续保留原状态，不被检索降级覆盖。
 
 Evidence Gate 的行为实现位于 `backend/rag/evidence_gate/`，RAG 链路由 `backend/rag/chain.py` 调用；修改拒答、引用或降级行为时，检查 `backend/tests/rag/` 中对应契约测试。
 
 ## 上传元数据与级联决策
+
+### 分块详情和来源追溯
+
+管理端分块详情调用 GET /rag/chunks/{doc_id}/detail。接口保留文档读取授权与发布状态门，只返回核对正文、分块身份、来源定位、解析/切分版本、表格行列和质量标记所需的字段；不返回服务器本地路径或租户内部标识。字段缺失按“未记录”展示，不据此判定质量通过。历史 Trace 已过期时，分块正文仍可通过此接口独立核对；Trace 仍用于查看当次处理步骤与模型血缘。
 
 上传元数据契约仍使用 `UnifiedMetadata`（`backend/rag/preprocessing/metadata_schema.py`），并保留 `doc_type`、`business_domain` 等历史字段。当前入库分类和业务域以规则分类器及 taxonomy 规范化结果为唯一事实源；LLM 不做第二次分类。`ENABLE_LLM_METADATA_EXTRACT` 只控制一次可选增强调用，用于摘要、精确实体、风险和时间信号；短文本和已有结构化 Q/A 的 FAQ 跳过调用，失败后用规则实体和抽取式摘要继续。LLM 实体/时间/风险依据须能在原文中精确匹配；关键词字段只保留原文精确匹配的格式标识符，或由 LLM 标注为组织、产品、制度/标准的专名，不填普通主题词。Schema 限制输出字段长度和数量，`backend/tests/rag/` 覆盖分类权威、降级与精确匹配。
 
@@ -112,6 +116,9 @@ flowchart TD
 - API 入口：`backend/app/api/routes/rag_upload.py`、`rag_documents.py`、`rag_lifecycle.py`，异步索引及任务跟踪以当前 Celery 配置为准。不能只凭 HTTP 200 判断“上传即 active”。
 - 操作可见性：`GET /api/v1/rag/documents/operations` 同时返回终态日志 `items` 和现有 `rag_index_runs` 中的活动上传 `active_uploads`；后台上传被接受后操作面板轮询活动记录，展示文件、upload ID、Celery task ID、状态与阶段，终态继续沿用原操作日志和 Trace 链接。普通用户的日志与活动记录按可信租户、知识库、部门及文档授权范围过滤；有文档 ID 的日志须能在注册表中确认授权范围，无文档 ID 的日志仅对记录操作者可见。当前租户 admin 可查看该租户全部记录；跨租户访问仍须单独授权。
 - 解析与文档策略：`backend/rag/preprocessing/parser/`、`structure_analyzer.py`、`chunking.py::ChunkStrategyRouter`；按真实 AST/类型选择 Manual/Legal/QA/Table/Generic 等已注册策略。**不在单个上传接口写第二份固定切分逻辑。**
+  - 规则优先的 LLM 切分兜底（代码已实现，隔离运行验收待完成）：先由格式解析器生成带来源定位的 AST，再由 `ChunkStrategyRouter` 选择确定性规则；仅当路由落到 `RecursiveChunkStrategy`（结构未识别）或规则覆盖审计发现缺口时，才调用模型角色 `chunking`。LLM 只能把已有 AST 源节点 ID 按原顺序完整分组，不得改写或补造正文；不得跨越原有章节路径。Parent/Leaf 及块 ID 由确定性代码生成。写库前继续执行覆盖、块完整性、重复/空块和父子引用门禁；兜底校验失败时保留规则切分结果，未覆盖原文仍会被索引器的硬质量门禁拦截，不得发布为 `active`。损坏文件、原文缺失和解析失败不进入文本切分 LLM。
+  - 兜底阶段以 `chunking_llm_fallback` 单独写入处理血缘和 Trace，记录触发类型、格式、Parser/规则策略版本、模型角色/Provider/模型版本、Prompt 版本、尝试/采用/失败状态、输出块数、耗时与用量；指标不含文件名或正文。管理端通过 `GET /api/rag/chunking/llm-fallback-stats` 查看滚动窗口总数、每日趋势及按格式、触发类型、规则策略/版本、Parser 版本分组的处理运行次数、LLM 调用次数、采用次数、Provider/运行错误、边界校验拒绝、跳过数和输出块数。同一文件重复处理会按不同运行分别统计，避免将运行次数误称为不同文档数。重复问题达到可配置的复核信号后进入解析器或规则升级评审；信号只触发人工升级流程，不自动修改规则。当前默认复核数为每类 5 次，可由 `RAG_LLM_CHUNK_RULE_REVIEW_THRESHOLD` 调整；生产基线应依据隔离试点和业务风险设定，不把这个默认值当成通用行业阈值。
+  - 当前代码和定向测试已覆盖规则优先路由、边界校验、Trace/血缘记录及统计接口；共享运行服务尚未包含本工作树改动，且尚无真实模型兜底记录。完成隔离单文件运行、索引和管理端统计复验前，不得宣称兜底链路已在运行环境验收通过，也不得批量改写既有业务库。不能把 embedding 语义切分或元数据 LLM 调用记作 LLM 切分兜底。
   - 统一结构来源（2026-10-22）：`parse_file` 为 AST 节点确定性生成 `node_id`、父节点/章节 ID、章节树和字符跨度；格式解析器另提供 PDF 页/bbox、DOCX 正文序号、表格行列、HTML DOM 路径、PPTX 幻灯片/形状、JSON 路径或 XML XPath。章节树写入质量记录，Section 带 `section_type`（section/clause/slide/record/element），Leaf/Parent 保存标量章节 ID 与 JSON 来源定位；合同条款、JSON 记录等非显式章节按完整标题路径派生稳定章节 ID，并回写章节树。无法唯一回源时不猜页码或节点。
   - 解析入口新增 HTML/HTM、PPTX、JSON、XML，上传 MIME 白名单仍只从 Parser 注册表派生；OOXML 继续做 ZIP 魔数校验，文本类继续拒绝 NUL/UTF-16 伪装。HTML 排除导航、页脚、脚本及 class/id/role 标识的广告位；Markdown 解析 fenced code 与 pipe table；PPTX 每页都生成 slide section（无标题页使用“幻灯片 N”并标记 heading_source），并提取可见文本、表格、图表缓存值、演讲备注及有说明的图片，未识别图表/无说明图片写质量告警；JSON/XML 保留字段路径与数组记录边界，无 id/name 的记录使用“记录 N”并标记来源，XML 拒绝 DTD/ENTITY，JSON/XML 的结构上限触发时明确标记 partial 并阻止当作完整解析发布。
   - 上传弹窗文件选择器与后端注册表同步开放 PDF、Markdown、TXT、DOCX、XLSX、CSV、HTML、PPTX、JSON、XML。RapidOCR 保留区域平均置信度并汇总最低值；低于 0.7 标记 `ocr_confidence_low`，云端未返回分数时标记 `ocr_confidence_unavailable`，不伪造置信度。
@@ -129,6 +136,7 @@ flowchart TD
   - 解析结果契约：Parser 输出 `DocumentAST`，PDF 节点 `page_number` 为 1-based，`bbox` 使用 PDF 页面坐标；Chunk 以标量 `pages` 和 `source_locations_json` 传递页码与 bbox，避免向量库对 list/dict metadata 的后端差异。Chunk 生成时优先从 AST 节点透传位置；硬切按原文跨度映射位置。表格节点改写成摘要/行块前也要先继承来源位置。文本回映射遇到跨页重复页眉/页脚或相同正文时，歧义文本不作为定位证据，避免一个 Leaf 错标到多个页面。质量记录另存 `parse_status`、按页 `parse_issues`、OCR 状态、图片页、空白页、未解析内容页、布局回退页、表格检测失败页和跳过页；问题记录只保存代码、严重度、页码及短说明，不复制正文。
   - PDF OCR 按页和图片区域判定：低文本量扫描页识别页内图片；文字层充足但含大面积图片的页面只裁剪图片 bbox 做 OCR；没有图片块但渲染后可见、或文字层稀疏且矢量图形密集的页面走整页 OCR。低分辨率渲染区分纯空白页与疑似内容页，空白页不计为丢页。本地 RapidOCR 对空结果或单页异常只重试一次，并提高渲染 DPI；云端 OCR 不自动重试，避免不确定请求重复计费。供应商不可用、页数上限、区域识别失败或有内容页面最终无 AST 节点均为质量硬异常。OCR 只提取图中文字，不声称能还原图表语义。
     - OCR 页预算默认使用 `RAG_OCR_MAX_PAGES`（默认 100）。管理员可在单次 PDF 上传时显式指定 `ocr_page_budget`（1–500 页；管理端提供 200/300/500 选项）；该值随 Celery 任务和重投持久化，只影响该次 PDF。未指定时不变更全局默认。预算、来源、所需页数和遗漏页数进入 AST 质量记录与 OCR 血缘 Trace；超预算或 OCR 失败仍触发硬门禁，不能发布部分索引。提高预算可能增加处理时间及云端 OCR 用量。
+    - 云端 OCR 每页在发出请求前使用统一模型预算预占，返回 Token 后按统一价格表结算；供应商没返回用量或价格未知时标成“未核算/待对账”，不再写成 0 元。上传请求达到 Token 上限后会阻止后续 OCR 页，不提高全局预算，也不发布部分文档。Trace 单独记录整篇向量写入 `index_doc_embed`，便于区分整篇向量与分块向量阶段的失败。
   - PDF 阅读顺序：普通页走 PyMuPDF 快速块解析；检测到左右栏块及纵向重叠时，使用本地 bbox 几何布局排序并保留页码/bbox。该回退能处理常见双栏顺序，不等同于 Document Intelligence 等语义版面模型；复杂表格检测失败按页告警并保留原生文本流，待后续 Layout 引擎接入。
   - 原文到 AST 审计：PDF 另用 PyMuPDF `get_text("text")` 原生文本路径逐页对照 AST 事件流，按行滑窗记录 `coverage_rate`、缺失页和未验证页；OCR 参与的页面明确列为未验证，不把原生文本层覆盖率冒充全文件覆盖率。超大文档 AST→Leaf 抽样审计仍显式 `sampled=true`，覆盖率置空；抽样不代表全量通过。
   - 质量指标分开记录 `structure_confidence`、`content_coverage`（仅审计完整时赋值）、`content_coverage_observed`（注明原生文字层范围及 partial 状态）和 `semantic_quality`；当前没有独立语义评估器时 `semantic_quality=null`。旧 `completeness` 字段暂保留为结构置信度兼容别名，不能解读为内容完整率。

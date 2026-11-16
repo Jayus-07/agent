@@ -87,7 +87,7 @@ class EvalResult(BaseModel):
     error_msg: str | None = None
     # EVD-08（2026-10-04）：失败阶段结构化枚举，取值
     # retrieval / generation / judge / ragas / aggregate / timeout / cancelled /
-    # deadline_exceeded / token_limit / provider_breaker；正常完成为 None
+    # deadline_exceeded / token_limit / provider_breaker / sql_gold；正常完成为 None
     error_stage: str | None = None
 
 
