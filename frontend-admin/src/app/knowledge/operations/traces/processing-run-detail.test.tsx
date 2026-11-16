@@ -62,8 +62,8 @@ describe("ProcessingRunDetailView", () => {
     expect(html).toContain("运行 ID：run-1");
     expect(html).toContain("Trace ID");
     expect(html).toContain("解析文档");
-    expect(html).toContain("LLM 切分边界兜底");
-    expect(html).toContain("规则未识别结构");
+    expect(html).toContain("大模型切分边界兜底");
+    expect(html).toContain("规则未识别出文档结构");
     expect(html).toContain("已采用");
     expect(html).toContain("输入/输出：145 / 131");
     expect(html).toContain("规则版本：未记录");

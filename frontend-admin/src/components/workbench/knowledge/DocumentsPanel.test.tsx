@@ -295,14 +295,14 @@ describe('DocumentsPanel 分块详情', () => {
 
     expect(knowledgeService.getLLMChunkingFallbackStats).toHaveBeenCalledWith({ days: 30 })
     expect(container.textContent).toContain('触发记录')
-    expect(container.textContent).toContain('LLM 调用')
+    expect(container.textContent).toContain('大模型调用')
     expect(container.textContent).toContain('边界采用')
     expect(container.textContent).toContain('未采用')
-    expect(container.textContent).toContain('Provider失败 / 边界拒绝 / 输出块')
+    expect(container.textContent).toContain('模型服务失败 / 边界拒绝 / 输出块')
     expect(container.textContent).toContain('对客库')
     expect(container.textContent).toContain('PDF')
-    expect(container.textContent).toContain('规则覆盖有缺口')
-    expect(container.textContent).toContain('StructureChunkStrategy v3 / pdf-parser-v2')
+    expect(container.textContent).toContain('规则切分覆盖不足')
+    expect(container.textContent).toContain('结构切分策略（v3）/ 解析器（pdf-parser-v2）')
     expect(container.textContent).toContain('建议评估升级')
   })
 
