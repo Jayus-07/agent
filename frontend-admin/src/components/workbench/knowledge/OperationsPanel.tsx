@@ -21,6 +21,27 @@ const RESULT_CONFIG: Record<string, { label: string; className: string }> = {
   unknown: { label: '状态待核对', className: 'bg-amber-50 text-amber-700' },
 }
 
+function getOperationTraceHref(op: OperationLog): string {
+  const params = new URLSearchParams({ returnTab: 'operations' })
+  if (op.doc_id) params.set('docId', op.doc_id)
+  if (op.doc_name) params.set('documentName', op.doc_name)
+  if (op.operation) params.set('operation', op.operation)
+  if (op.created_at) params.set('operationAt', op.created_at)
+
+  let detail: Record<string, unknown> | null = null
+  if (typeof op.detail === 'string') {
+    try { detail = JSON.parse(op.detail) } catch { detail = null }
+  } else if (op.detail && typeof op.detail === 'object') {
+    detail = op.detail as Record<string, unknown>
+  }
+  const fileHash = typeof detail?.file_hash === 'string' ? detail.file_hash.trim() : ''
+  const runId = typeof detail?.processing_run_id === 'string' ? detail.processing_run_id.trim() : ''
+  if (/^[a-f0-9]{64}$/i.test(fileHash)) params.set('fileHash', fileHash)
+  if (runId) params.set('runId', runId)
+
+  return `/knowledge/operations/traces/${encodeURIComponent(op.trace_id || '')}?${params.toString()}`
+}
+
 function ResultBadge({ result }: { result: string }) {
   const config = RESULT_CONFIG[result] || { label: result || '未知', className: 'bg-gray-50 text-gray-600' }
   return <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${config.className}`}>{config.label}</span>
@@ -314,7 +335,7 @@ export default function OperationsPanel() {
                           <td className="px-3 py-2.5 text-[10px] font-mono text-text-muted">{op.trace_id ? op.trace_id.slice(0, 12) : '-'}</td>
                           <td className="px-3 py-2.5">
                             {op.trace_id ? (
-                              <Link href={`/knowledge/operations/traces/${op.trace_id}`} className="text-accent hover:text-accent-hover hover:underline text-[10px]">
+                              <Link href={getOperationTraceHref(op)} className="text-accent hover:text-accent-hover hover:underline text-[10px]">
                                 查看Trace
                               </Link>
                             ) : parseDetail(op.detail)?.duplicate ? (
@@ -348,7 +369,7 @@ export default function OperationsPanel() {
                       <td className="px-3 py-2.5 text-[10px] font-mono text-text-muted">{op.trace_id ? op.trace_id.slice(0, 12) : '-'}</td>
                       <td className="px-3 py-2.5">
                         {op.trace_id ? (
-                          <Link href={`/knowledge/operations/traces/${op.trace_id}`} className="text-accent hover:text-accent-hover hover:underline text-[10px]">
+                          <Link href={getOperationTraceHref(op)} className="text-accent hover:text-accent-hover hover:underline text-[10px]">
                             查看Trace
                           </Link>
                         ) : (

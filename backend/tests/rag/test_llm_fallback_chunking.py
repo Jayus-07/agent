@@ -218,6 +218,40 @@ def test_invalid_llm_boundaries_keep_the_original_rule_chunks(monkeypatch):
     assert recorder.stages[0]["finish"]["fallback_reason"] == "invalid_source_node_partition"
 
 
+def test_context_budget_rejection_is_not_counted_as_provider_failure(monkeypatch):
+    from backend.context_budget.errors import ContextBudgetExceededError
+    from backend.rag.preprocessing import llm_enrichment
+
+    ast = _ast()
+    rule_chunks = RecursiveChunkStrategy().split(ast, ast.source_file)
+    recorder = _Recorder()
+    _patch_llm(monkeypatch, [])
+    monkeypatch.setattr(
+        llm_enrichment,
+        "invoke_metadata_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ContextBudgetExceededError("over budget", used_tokens=4097, input_budget=4096)
+        ),
+    )
+
+    chunks, metadata = apply_llm_boundary_fallback(
+        ast,
+        ast.source_file,
+        "general",
+        "no_recognized_structure",
+        rule_chunks,
+        lineage_recorder=recorder,
+    )
+
+    assert chunks is rule_chunks
+    assert metadata["attempted"] is True
+    assert metadata["applied"] is False
+    assert metadata["failure_type"] == "context_budget_rejected"
+    assert metadata["failure_class"] == "ContextBudgetExceededError"
+    assert recorder.stages[0]["finish"]["status"] == "fallback"
+    assert recorder.stages[0]["finish"]["fallback_reason"] == "context_budget_rejected"
+
+
 def test_response_parser_requires_json_groups():
     assert parse_groups(SimpleNamespace(content='```json\n{"groups":[["a"]]}\n```')) == [["a"]]
     with pytest.raises(ValueError, match="invalid_json"):
