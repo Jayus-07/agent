@@ -173,17 +173,24 @@ async def purge_expired_pg_traces(now: datetime | None = None,
 
 
 async def trace_retention_loop(store=None) -> None:
-    """startup 后台任务：首次延迟避开启动期，之后按周期清理。"""
+    """启动后台任务：初次延迟避开启动期，存储初始化失败时按周期重试。"""
     import asyncio
 
-    if store is None:
-        from backend.observability.trace_store import get_trace_store
-        store = get_trace_store()
     await asyncio.sleep(TRACE_RETENTION_SWEEP_FIRST_DELAY_MIN * 60)
     while True:
         try:
+            if store is None:
+                # TraceStore 构造时会建表/索引；延迟后再连接，避免启动期与备份争锁。
+                from backend.observability.trace_store import get_trace_store
+
+                store = get_trace_store()
             await asyncio.to_thread(purge_expired_traces, store)
             await purge_expired_pg_traces()
         except Exception as e:
             logger.warning(f"[TraceRetention] 清理周期异常（不影响服务）: {e}")
+            if store is None:
+                # 初始化失败时按首次延迟重试，至少间隔一分钟，避免后台任务退出或忙循环。
+                retry_delay = max(TRACE_RETENTION_SWEEP_FIRST_DELAY_MIN, 1) * 60
+                await asyncio.sleep(retry_delay)
+                continue
         await asyncio.sleep(TRACE_RETENTION_SWEEP_INTERVAL_HOURS * 3600)

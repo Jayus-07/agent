@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
+import pytest
+
 from backend.observability import trace_retention
 
 
@@ -89,3 +91,47 @@ def test_failure_is_counted_not_raised(monkeypatch):
     assert stats["errors"] == 2
     assert stats["summary_purged"] == 0
     assert session.rollbacks == 2
+
+
+def test_retention_loop_retries_trace_store_initialization(monkeypatch):
+    store = object()
+    get_store_calls = 0
+    sleep_delays = []
+    purge_calls = []
+
+    def get_store():
+        nonlocal get_store_calls
+        get_store_calls += 1
+        if get_store_calls == 1:
+            raise RuntimeError("database is temporarily locked")
+        return store
+
+    async def fake_sleep(delay):
+        sleep_delays.append(delay)
+        if len(sleep_delays) == 3:
+            raise asyncio.CancelledError
+
+    async def fake_purge_pg_traces():
+        return {"errors": 0}
+
+    monkeypatch.setattr(
+        "backend.observability.trace_store.get_trace_store", get_store
+    )
+    monkeypatch.setattr(trace_retention, "TRACE_RETENTION_SWEEP_FIRST_DELAY_MIN", 0)
+    monkeypatch.setattr(trace_retention, "TRACE_RETENTION_SWEEP_INTERVAL_HOURS", 0)
+    monkeypatch.setattr(
+        trace_retention,
+        "purge_expired_traces",
+        lambda value: purge_calls.append(value),
+    )
+    monkeypatch.setattr(
+        trace_retention, "purge_expired_pg_traces", fake_purge_pg_traces
+    )
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(trace_retention.trace_retention_loop())
+
+    assert get_store_calls == 2
+    assert purge_calls == [store]
+    assert sleep_delays == [0, 60, 0]
