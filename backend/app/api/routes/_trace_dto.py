@@ -12,6 +12,16 @@ from backend.observability.trace_roles import (
 from backend.observability.trace_source import classify_trace_source
 
 
+def _sla_result(duration_ms: int, threshold_ms, source) -> dict | None:
+    """没有带来源的阈值时不生成 SLA；运行时长未知时也不判定合规。"""
+    if not isinstance(threshold_ms, int) or isinstance(threshold_ms, bool) or threshold_ms <= 0:
+        return None
+    if not isinstance(source, str) or not source.strip():
+        return None
+    breached = None if duration_ms <= 0 else duration_ms > threshold_ms
+    return {"threshold_ms": threshold_ms, "breached": breached, "source": source.strip()}
+
+
 def _attach_usage_models(usage: dict, rows: list) -> None:
     """仅补模型清单（usage.models），不触碰 tokens/cost 真值（P2-4）。"""
     by_comp_model: dict[tuple, dict] = {}
@@ -325,7 +335,7 @@ def to_trace_dto(t, detail_level: str | None = None) -> dict:
     """TraceRecord / dict → frontend TraceRecord DTO."""
     get = lambda k, d=None: t.get(k, d) if isinstance(t, dict) else getattr(t, k, d)
     total_ms = get("duration_ms", 0)
-    sla_ms = get("sla_threshold_ms", 10000) or 10000
+    sla_ms = get("sla_threshold_ms")
     all_spans = get("spans", [])
 
     def _stype(s):
@@ -397,7 +407,7 @@ def to_trace_dto(t, detail_level: str | None = None) -> dict:
         "workflow_kind": get("workflow_kind", ""),
         "root_span_id": get("root_span_id", ""),
         "spans": [to_span_dto(s, all_spans, total_ms) for s in all_spans],
-        "sla": {"threshold_ms": sla_ms, "breached": total_ms > 0 and total_ms > sla_ms},
+        "sla": _sla_result(total_ms, sla_ms, get("sla_threshold_source")),
         "parent_id": get("parent_id"),
         "children_ids": get("children_ids", []),
         "graph": get("graph"),
@@ -417,7 +427,7 @@ def to_trace_dto(t, detail_level: str | None = None) -> dict:
 def stored_dict_to_dto(d: dict, detail_level: str | None = None) -> dict:
     """SQLite stored trace dict → frontend-compatible DTO (spans stripped)."""
     duration = d.get("duration_ms", 0)
-    sla_ms = d.get("sla_threshold_ms", 10000) or 10000
+    sla_ms = d.get("sla_threshold_ms")
     dto = {
         "id": d.get("id", ""),
         "timestamp": d.get("timestamp", ""),
@@ -440,7 +450,7 @@ def stored_dict_to_dto(d: dict, detail_level: str | None = None) -> dict:
         "workflow_kind": d.get("workflow_kind", ""),
         "root_span_id": d.get("root_span_id", ""),
         "spans": [],
-        "sla": {"threshold_ms": sla_ms, "breached": duration > 0 and duration > sla_ms},
+        "sla": _sla_result(duration, sla_ms, d.get("sla_threshold_source")),
         "parent_id": d.get("parent_id"),
         "children_ids": d.get("children_ids", []),
         "graph": None,

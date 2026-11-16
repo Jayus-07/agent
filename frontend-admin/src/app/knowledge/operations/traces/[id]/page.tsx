@@ -10,7 +10,7 @@ import type { KnowledgeDoc, ProcessingRunDetail } from "@/api/knowledge";
 import { X, Loader2 } from "lucide-react";
 import {
   getLogicalStageSpans, getMetadataPerformanceWarning, getMetadataStageDuration,
-  formatTracePageCount, getQualityScore, getQualityScoreBreakdown, getQualityWarning,
+  getQualityScore, getQualityScoreBreakdown, getQualityWarning,
   getTraceCostDisplay, groupSpansByType,
   getEmbeddingCountsFromSpans,
   getTraceDocumentTitle,
@@ -30,6 +30,11 @@ import {
   getProcessingStatusLabel,
 } from "@/lib/knowledge-display";
 import {
+  getTraceMetricSummary,
+  getTraceSpanNameLabel,
+  getTraceSpanTypeLabel,
+} from "../trace-display";
+import {
   getChunkHeading,
   SIMULATED_QUESTIONS_LABEL,
 } from "../chunk-detail-labels";
@@ -42,6 +47,8 @@ const SPAN_LABELS: Record<string, { label: string; order: number }> = {
   workflow: { label: "索引编排", order: 0 },
   llm_call: { label: "大模型调用", order: 6.5 },
   stage: { label: "内部阶段", order: 99 },
+  rule: { label: "规则处理", order: 9 },
+  audit: { label: "质量检查", order: 10 },
 };
 function spanOrder(s: Span): number { return SPAN_LABELS[s.type]?.order ?? 99; }
 
@@ -365,20 +372,21 @@ export default function DocTracePage() {
     || getTraceDocumentTitle(trace?.question || "");
   const identityRows = [
     { label: "文件名", value: traceDocumentTitle, source: registryDocumentName ? "项目文档登记" : documentName ? "入口参数，未核验" : "未记录" },
-    { label: "doc_id", value: traceDocumentId || "Trace 未记录" },
-    { label: "文档登记 ID", value: registryDocument?.doc_id || registryDocument?.id || "未核验" },
-    { label: "知识库 ID", value: traceKnowledgeBaseId || "Trace 未记录" },
-    { label: "文档登记知识库 ID", value: registryKnowledgeBaseId || "未核验" },
-    { label: "Trace ID", value: trace?.id || "Trace 未记录" },
-    { label: "run_id", value: processingRun?.run_id || (runIdParam ? "未核验" : "未记录") },
+    { label: "文档编号", value: traceDocumentId || "追踪记录未记录" },
+    { label: "文档登记编号", value: registryDocument?.doc_id || registryDocument?.id || "未核验" },
+    { label: "知识库编号", value: traceKnowledgeBaseId || "追踪记录未记录" },
+    { label: "文档登记知识库编号", value: registryKnowledgeBaseId || "未核验" },
+    { label: "处理追踪编号", value: trace?.id || "追踪记录未记录" },
+    { label: "处理运行编号", value: processingRun?.run_id || (runIdParam ? "未核验" : "未记录") },
     { label: "文件 SHA-256", value: processingRun?.file_hash || (fileHashParam ? "未核验" : "未记录") },
     { label: "文档登记 SHA-256", value: registryFileHash || "未核验" },
     { label: "处理操作", value: getOperationLabel(processingRun?.operation) },
     { label: "处理状态", value: processingRun ? getProcessingStatusLabel(processingRun.status) : (runIdParam ? "未核验" : "未记录") },
     { label: "处理开始", value: processingRun?.started_at ? formatTime(processingRun.started_at) : "未记录" },
     { label: "处理结束", value: processingRun?.finished_at ? formatTime(processingRun.finished_at) : "未记录" },
-    { label: "服务时限阈值", value: traceSla ? `${traceSla.threshold_ms} 毫秒` : "未记录" },
-    { label: "服务时限判定", value: traceSla ? (traceSla.breached ? "已超限" : "未超限") : "未记录" },
+    { label: "服务时限来源", value: traceSla?.source || "未配置" },
+    { label: "服务时限阈值", value: traceSla ? `${traceSla.threshold_ms} 毫秒` : "未配置" },
+    { label: "服务时限判定", value: !traceSla ? "不判定" : traceSla.breached === null ? "尚未评估" : traceSla.breached ? "已超限" : "未超限" },
   ];
   const identityWarnings = [
     documentIdentityError,
@@ -430,25 +438,6 @@ export default function DocTracePage() {
   });
   const toggleTypeExpand = (type:string) => { const next=new Set(expandedTypes); next.has(type)?next.delete(type):next.add(type); setExpandedTypes(next); };
   const toggleMeta = (key:string) => { const next=new Set(expandedMeta); next.has(key)?next.delete(key):next.add(key); setExpandedMeta(next); };
-  function summaryMetrics(spans: Span[]): string {
-    const merged: Record<string, unknown> = {};
-    for (const span of spans) {
-      if (!span.metrics) continue;
-      for (const [key, value] of Object.entries(span.metrics)) {
-        if (key === "chunk_id" || key === "attempt") continue;
-        if (merged[key] === undefined) merged[key] = value;
-      }
-    }
-    const entries = Object.entries(merged);
-    if (!entries.length) return "";
-    return entries.map(([key, value]) => {
-      if (key === "page_count") {
-        return `${key}: ${formatTracePageCount(value, merged.page_count_applicable)}`;
-      }
-      return `${key}: ${typeof value === "number" ? value : String(value)}`;
-    }).join(" · ");
-  }
-
   return (
     <div className="flex-1 overflow-y-auto"><div className="max-w-3xl mx-auto px-6 py-8 space-y-5">
       <button onClick={()=>router.push(returnHref)} className="text-xs text-slate-400 hover:text-slate-600">← 返回{ returnTab === "documents" ? "文档" : "操作日志" }</button>
@@ -487,19 +476,19 @@ export default function DocTracePage() {
       </div>
 
       {/* 处理阶段耗时分布 */}
-      {pipelineGroups.length>0&&trace.duration_ms>0&&(<div className="bg-white border border-slate-200 rounded-xl p-5"><h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">⏱ 处理阶段耗时分布</h2><p className="text-[9px] text-slate-400 mb-3">口径：根 Span 的逻辑阶段耗时 / Trace 墙钟总耗时；嵌套调用不重复累加。</p><div className="space-y-1.5">{pipelineGroups.map(({type,totalMs})=>{const info=SPAN_LABELS[type]??{label:type,order:99};const pct=(totalMs/trace.duration_ms)*100;const isHot=pct>30;const barColor=isHot?'bg-amber-400':pct>10?'bg-blue-400':'bg-slate-300';return(<div key={type} className="flex items-center gap-2 text-xs"><span className="w-20 text-slate-500 text-right shrink-0">{info.label}</span><div className="flex-1 bg-slate-100 rounded-full h-4 overflow-hidden"><div className={`h-full rounded-full transition-all ${barColor}`} style={{width:`${Math.min(Math.max(pct,0.5),100)}%`,minWidth:pct>0?'4px':'0'}} /></div><span className="w-20 text-right font-mono text-slate-600 shrink-0">{totalMs} 毫秒</span><span className="w-10 text-right text-slate-400 shrink-0">{pct.toFixed(0)}%</span></div>);})}</div></div>)}
+      {pipelineGroups.length>0&&trace.duration_ms>0&&(<div className="bg-white border border-slate-200 rounded-xl p-5"><h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">⏱ 处理阶段耗时分布</h2><p className="text-[9px] text-slate-400 mb-3">口径：总流程阶段的逻辑耗时 / 本次处理总耗时；嵌套调用不重复累加。</p><div className="space-y-1.5">{pipelineGroups.map(({type,totalMs})=>{const info=SPAN_LABELS[type]??{label:getTraceSpanTypeLabel(type),order:99};const pct=(totalMs/trace.duration_ms)*100;const isHot=pct>30;const barColor=isHot?'bg-amber-400':pct>10?'bg-blue-400':'bg-slate-300';return(<div key={type} className="flex items-center gap-2 text-xs"><span className="w-20 text-slate-500 text-right shrink-0">{info.label}</span><div className="flex-1 bg-slate-100 rounded-full h-4 overflow-hidden"><div className={`h-full rounded-full transition-all ${barColor}`} style={{width:`${Math.min(Math.max(pct,0.5),100)}%`,minWidth:pct>0?'4px':'0'}} /></div><span className="w-20 text-right font-mono text-slate-600 shrink-0">{totalMs} 毫秒</span><span className="w-10 text-right text-slate-400 shrink-0">{pct.toFixed(0)}%</span></div>);})}</div></div>)}
 
       {/* 处理流水线 */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <div className="px-5 py-3 border-b border-slate-100"><h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider">📦 处理流水线</h2></div>
         <div className="divide-y divide-slate-50">
           {typeGroups.map(([type,spans])=>{
-            const info=SPAN_LABELS[type]??{label:"其他处理阶段",order:99};
+            const info=SPAN_LABELS[type]??{label:getTraceSpanTypeLabel(type),order:99};
             const logicalStageMs=pipelineGroups.find(group=>group.type===type)?.totalMs;
             const totalMs=logicalStageMs??spans.reduce((sum,s)=>sum+(s.duration_ms||0),0);
             const hasError=spans.some(s=>s.status==="error"); const hasSkipped=spans.some(s=>s.status==="skipped");
             const statusIcon=hasError?"❌":hasSkipped?"⚠️":"✅"; const isMulti=spans.length>1;
-            const expanded=expandedTypes.has(type); const summary=summaryMetrics(spans);
+            const expanded=expandedTypes.has(type); const summary=getTraceMetricSummary(spans);
 
             // clean
             if(type==="clean"){const s=spans[0];const metrics=s.metrics||{};const cb=metrics.chars_before as number||0;const ca=metrics.chars_after as number||0;const ops=metrics.operations as string||"";const errMsg=metrics.error as string||"";const reduction=cb>0?(1-ca/cb)*100:0;const isNoop=cb>0&&cb===ca;return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs} 毫秒</span>{ops&&ops!=="none"&&<span className="text-xs text-slate-400 truncate">{ops}</span>}{isNoop&&!hasError&&<span className="text-[10px] text-slate-300 shrink-0">（文本已规范，无需清洗）</span>}</div><div className="ml-9 space-y-1 text-xs">{hasError?<div className="text-red-600 bg-red-50 rounded px-2 py-1 font-mono text-[11px]">❌ 清洗失败：{errMsg||"未知错误"}（已降级使用原始文本继续）</div>:<>{cb>0&&<div className="text-slate-500">清洗前 <span className="font-mono text-slate-600">{cb.toLocaleString()}</span> 字符 → 清洗后 <span className="font-mono text-slate-600">{ca.toLocaleString()}</span> 字符<span className={`ml-1 ${isNoop?"text-slate-300":"text-slate-400"}`}>（{reduction.toFixed(1)}% 缩减）</span></div>}</>}</div></div>);}
@@ -581,7 +570,7 @@ export default function DocTracePage() {
             }
 
             if(type==="llm_call"){
-              return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="text-xs text-slate-400">{spans.length} 次模型服务调用</span></div><div className="ml-9 space-y-1">{spans.map((span,index)=>{const metrics=span.metrics||{};const providerMs=typeof metrics.provider_duration_ms==="number"?metrics.provider_duration_ms:span.duration_ms;const promptTokens=typeof metrics.prompt_tokens==="number"?metrics.prompt_tokens:0;const completionTokens=typeof metrics.completion_tokens==="number"?metrics.completion_tokens:0;return(<div key={span.id||index} className="flex items-center gap-3 text-[10px] text-slate-500"><span className="truncate flex-1">{span.name}</span><span className="font-mono shrink-0">模型服务调用 {providerMs}ms</span><span className="font-mono shrink-0">{promptTokens.toLocaleString()} 入 / {completionTokens.toLocaleString()} 出</span><span className="shrink-0">{String(metrics.model||"模型未回报")}</span></div>);})}</div></div>);
+              return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="text-xs text-slate-400">{spans.length} 次模型服务调用</span></div><div className="ml-9 space-y-1">{spans.map((span,index)=>{const metrics=span.metrics||{};const providerMs=typeof metrics.provider_duration_ms==="number"?metrics.provider_duration_ms:span.duration_ms;const promptTokens=typeof metrics.prompt_tokens==="number"?metrics.prompt_tokens:0;const completionTokens=typeof metrics.completion_tokens==="number"?metrics.completion_tokens:0;return(<div key={span.id||index} className="flex items-center gap-3 text-[10px] text-slate-500"><span className="truncate flex-1">{getTraceSpanNameLabel(span)}</span><span className="font-mono shrink-0">模型服务调用 {providerMs} 毫秒</span><span className="font-mono shrink-0">{promptTokens.toLocaleString()} 入 / {completionTokens.toLocaleString()} 出</span><span className="shrink-0">{String(metrics.model||"模型未回报")}</span></div>);})}</div></div>);
             }
 
             // embedding
@@ -608,14 +597,14 @@ export default function DocTracePage() {
                   {isMulti && <span className="text-[10px] text-slate-300">{expanded ? "▲ 收起" : "▼ 展开"}</span>}
                 </button>
                 {isMulti && expanded && (
-                  <div id={groupId} className="ml-9 mt-2 space-y-2" role="region" aria-label={`${info.label} Span 明细`}>
+                  <div id={groupId} className="ml-9 mt-2 space-y-2" role="region" aria-label={`${info.label}阶段记录详情`}>
                     {spans.map((span, index) => {
-                      const spanSummary = summaryMetrics([span]);
+                      const spanSummary = getTraceMetricSummary([span]);
                       return (
                         <div key={span.id || `${type}-${index}`} className="rounded-md border border-slate-100 bg-slate-50 px-3 py-2">
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                            <span className="text-xs font-medium text-slate-700">{span.name || info.label} <span className="text-slate-400">#{index + 1}</span></span>
-                            <span className="font-mono text-[10px] text-slate-500">{span.duration_ms}ms</span>
+                            <span className="text-xs font-medium text-slate-700">{getTraceSpanNameLabel(span) || info.label} <span className="text-slate-400">#{index + 1}</span></span>
+                            <span className="font-mono text-[10px] text-slate-500">{span.duration_ms} 毫秒</span>
                             <span className="font-mono text-[9px] text-slate-400">{span.id}</span>
                           </div>
                           {spanSummary && <p className="mt-1 break-words text-[10px] text-slate-500">{spanSummary}</p>}

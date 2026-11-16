@@ -260,7 +260,9 @@ class TraceRecord:
     root_span_id: str = ""
     workflow_name: str = ""
     workflow_kind: str = WorkflowKind.OTHER.value  # WorkflowKind 枚举值
-    sla_threshold_ms: int = 10000
+    # 只有调用链显式提供有来源的阈值时才评估 SLA；未配置不能回落到猜测值。
+    sla_threshold_ms: int | None = None
+    sla_threshold_source: str | None = None
     parent_id: str | None = None
     children_ids: List[str] = field(default_factory=list)
     graph: dict | None = None

@@ -8,7 +8,7 @@
 3. _trace_from_state 合成兜底：中间件已记录真实时长 span 时不再合成
    重复项；未执行节点（direct 模式跳过 planner/critique/supervisor）
    不合成 0ms 占位噪声；失败步骤无错误详情时 metrics.error 有兜底文案。
-4. Observability DTO SLA：用 trace 自身 sla_threshold_ms，不再硬编码 10s。
+4. Observability DTO SLA：只评估显式配置的服务时限，不为历史记录猜默认值。
 """
 import time
 
@@ -241,31 +241,63 @@ class TestObservabilitySlaDto:
         from backend.app.api.routes.observability import _to_trace_dto
         rec = TraceRecord(id="t1", question="q", duration_ms=15000)
         rec.sla_threshold_ms = 30000
+        rec.sla_threshold_source = "测试服务时限配置"
         dto = _to_trace_dto(rec)
         assert dto["sla"]["threshold_ms"] == 30000
         assert dto["sla"]["breached"] is False  # 15s < 30s，不再误标超时
+        assert dto["sla"]["source"] == "测试服务时限配置"
 
     def test_trace_dto_breached_when_over_own_threshold(self):
         from backend.app.api.routes.observability import _to_trace_dto
         rec = TraceRecord(id="t2", question="q", duration_ms=35000)
         rec.sla_threshold_ms = 30000
+        rec.sla_threshold_source = "测试服务时限配置"
         dto = _to_trace_dto(rec)
         assert dto["sla"]["breached"] is True
 
     def test_stored_dict_dto_uses_persisted_threshold(self):
         from backend.app.api.routes.observability import _stored_dict_to_dto
-        d = {"id": "t3", "duration_ms": 12000, "sla_threshold_ms": 30000}
+        d = {
+            "id": "t3",
+            "duration_ms": 12000,
+            "sla_threshold_ms": 30000,
+            "sla_threshold_source": "测试服务时限配置",
+        }
         dto = _stored_dict_to_dto(d)
         assert dto["sla"]["threshold_ms"] == 30000
         assert dto["sla"]["breached"] is False
+        assert dto["sla"]["source"] == "测试服务时限配置"
 
-    def test_stored_dict_dto_legacy_defaults_to_10s(self):
-        """旧数据无 sla_threshold_ms 字段 → 回落 10s 默认值。"""
+    def test_stored_dict_dto_legacy_without_threshold_has_no_sla(self):
+        """旧数据无 sla_threshold_ms 时不能伪造默认阈值或超时结论。"""
         from backend.app.api.routes.observability import _stored_dict_to_dto
         d = {"id": "t4", "duration_ms": 20000}
         dto = _stored_dict_to_dto(d)
-        assert dto["sla"]["threshold_ms"] == 10000
-        assert dto["sla"]["breached"] is True
+        assert dto["sla"] is None
+
+    def test_legacy_persisted_default_without_source_has_no_sla(self):
+        """旧 Trace 落库的默认值没有来源，不能作为真实服务时限展示。"""
+        from backend.app.api.routes.observability import _stored_dict_to_dto
+        d = {"id": "t7", "duration_ms": 20000, "sla_threshold_ms": 10000}
+        assert _stored_dict_to_dto(d)["sla"] is None
+
+    def test_trace_without_threshold_has_no_sla(self):
+        from backend.app.api.routes.observability import _to_trace_dto
+        rec = TraceRecord(id="t5", question="q", duration_ms=20000)
+        dto = _to_trace_dto(rec)
+        assert dto["sla"] is None
+
+    def test_configured_threshold_is_not_evaluated_without_duration(self):
+        from backend.app.api.routes.observability import _to_trace_dto
+        rec = TraceRecord(id="t6", question="q", duration_ms=0)
+        rec.sla_threshold_ms = 30000
+        rec.sla_threshold_source = "测试服务时限配置"
+        dto = _to_trace_dto(rec)
+        assert dto["sla"] == {
+            "threshold_ms": 30000,
+            "breached": None,
+            "source": "测试服务时限配置",
+        }
 
 
 

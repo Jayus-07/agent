@@ -212,7 +212,7 @@ export default function TraceDetailPage() {
           <span className={`inline-flex rounded border px-2 py-1 text-xs font-semibold ${getRunStatusTone(runStatus)}`}>{getRunStatusLabel(runStatus)}</span>
           <span className={`inline-flex rounded border px-2 py-0.5 text-xs font-medium ${runKindBadgeClass(kind.key)}`}>{kind.label}</span>
           <span className="inline-flex rounded border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-500">{domain}</span>
-          {trace.sla?.breached && <span className="inline-flex items-center rounded bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700">⚠️ SLA 违反 ({trace.sla.threshold_ms}ms)</span>}
+          {trace.sla?.breached === true && <span className="inline-flex items-center rounded bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700">⚠️ 超出服务时限（{trace.sla.threshold_ms} 毫秒）</span>}
           <button type="button" onClick={() => void navigator.clipboard.writeText(trace.id)} className="min-h-10 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">复制 ID</button>
           <span className="text-[10px] text-slate-400" title={formatTime(trace.timestamp)}>{formatTime(trace.timestamp)}</span>
         </div>
@@ -349,8 +349,8 @@ export default function TraceDetailPage() {
                 <div className="flex justify-between"><span className="text-slate-500">Prompt 版本</span><span className="font-mono text-xs">{promptVersionsLabel(trace.metadata)}</span></div>
               </div>
               {trace.sla && (
-                <div className={`mt-3 rounded-lg px-3 py-2 text-xs font-semibold ${isFailure ? "bg-slate-100 text-slate-500" : trace.sla.breached ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"}`}>
-                  {isFailure ? "SLA 未参与判定 · 失败运行不计入合规" : trace.sla.breached ? `❌ 已违反 SLA（阈值 ${trace.sla.threshold_ms}ms）` : `✅ SLA 合规（阈值 ${trace.sla.threshold_ms}ms）`}
+                <div className={`mt-3 rounded-lg px-3 py-2 text-xs font-semibold ${isFailure || trace.sla.breached === null ? "bg-slate-100 text-slate-500" : trace.sla.breached ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"}`}>
+                  {isFailure ? "服务时限未参与判定 · 失败运行不计入合规" : trace.sla.breached === null ? `服务时限尚未评估（阈值 ${trace.sla.threshold_ms} 毫秒，来源：${trace.sla.source}）` : trace.sla.breached ? `❌ 已超出服务时限（阈值 ${trace.sla.threshold_ms} 毫秒，来源：${trace.sla.source}）` : `✅ 符合服务时限（阈值 ${trace.sla.threshold_ms} 毫秒，来源：${trace.sla.source}）`}
                 </div>
               )}
             </div>

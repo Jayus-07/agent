@@ -90,3 +90,9 @@
 | 项目 | 检查范围/分母 | 实际结果 | 证据路径或 API | 结论 | 未通过项能否自行修复 |
 |---|---|---|---|---|---|
 | 上传参数/魔法数字 | 三端 BFF、APISIX、FastAPI 上传与健康配置；SSE/锁/GC、OCR/PDF、元数据、表格、切分、清洗增强、Embedding 与缓存；本机配置定义及调用点 | 固定 16 KiB multipart 余量已移除；总请求体 64 MiB、文件流 50 MiB 分层执行。Embedding 缓存 TTL 覆盖配置的 bug 已修；缓存配置和批次 ID 边界有回归。危险零值/不一致关系启动时拒绝。性能/质量阈值保留，但没有企业文档、Provider 429/延迟、缓存命中率、峰值 RSS 和并发曲线可证明最优值。 | `UPLOAD_PARAMETER_AUDIT_20261116.md`；`backend/config/rag.py`；`backend/app/api/routes/rag_upload.py`；`backend/rag/indexing/embed_cache.py`；`backend/tests/rag/test_embed_cache.py`；`backend/tests/test_rag_upload_sync_impl.py`；`backend/tests/test_rag_upload_celery_mode.py`；`backend/tests/test_rag_upload_mime.py`；APISIX `client_max_body_size` 与三端 BFF 跨层回归；`py_compile`、`git diff --check` | **BLOCKED（最终参数调校需真实运行曲线）；审计覆盖、配置联动和发现的问题已修复并定向通过。** | 配置 bug/测试隔离可自行修复且已完成；业务阈值优化需实际文件样本和运行指标，当前不靠猜测改动。 |
+
+## Trace 服务时限与上传详情中文实机增量
+
+| 项目 | 检查范围/分母 | 实际结果 | 证据路径或 API | 结论 | 未通过项能否自行修复 |
+|---|---|---|---|---|---|
+| Trace 服务时限来源及上传详情字段 | 合并前本机最新 `origin/main` 上的管理端构建；1 条现有文件 Trace 页面/API、15 项页面断言、API 返回的 20 spans | API 200，Trace success，doc_id `d0f6f40d2b`、run_id `153d5626-9919-44f8-bea7-d68f1414b244`、页面登记/入口 SHA 一致，耗时 17,055ms，`sla=null`。页面 15 项身份、中文字段/分类、规则兜底、无假超时、无内部路径检查全通过；Console 0 错误。无来源的历史 10,000ms 默认值不再判超时，复杂度估算 30/60/90 秒和 RAG 固定 30 秒值已删除；未改写历史数据库。 | `.playwright-mcp/trace-sla-live-postbuild-20261116.json`；`.playwright-mcp/trace-sla-live-postbuild-20261116.yml`；`.playwright-mcp/trace-sla-live-postbuild-20261116.png`；`.playwright-mcp/trace-aaa5b3095749-api-200-postbuild-20261116.json`；`GET /api/observability/traces/aaa5b3095749` | **PASS（此 Trace 的来源判断、字段中文和真实页面/API）**；全量旧 Trace 404/历史阶段缺失沿用上表 FAIL，不因本样本通过而改判。 | 误判和当前展示可自行修复且本地实机通过；缺失历史 Trace 不能伪造，需原始归档才能恢复。 |

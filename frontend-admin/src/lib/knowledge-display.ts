@@ -130,6 +130,7 @@ const CHUNK_STRATEGY_LABELS: LabelMap = {
   FixedSizeChunkStrategy: '定长切分策略',
   ContentUnitDispatchStrategy: '内容单元路由策略',
   pipeline: '统一处理流水线',
+  deterministic_fallback: '规则兜底',
 }
 
 const CHUNK_TYPE_LABELS: LabelMap = {

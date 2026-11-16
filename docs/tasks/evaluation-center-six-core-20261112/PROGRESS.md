@@ -714,3 +714,14 @@
 - 定向验证：后端 241/241 通过（缓存+上传实现 66，MIME/上传配置边界 56，body limit+元数据 LLM+pipeline 初始化 42，PDF/OCR 43，Celery/SSE 34）；管理端 Vitest 100/100，web BFF 18/18，客服 BFF 9/9；本轮修改的 Python 文件 `py_compile` 通过，`git diff --check` 通过。后端以 `--noconftest` 运行，数据库端口指向不可连接的隔离端口；HTTP 路由用授权桩，过期回退用例用运行态桩，避免接触共享库。
 - 仍缺真实企业 PDF/扫描件分布、最大表单字段样本、OCR/Embedding provider 的延迟/429、缓存命中率、单任务峰值 RSS/并发/排队数据。因此 1 MiB 读块、5 MiB/500 ms 进度、OCR 30 字符/200/300 DPI/100 页、PDF 版式阈值、LLM 输入与并发、缓存保留时间、切分与过滤阈值只做来源/范围检查，不猜测调数，相关业务调校为 BLOCKED。具体数值、证据和所需数据见 `UPLOAD_PARAMETER_AUDIT_20261116.md`。
 - 任务起始留存的“CI 重跑待确认”已按 GitHub 实际记录更正：PR #475 已于 2026-11-16 合并，8 个检查中 7 个成功，真实 API RAG Smoke Evaluation 按工作流跳过，不计通过；检查详情和合并 SHA 见 GitHub PR `https://github.com/Jayus-07/agent/pull/475`。本任务代码变更另走 PR 和共享开发栈验收；线上生产不部署。
+
+## 2026-11-16 — Trace 服务时限来源与上传指标中文最终复验
+
+- 修复旧 Trace 把无来源的默认 `10,000ms` 当服务时限并误显示“已超限”：`TraceRecord` 默认阈值改为未配置；DTO 只有同时具备正阈值和来源才返回服务时限；旧记录即使数据库仍保留 10,000 字段但没有来源，也返回 `sla=null`，不回写/伪造历史数据。删除图编排按复杂度估算的 30/60/90 秒值和 RAG 固定 30 秒值；未来显式阈值还需给出来源。
+- 继续实机检查发现并修正 Trace 身份字段 `doc_id`、`run_id`、`Trace ID`，以及根 Span/Trace 墙钟说明和 `ms` 单位；页面显示为中文编号、中文口径和毫秒。原始上传文件正文、真实文档编号、SHA、模型名等源数据保持原值；质量容器内部路径仅显示记录是否生成。
+- 定向验证：管理端 Vitest 3 个文件 29/29 通过；`npm exec -- tsc --noEmit` 通过；`git diff --check` 通过。此前后端 SLA DTO 定向测试 7/7 通过。未运行数据库触碰型全量测试。
+- 本机仅重建共享 `agent` 栈的管理端；构建产物 image `sha256:610871c272d3afad950a23f72d5ce993cbf01d027b73132b6ae69cf0d65e568c`，容器 `9b1259d3ecca8ee4ee53ae47ec015d647a7527a10a55a9285ee91e1910490a59`，状态 healthy。`/login` HTTP 200；app `/health` 为 ok、schema consistency/migrations ok、Redis healthy；BGE `/healthz` 为 ok 且 embedder/reranker 已加载。宿主构建前可用内存约 2.49 GiB。没有上传、写数据库、索引/重建索引或部署线上生产。
+- 本机管理端重建后的真实 Trace 页面由已登录管理端浏览器打开；页面身份为文件 `TEST-FIN-001_虚构差旅与费用报销规则.md`、doc_id `d0f6f40d2b`、Trace `aaa5b3095749`、run `153d5626-9919-44f8-bea7-d68f1414b244`，URL SHA 与登记 SHA 均为 `78a07bbef3a6d08fc5c78393246fe0145b83a007bb0f1bf20a4e88bacf041edd`。本次页面自身 `GET /api/observability/traces/aaa5b3095749` HTTP 200；API 状态 success、20 spans、17,055ms、`sla=null`；页面身份通过，服务时限来源/阈值显示“未配置”、判定“不判定”，文档类型“财务文件”、业务领域“财务”、策略“规则兜底”；没有假超时、原始英文字段名或 `/app/data/quality_records` 内部路径；新开页面 Console 错误 0。一次独立手工 `fetch` 未附授权得到 401，不算页面 API 证据；页面实际加载的 200 响应才作为验收证据。
+- 实机证据均保存在本工作树 `.playwright-mcp/`：`trace-sla-live-postbuild-20261116-full-checks.json`（15/15 页面断言全通过）、`trace-sla-live-postbuild-20261116.json`、`trace-sla-live-postbuild-20261116.yml`、`trace-sla-live-postbuild-20261116.png`、`trace-aaa5b3095749-api-200-postbuild-20261116.json`。API 响应、页面检查、快照及截图均未覆盖已有证据文件。
+- 此修复只关闭无来源 SLA 假告警和本样本上传 Trace 的英文界面缺口，不改变总验收结论：完整测试集仍有意外失败/未运行资料，企业生产事实仍缺真实来源，活动旧库仍有 Parent/Leaf 断链，历史完整 Trace 仍有 404。以上分别按矩阵中的 FAIL/BLOCKED 记录；新修复不抵消旧问题。当前代码变更仍需走 PR、CI、合并并在共享开发栈合并后复验；不部署线上生产。
+- 按用户要求核验 PR #466：GitHub 记录其已于 2026-11-16T08:54:47Z 合并；PR #476 已于 2026-11-16T09:07:51Z 合并并已包含在本轮 `origin/main`。#466 的发布就绪说明明确列出仍需在生产管理端重新录入无法由当前主密钥解开的供应商 API Key，并配置可访问的 `PROMETHEUS_URL`。这些生产凭据/设置没有来源于本任务授权，本轮不改生产 secret/config、不触发线上发布；本地共享开发栈的实机验收不等于生产发布验收。

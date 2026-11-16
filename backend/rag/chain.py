@@ -918,7 +918,6 @@ class RAGChain:
                 workflow_kind=WorkflowKind.RAG_QUERY.value,
             )
             trace._rag_embedded = False
-            trace.sla_threshold_ms = 30000
             trace_collector.start_span("root", parent_id=None,
                                        name="RAG 智能问答", type="agent",
                                        input={"question": question})

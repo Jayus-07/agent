@@ -1666,10 +1666,6 @@ def trace_from_state(trace, state: dict):
     # ── Graph 拓扑 ──
     trace.graph = _build_graph_snapshot(state, loop_count, degraded_steps)
 
-    # ── SLA ──
-    trace.sla_threshold_ms = _sla_for_plan(nodes)
-
-
 def _build_graph_snapshot(state: dict, loop_count: int,
                           degraded_steps: set) -> dict:
     """从执行状态构建 LangGraph 拓扑快照（按实际路由模式区分）。
@@ -1770,19 +1766,3 @@ def _build_graph_snapshot(state: dict, loop_count: int,
         "loop_count": loop_count,
         "degradation_triggered": len(degraded_steps) > 0 if degraded_steps else False,
     }
-
-
-def _sla_for_plan(plan_nodes: dict) -> int:
-    """根据计划复杂度估算 SLA 阈值（ms）。
-
-    每步预留 LLM 调用 + DB 查询时间:
-      - 1 步 (纯 RAG): 30s
-      - 2 步 (SQL+分析): 60s
-      - 3+ 步 (复杂编排): 90s
-    """
-    n = len(plan_nodes)
-    if n <= 1:
-        return 30000
-    if n <= 2:
-        return 60000
-    return 90000
