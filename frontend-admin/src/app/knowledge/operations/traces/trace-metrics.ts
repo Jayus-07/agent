@@ -105,11 +105,54 @@ export function getTraceDocumentIdentityError(
   return actualDocId === expectedDocId ? null : "Trace 记录的文档 ID 与当前文件不匹配";
 }
 
+export function getRegistryDocumentIdentityError(
+  document: {
+    doc_id?: unknown;
+    id?: unknown;
+    file_name?: unknown;
+    name?: unknown;
+    file_hash?: unknown;
+    hash?: unknown;
+    sha256?: unknown;
+  } | null | undefined,
+  expectedDocId: string,
+  expectedFileName?: string,
+  expectedFileHash?: string,
+): string | null {
+  if (!document) return "文档登记详情为空";
+  const registryDocId = document.doc_id ?? document.id;
+  const registryFileName = document.file_name ?? document.name;
+  const registryFileHash = document.file_hash ?? document.hash ?? document.sha256;
+  if (registryDocId !== expectedDocId) return "文档登记 ID 与当前文件不匹配";
+  if (typeof registryFileName !== "string" || !registryFileName.trim()) {
+    return "文档登记未记录文件名";
+  }
+  if (expectedFileName && registryFileName !== expectedFileName) {
+    return "文档登记文件名与入口记录不匹配";
+  }
+  if (expectedFileHash) {
+    if (typeof registryFileHash !== "string" || !registryFileHash.trim()) {
+      return "文档登记未记录文件 SHA-256";
+    }
+    if (registryFileHash.trim().toLowerCase() !== expectedFileHash.trim().toLowerCase()) {
+      return "文档登记文件 SHA-256 与当前文件不匹配";
+    }
+  }
+  return null;
+}
+
 export function getProcessingRunDetailError(
-  detail: { doc_id?: unknown; run_id?: unknown; file_hash?: unknown; error?: unknown } | null | undefined,
+  detail: {
+    doc_id?: unknown;
+    run_id?: unknown;
+    file_hash?: unknown;
+    trace_id?: unknown;
+    error?: unknown;
+  } | null | undefined,
   expectedDocId: string,
   expectedRunId: string,
   expectedFileHash?: string,
+  expectedTraceId?: string,
 ): string | null {
   if (!detail) return "处理运行详情为空";
   if (detail.doc_id !== expectedDocId) return "处理运行对应的文档 ID 与当前文件不匹配";
@@ -119,6 +162,11 @@ export function getProcessingRunDetailError(
     expectedFileHash
     && String(detail.file_hash || "").toLowerCase() !== expectedFileHash.toLowerCase()
   ) return "处理运行文件 SHA-256 与当前文件不匹配";
+  if (expectedTraceId && detail.trace_id !== expectedTraceId) {
+    return detail.trace_id
+      ? "处理运行关联的 Trace ID 与当前详情不匹配"
+      : "处理运行未记录 Trace ID，无法与当前详情核对";
+  }
   return null;
 }
 
