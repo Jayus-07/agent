@@ -40,3 +40,11 @@
 1. PR #466 的代码检查已通过；文档进度更新后再确认最新 PR 状态。
 2. 生产管理员在管理端重新录入失效 Provider API Key，在生产环境文件设置 `PROMETHEUS_URL`。
 3. 按用户明确授权完成 PR 合并和生产审批后，观察新的生产 runner 全链路；必须 Release Gate 通过并成功写入发布记录，才可标记完成。
+
+## 2026-11-16 安全审查修复
+
+- 开始处理前重新确认 `origin/main=89ee6130b086c7df064ccbe30f81603183fc2294`；PR #466 原分支先通过 GitHub 更新到最新 main（更新后 head `38c49dffa67a1592f49adf42a39d93b8b48599da`）。代码在基于该 main 的隔离工作树和新分支中处理，旧 PR 工作树保持干净。
+- 修复未解决的 P1：Release Gate 对外部 Prometheus 请求显式禁用平台 `API_KEY`；若 Prometheus 需要 Bearer 认证，改用独立 `PROMETHEUS_BEARER_TOKEN`，且只允许通过 HTTPS 发送。同步更新部署变量透传、生产环境模板和发布规范。
+- 回归测试覆盖外部请求不携带平台密钥、内部默认请求仍携带平台密钥、独立 Prometheus Bearer 认证以及 HTTP 下拒绝发送令牌。
+- 本地验证：`py_compile`、Ruff 通过；Release Gate 定向测试 13 项通过。发布工作流相关组合回归首次为 44 通过、1 项失败，原因是现有工作流契约仍断言旧的可选变量列表；已同步契约并单独复验该失败项，1 项通过。首次 pytest 退出日志提示本工作树缺少本机数据库凭据、后台 schema 预热连接超时；测试断言本身通过，不涉及数据库写入。
+- PR #466 的新 head 与云端 CI 结果尚待推送后复核；生产仍未部署。生产 Provider 密文仍需管理员重新录入，外部 Prometheus URL/可选令牌仍需由生产环境提供；这些条件不能由本机虚构或代填。

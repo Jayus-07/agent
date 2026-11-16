@@ -71,7 +71,15 @@ DETAIL_KEYS = {
 PG_HOST, PG_PORT, PG_DB = "127.0.0.1", 5433, "agent_memory"
 
 
-def _request(method, url, body=None, token=None, headers=None, timeout=240):
+def _request(
+    method,
+    url,
+    body=None,
+    token=None,
+    headers=None,
+    timeout=240,
+    include_platform_api_key: bool = True,
+):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     for k, v in (headers or {}).items():
@@ -80,7 +88,7 @@ def _request(method, url, body=None, token=None, headers=None, timeout=240):
         req.add_header("Content-Type", "application/json")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    if os.getenv("API_KEY"):
+    if include_platform_api_key and os.getenv("API_KEY"):
         req.add_header("X-API-Key", os.getenv("API_KEY"))
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -356,10 +364,19 @@ def g12_observability() -> bool:
     if not prometheus_url.startswith(("http://", "https://")):
         DETAIL["g12"] = f"metrics={st} prometheus_configured=false"
         return False
+    prometheus_headers = {}
+    prometheus_token = os.getenv("PROMETHEUS_BEARER_TOKEN", "").strip()
+    if prometheus_token:
+        if not prometheus_url.startswith("https://"):
+            DETAIL["g12"] = f"metrics={st} prometheus_auth_requires_https=true"
+            return False
+        prometheus_headers["Authorization"] = f"Bearer {prometheus_token}"
     st2, targets = _request(
         "GET",
         f"{prometheus_url.rstrip('/')}/api/v1/targets?state=active",
+        headers=prometheus_headers,
         timeout=15,
+        include_platform_api_key=False,
     )
     ups = 0
     if st2 == 200:

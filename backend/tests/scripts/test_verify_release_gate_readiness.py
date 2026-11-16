@@ -187,10 +187,10 @@ def test_model_gate_rejects_healthy_unbound_model(monkeypatch):
 
 
 def test_observability_gate_uses_configured_prometheus_url(monkeypatch):
-    seen_urls = []
+    seen_requests = []
 
-    def fake_request(_method, url, **_kwargs):
-        seen_urls.append(url)
+    def fake_request(method, url, **kwargs):
+        seen_requests.append((method, url, kwargs))
         if url.endswith("/metrics"):
             return 200, "routing_domain_total 1\nchat_request_total 1\n"
         return 200, json.dumps({
@@ -198,13 +198,19 @@ def test_observability_gate_uses_configured_prometheus_url(monkeypatch):
         })
 
     monkeypatch.setenv("PROMETHEUS_URL", "https://metrics.example/prom/")
+    monkeypatch.setenv("PROMETHEUS_BEARER_TOKEN", "prometheus-test-token")
     monkeypatch.setattr(gate, "_request", fake_request)
     gate.DETAIL.clear()
 
     assert gate.g12_observability() is True
-    assert seen_urls[-1] == (
+    assert seen_requests[-1][0:2] == (
+        "GET",
         "https://metrics.example/prom/api/v1/targets?state=active"
     )
+    assert seen_requests[-1][2]["include_platform_api_key"] is False
+    assert seen_requests[-1][2]["headers"] == {
+        "Authorization": "Bearer prometheus-test-token"
+    }
     assert "metrics.example" not in gate.DETAIL["g12"]
 
 
@@ -219,3 +225,62 @@ def test_observability_gate_rejects_invalid_prometheus_url(monkeypatch):
 
     assert gate.g12_observability() is False
     assert gate.DETAIL["g12"] == "metrics=200 prometheus_configured=false"
+
+
+def test_observability_gate_rejects_prometheus_token_over_http(monkeypatch):
+    monkeypatch.setenv("PROMETHEUS_URL", "http://metrics.example")
+    monkeypatch.setenv("PROMETHEUS_BEARER_TOKEN", "prometheus-test-token")
+    monkeypatch.setattr(
+        gate,
+        "_request",
+        lambda *_args, **_kwargs: (
+            200,
+            "routing_domain_total chat_request_total",
+        ),
+    )
+    gate.DETAIL.clear()
+
+    assert gate.g12_observability() is False
+    assert gate.DETAIL["g12"] == "metrics=200 prometheus_auth_requires_https=true"
+
+
+def test_request_separates_platform_and_prometheus_authentication(monkeypatch):
+    captured = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b"ok"
+
+    def fake_urlopen(request, timeout):
+        captured.append((request, timeout))
+        return FakeResponse()
+
+    monkeypatch.setenv("API_KEY", "platform-secret")
+    monkeypatch.setattr(gate.urllib.request, "urlopen", fake_urlopen)
+
+    status, body = gate._request(
+        "GET",
+        "https://metrics.example/api/v1/targets",
+        headers={"Authorization": "Bearer prometheus-secret"},
+        include_platform_api_key=False,
+        timeout=15,
+    )
+
+    assert (status, body) == (200, "ok")
+    request, timeout = captured[0]
+    assert timeout == 15
+    assert request.get_header("Authorization") == "Bearer prometheus-secret"
+    assert request.get_header("X-api-key") is None
+
+    status, body = gate._request("GET", "http://127.0.0.1:8000/health")
+
+    assert (status, body) == (200, "ok")
+    assert captured[1][0].get_header("X-api-key") == "platform-secret"

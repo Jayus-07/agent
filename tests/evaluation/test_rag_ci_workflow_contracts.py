@@ -300,7 +300,10 @@ def test_production_release_workflows_auto_deploy_verified_main_digests():
     assert 'github.event_name == \'workflow_run\'' in deploy_text
     assert '"$latest_main_sha" != "$IMAGE_SHA"' in deploy_text
     assert '--repo "$GITHUB_REPOSITORY"' in deploy_text
-    assert 'optional = ("PROMETHEUS_URL",)' in deploy_text
+    assert (
+        'optional = ("PROMETHEUS_URL", "PROMETHEUS_BEARER_TOKEN")'
+        in deploy_text
+    )
     assert "runtime_names =" in deploy_text
     release_text = release_path.read_text(encoding="utf-8")
     assert 'if [ -z "${GIT_COMMIT:-}" ]' in release_text

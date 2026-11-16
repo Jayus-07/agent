@@ -315,7 +315,7 @@ jobs:
 
           values = dotenv_values(sys.argv[1])
           required = ("PGPASSWORD", "API_KEY")
-          optional = ("PROMETHEUS_URL",)
+          optional = ("PROMETHEUS_URL", "PROMETHEUS_BEARER_TOKEN")
           missing = [name for name in required if not values.get(name)]
           if missing:
               raise SystemExit("Missing required keys in production environment file")
