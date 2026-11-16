@@ -47,4 +47,5 @@
 - 修复未解决的 P1：Release Gate 对外部 Prometheus 请求显式禁用平台 `API_KEY`；若 Prometheus 需要 Bearer 认证，改用独立 `PROMETHEUS_BEARER_TOKEN`，且只允许通过 HTTPS 发送。同步更新部署变量透传、生产环境模板和发布规范。
 - 回归测试覆盖外部请求不携带平台密钥、内部默认请求仍携带平台密钥、独立 Prometheus Bearer 认证以及 HTTP 下拒绝发送令牌。
 - 本地验证：`py_compile`、Ruff 通过；Release Gate 定向测试 13 项通过。发布工作流相关组合回归首次为 44 通过、1 项失败，原因是现有工作流契约仍断言旧的可选变量列表；已同步契约并单独复验该失败项，1 项通过。首次 pytest 退出日志提示本工作树缺少本机数据库凭据、后台 schema 预热连接超时；测试断言本身通过，不涉及数据库写入。
-- PR #466 的新 head 与云端 CI 结果尚待推送后复核；生产仍未部署。生产 Provider 密文仍需管理员重新录入，外部 Prometheus URL/可选令牌仍需由生产环境提供；这些条件不能由本机虚构或代填。
+- 云端 run `43830722661` 的 RAG Smoke preflight 与 Smoke 均通过；Secret Scan 因生产环境模板注释中的示例令牌字面量被新增行扫描识别为密钥而失败。已将示例改为环境变量插值形式，并在本机重跑 `scripts/scan_secrets.py --tree`，结果为 0 命中；将随下一次推送复跑云端扫描。
+- 生产仍未部署。生产 Provider 密文仍需管理员重新录入，外部 Prometheus URL/可选令牌仍需由生产环境提供；这些条件不能由本机虚构或代填。
