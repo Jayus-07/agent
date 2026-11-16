@@ -68,6 +68,12 @@ PR_STATIC_ONLY_ENTRIES = frozenset({
     "backend/tests/evaluation/test_report_gate_verdict.py",
     "backend/tests/evaluation/test_cli_compare.py",
     "tests/evaluation/test_cli_strict_gate_exit.py",
+    "backend/scripts/verify_release_gate.py",
+    "backend/scripts/validate_production_secrets.py",
+    "backend/tests/scripts/test_release_script_identity.py",
+    "backend/tests/scripts/test_validate_production_secrets.py",
+    "backend/tests/scripts/test_verify_release_gate_readiness.py",
+    "backend/tests/scripts/test_verify_release_gate_build_identity.py",
     "tests/evaluation/test_rag_ci_workflow_contracts.py",
     "tests/test_rag_smoke_path_filter.py",
     # 管理端工具治理面（ADR-0011）：载荷契约与 LLM 辅助去重实现。
