@@ -20,6 +20,23 @@ function acceptedOnce() {
   );
 }
 
+const TEST_SSE_DURATION_SECONDS = 300
+const TEST_SSE_IDLE_TIMEOUT_SECONDS = 120
+
+function uploadWithServerTimeouts(file: File) {
+  return knowledgeService.uploadDocument(
+    file,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    TEST_SSE_DURATION_SECONDS,
+    TEST_SSE_IDLE_TIMEOUT_SECONDS,
+  )
+}
+
 /** batch3 复审 P2-1/P2-2 + #8（2026-11-11）：
  * 上传 SSE 流的连接层失败先重订阅一次（后端支持 Redis 镜像重订阅），
  * 看门狗从绝对超时改为活跃性驱动，终态事件不走重连。 */
@@ -40,7 +57,7 @@ describe("knowledgeService 上传 SSE 流可靠性（batch4a）", () => {
       .mockResolvedValueOnce(new Response(null, { status: 502 }))
       .mockResolvedValueOnce(new Response(DONE_FRAME, { status: 200 }));
 
-    const result = await knowledgeService.uploadDocument(new File(["x"], "a.pdf"));
+    const result = await uploadWithServerTimeouts(new File(["x"], "a.pdf"));
 
     expect(result.ok).toBe(true);
     expect(apiMock.fetchRaw).toHaveBeenCalledTimes(2);
@@ -52,7 +69,7 @@ describe("knowledgeService 上传 SSE 流可靠性（batch4a）", () => {
       .mockResolvedValueOnce(new Response("", { status: 200 }))
       .mockResolvedValueOnce(new Response(DONE_FRAME, { status: 200 }));
 
-    const result = await knowledgeService.uploadDocument(new File(["x"], "a.pdf"));
+    const result = await uploadWithServerTimeouts(new File(["x"], "a.pdf"));
 
     expect(result.ok).toBe(true);
     expect(apiMock.fetchRaw).toHaveBeenCalledTimes(2);
@@ -70,7 +87,7 @@ describe("knowledgeService 上传 SSE 流可靠性（batch4a）", () => {
         { status: 200 },
       ));
 
-    const pending = knowledgeService.uploadDocument(new File(["x"], "a.pdf"));
+    const pending = uploadWithServerTimeouts(new File(["x"], "a.pdf"));
     await vi.advanceTimersByTimeAsync(1999);
     expect(apiMock.mutationFetchRaw).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -86,7 +103,7 @@ describe("knowledgeService 上传 SSE 流可靠性（batch4a）", () => {
     ));
 
     await expect(
-      knowledgeService.uploadDocument(new File(["x"], "a.pdf")),
+      uploadWithServerTimeouts(new File(["x"], "a.pdf")),
     ).rejects.toThrow("上传服务繁忙");
     expect(apiMock.mutationFetchRaw).toHaveBeenCalledTimes(1);
   });
@@ -94,7 +111,7 @@ describe("knowledgeService 上传 SSE 流可靠性（batch4a）", () => {
   it("重连后再次失败 → 终判「进度连接中断」，不无限重连", async () => {
     apiMock.fetchRaw.mockResolvedValue(new Response(null, { status: 502 }));
 
-    const result = await knowledgeService.uploadDocument(new File(["x"], "a.pdf"));
+    const result = await uploadWithServerTimeouts(new File(["x"], "a.pdf"));
 
     expect(result).toEqual({ ok: false, error: "进度连接中断" });
     expect(apiMock.fetchRaw).toHaveBeenCalledTimes(2);
@@ -129,6 +146,17 @@ describe("knowledgeService 上传 SSE 流可靠性（batch4a）", () => {
     expect(apiMock.fetchRaw).toHaveBeenCalledTimes(1);
   });
 
+  it("缺少服务端进度时限时在上传受理前失败关闭", async () => {
+    const result = await knowledgeService.uploadDocument(new File(["x"], "a.pdf"));
+
+    expect(result).toEqual({
+      ok: false,
+      error: "未获取到服务端上传进度时限，请刷新服务状态后重试",
+    });
+    expect(apiMock.mutationFetchRaw).not.toHaveBeenCalled();
+    expect(apiMock.fetchRaw).not.toHaveBeenCalled();
+  });
+
   it("收到 error 终态事件是任务失败语义，不触发重连", async () => {
     apiMock.fetchRaw.mockResolvedValueOnce(
       new Response(
@@ -137,7 +165,7 @@ describe("knowledgeService 上传 SSE 流可靠性（batch4a）", () => {
       ),
     );
 
-    const result = await knowledgeService.uploadDocument(new File(["x"], "a.pdf"));
+    const result = await uploadWithServerTimeouts(new File(["x"], "a.pdf"));
 
     expect(result).toEqual({ ok: false, error: "解析失败", trace_id: "trace-42" });
     expect(apiMock.fetchRaw).toHaveBeenCalledTimes(1);

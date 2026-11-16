@@ -239,6 +239,15 @@ export const knowledgeService: any = {
     maxSseDurationSeconds?: number,
     maxSseIdleTimeoutSeconds?: number,
   ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string; stage_elapsed?: Record<string, number>; total_ms?: number }> => {
+    if (
+      !Number.isFinite(maxSseDurationSeconds)
+      || Number(maxSseDurationSeconds) <= 0
+    ) {
+      return Promise.resolve({
+        ok: false,
+        error: '未获取到服务端上传进度时限，请刷新服务状态后重试',
+      })
+    }
     const fd = new FormData()
     fd.append('file', file)
     if (kbId) fd.append('kb_id', kbId)

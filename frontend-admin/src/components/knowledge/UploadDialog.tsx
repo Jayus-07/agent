@@ -126,6 +126,8 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   const validUploadSelection = Boolean(
     currentKb && departmentOptions.some(dept => dept.id === selectedDept),
   )
+  const uploadTimeoutReady = uploadSseMaxDurationSeconds !== null
+  const canStartUpload = ragReady === true && uploadTimeoutReady
 
   useEffect(() => {
     const options = kbList.find(kb => kb.id === selectedKbId)?.depts || []
@@ -165,6 +167,8 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
         const res = await fetchRaw('/api/rag/health')
         const data = await res.json()
         if (!cancelled) {
+          const hasUploadTimeout = Number.isFinite(data.upload_sse_max_duration_seconds)
+            && data.upload_sse_max_duration_seconds > 0
           setRagReady(data.ready === true)
           // 上限只从后端配置读取，不维护第二份前端默认值。
           if (Number.isFinite(data.max_file_size_mb) && data.max_file_size_mb > 0) {
@@ -188,7 +192,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
           ) {
             setUploadSseIdleTimeoutSeconds(Number(data.upload_sse_idle_timeout_seconds))
           }
-          if (data.ready) clearInterval(healthTimerRef.current)
+          if (data.ready && hasUploadTimeout) clearInterval(healthTimerRef.current)
         }
       } catch { /* 后端未启动，继续轮询 */ }
     }
@@ -228,6 +232,10 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
 
   const handleUpload = async () => {
     if (!files.length) return
+    if (!canStartUpload) {
+      setError('正在读取服务端上传进度时限，读取完成后再上传')
+      return
+    }
     if (!validUploadSelection) {
       setError('当前知识库没有可用部门，请刷新知识库列表或联系管理员')
       return
@@ -404,7 +412,13 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             {ragReady === false && (
               <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
                 <Loader2 size={14} className="animate-spin shrink-0" />
-                <span>知识库服务启动中，预计 15s 内就绪…</span>
+                <span>知识库服务启动中…</span>
+              </div>
+            )}
+            {!canStartUpload && ragReady !== false && (
+              <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
+                <Loader2 size={14} className="animate-spin shrink-0" />
+                <span>正在读取服务端上传进度时限，读取完成后即可上传。</span>
               </div>
             )}
             <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${ragReady === false ? 'border-amber-200 bg-amber-50/30 cursor-not-allowed' : 'border-border-subtle cursor-pointer'}`}>
@@ -592,9 +606,15 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
               <button onClick={handleClose} className="px-4 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors">
                 {uploading ? '转入后台' : '取消'}
               </button>
-              <button onClick={handleUpload} disabled={!files.length || !validUploadSelection || uploading || ragReady === false}
+              <button onClick={handleUpload} disabled={!files.length || !validUploadSelection || uploading || !canStartUpload}
                 className="px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors">
-                {ragReady === false ? '等待服务就绪…' : uploading ? '上传中...' : `上传并索引${files.length > 1 ? `（${files.length}）` : ''}`}
+                {ragReady === false
+                  ? '等待服务就绪…'
+                  : !canStartUpload
+                    ? '读取服务端上传设置…'
+                    : uploading
+                      ? '上传中...'
+                      : `上传并索引${files.length > 1 ? `（${files.length}）` : ''}`}
               </button>
             </>
           )}
