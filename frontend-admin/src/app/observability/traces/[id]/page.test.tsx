@@ -95,7 +95,7 @@ async function mountWithMetadata(metadata: Record<string, unknown>): Promise<str
 }
 
 describe('Trace 详情页（四问布局重构版）', () => {
-  it('展示问题、结果、错误码与错误消息，失败运行 SLA 显示未参与判定', async () => {
+  it('展示问题、结果、错误码与错误消息，失败运行的服务时限显示未参与判定', async () => {
     mocks.getTraceDetail.mockResolvedValue(errorTrace())
     const container = await mountDetail()
 
@@ -103,7 +103,7 @@ describe('Trace 详情页（四问布局重构版）', () => {
     expect(container.textContent).toContain('抱歉，退款进度查询暂时不可用')
     expect(container.textContent).toContain('TOOL_EXEC_FAILED')
     expect(container.textContent).toContain('calculate_tool 执行失败：模拟上游响应超时')
-    expect(container.textContent).toContain('SLA 未参与判定')
+    expect(container.textContent).toContain('服务时限未参与判定')
     // 未埋点黑洞可见
     expect(container.textContent).toContain('未埋点黑洞')
     // metadata 缺 prompt_versions → 如实「未采集」
@@ -178,7 +178,7 @@ describe('Trace 详情页（四问布局重构版）', () => {
     expect(card?.textContent).not.toContain('¥0.0049')
   })
 
-  it('成功 Trace 不显示候选入口与错误卡，SLA 正常判定', async () => {
+  it('成功 Trace 不显示候选入口与错误卡，服务时限按已配置阈值判定', async () => {
     const ok = errorTrace() as unknown as Record<string, unknown>
     ok.status = 'success'
     ok.error = {}
@@ -187,6 +187,17 @@ describe('Trace 详情页（四问布局重构版）', () => {
     const container = await mountDetail()
 
     expect(container.textContent).not.toContain('将本题加入候选评测集')
-    expect(container.textContent).toContain('✅ SLA 合规')
+    expect(container.textContent).toContain('✅ 符合服务时限')
+  })
+
+  it('没有配置服务时限时不显示伪造的阈值或合规结论', async () => {
+    const trace = errorTrace() as unknown as Record<string, unknown>
+    trace.sla = null
+    mocks.getTraceDetail.mockResolvedValue(trace)
+    const container = await mountDetail()
+
+    expect(container.textContent).not.toContain('符合服务时限')
+    expect(container.textContent).not.toContain('超出服务时限')
+    expect(container.textContent).not.toContain('SLA')
   })
 })

@@ -189,8 +189,9 @@ export interface TraceRecord {
   };
   sla?: {
     threshold_ms: number;
-    breached: boolean;
-  };
+    breached: boolean | null;
+    source: string;
+  } | null;
   bookmarked?: boolean;
   sparkline?: {
     success_rate: number[];
