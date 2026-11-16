@@ -40,7 +40,8 @@ CI 只算本次真正执行的工作流结果；条件 SKIP 不能叫“全链�
 
 1. PR 检查通过后仍需合入 `main`；只有合入的变更触及应用或部署文件时，`.github/workflows/publish-images.yml` 才构建后端和三个前端、推送到 GHCR，并保存带四个镜像 digest 的 `production-image-digests` Artifact（保留 90 天）。纯文档变更不发镜像。
 2. 镜像发布成功后，`.github/workflows/deploy-production.yml` 自动验证源码 SHA、Artifact 和四个 digest，再进入 `production` Environment 等待审批；审批通过后再次确认 `main` 仍指向这次镜像的 SHA，避免较早的发布排在后面覆盖新版本。该工作流也保留手动入口，用于重新部署或回滚到此前成功发布的 run ID。
-3. 部署 job 必须由生产主机上的专用 Linux x64 self-hosted runner 执行。它拉取并检查镜像身份，调用 `scripts/release.sh --skip-build`；该模式先从已拉取的后端镜像运行 Tool 契约检查并执行数据库迁移，再校验迁移状态，随后强制 `docker compose up --no-build`，最后做健康检查和 Release Gate。镜像按 digest 固定，不使用可变 `latest`。
+3. 部署 job 必须由生产主机上的专用 Linux x64 self-hosted runner 执行。它拉取并检查镜像身份，在切换服务前用生产数据库和当前 `SECRETS_ENCRYPTION_KEY` 检查供应商密文能否解开；随后调用 `scripts/release.sh --skip-build`，从已拉取的后端镜像运行 Tool 契约检查并执行数据库迁移，再校验迁移状态，强制 `docker compose up --no-build`，最后做健康检查和 Release Gate。镜像按 digest 固定，不使用可变 `latest`。
+4. Release Gate 10 检查 Celery worker 在线且正在消费 `agent` 队列；Gate 11 检查当前主问答角色可用，并且 24 小时内有真实模型调用探测成功；Gate 12 检查应用指标及 Prometheus 至少一个活跃目标。4C8G 默认不启动本机 Prometheus，需要在生产环境文件中配置服务器可访问的 `PROMETHEUS_URL`。健康状态缓存、容器存活或 HTTP 200 单独都不足以证明模型和观测链路可用。
 
 首次启用前，仓库管理员需要配置：
 

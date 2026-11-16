@@ -300,7 +300,11 @@ def test_production_release_workflows_auto_deploy_verified_main_digests():
     assert 'github.event_name == \'workflow_run\'' in deploy_text
     assert '"$latest_main_sha" != "$IMAGE_SHA"' in deploy_text
     assert '--repo "$GITHUB_REPOSITORY"' in deploy_text
+    assert 'optional = ("PROMETHEUS_URL",)' in deploy_text
+    assert "runtime_names =" in deploy_text
     release_text = release_path.read_text(encoding="utf-8")
+    assert 'if [ -z "${GIT_COMMIT:-}" ]' in release_text
+    assert '"$GIT_COMMIT"*) ;;' in release_text
     assert 'if [ "$SKIP_BUILD" = "true" ]; then' in release_text
     assert "docker compose run --rm --no-deps" in release_text
     assert release_text.index("docker compose run --rm db-migrate") < (
@@ -319,6 +323,10 @@ def test_production_release_workflows_auto_deploy_verified_main_digests():
     assert '"docker", "compose", "run", "--rm", "--no-deps"' in migration_gate_text
     assert '"backend/scripts/verify_migration_state.py"' in migration_gate_text
     assert "DETAIL_KEYS" in migration_gate_text
+    assert "backend/scripts/validate_production_secrets.py" in deploy_text
+    assert deploy_text.index("validate_production_secrets.py") < deploy_text.index(
+        "bash scripts/release.sh --skip-build"
+    )
 
     services = release_compose["services"]
     backend_services = (
