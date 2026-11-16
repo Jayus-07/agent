@@ -323,10 +323,15 @@ def apply_llm_boundary_fallback(
         return llm_chunks, metadata
     except Exception as exc:
         metadata["applied"] = False
-        error_code = str(exc) if isinstance(exc, ValueError) else "provider_or_runtime_error"
+        from backend.context_budget.errors import ContextBudgetExceededError
+
+        if isinstance(exc, ContextBudgetExceededError):
+            error_code = "context_budget_rejected"
+        else:
+            error_code = str(exc) if isinstance(exc, ValueError) else "provider_or_runtime_error"
         if error_code not in {
             "invalid_json", "invalid_groups", "invalid_source_node_partition",
-            "cross_section_group", "coverage_validation_failed",
+            "cross_section_group", "coverage_validation_failed", "context_budget_rejected",
         }:
             error_code = "provider_or_runtime_error"
         metadata["failure_type"] = error_code

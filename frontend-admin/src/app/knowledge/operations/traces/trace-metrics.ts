@@ -170,6 +170,34 @@ export function getProcessingRunDetailError(
   return null;
 }
 
+export function findProcessingRunForTrace<T extends {
+  run_id?: string;
+  trace_id?: string;
+  file_hash?: string;
+}>(
+  runs: T[],
+  expectedTraceId: string,
+  expectedFileHash?: string,
+): T | null {
+  if (!expectedTraceId) return null;
+  const expectedHash = expectedFileHash?.trim().toLowerCase();
+  return runs.find((run) => (
+    run.trace_id === expectedTraceId
+    && (!expectedHash || String(run.file_hash || '').trim().toLowerCase() === expectedHash)
+  )) || null;
+}
+
+export function getSuccessfulIndexOutcomeLabel(
+  traceStatus: string,
+  processingRun?: { status?: string; steps?: Array<{ status?: string }> } | null,
+): string | null {
+  if (processingRun?.status !== 'success') return null;
+  const fallbackCount = (processingRun.steps || []).filter((step) => step.status === 'fallback').length;
+  if (fallbackCount > 0) return `索引成功（${fallbackCount} 个阶段已回退）`;
+  if (traceStatus === 'error') return '索引成功（Trace 含错误阶段）';
+  return null;
+}
+
 function getQualitySpan(spans: Span[]): Span | undefined {
   return spans.find((span) => span.id === "index_quality"
       && typeof span.metrics?.quality_score === "number")

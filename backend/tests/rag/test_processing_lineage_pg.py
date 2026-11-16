@@ -176,7 +176,12 @@ def test_chunking_fallback_stats_are_scoped_to_processing_identity_snapshot():
         assert "unnest(string_to_array(" in sql
         assert "ANY(%s::text[])" in sql
         assert "FROM doc_registry" not in sql
+        assert "step.metadata->>'failure_type' IS DISTINCT FROM 'context_budget_rejected'" in sql
+        assert "step.metadata->>'failure_class' IS DISTINCT FROM 'ContextBudgetExceededError'" in sql
         assert "step.metadata->>'failure_type' = 'provider_or_runtime_error'" in sql
+        assert "step.metadata->>'failure_class' IS DISTINCT FROM 'ContextBudgetExceededError'" in sql
+        assert "'context_budget_rejected'" in sql
+        assert "step.metadata->>'failure_class' = 'ContextBudgetExceededError'" in sql
         assert "AS boundary_rejection_count" in sql
         assert "step.metadata->>'department'" in sql
         has_audience_join = "LEFT JOIN auth.knowledge_bases AS kb" in sql

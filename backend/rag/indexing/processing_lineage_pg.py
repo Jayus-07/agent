@@ -430,6 +430,8 @@ class PostgresProcessingLineageRepository:
                 SELECT COUNT(*) AS candidate_count,
                        COUNT(*) FILTER (
                            WHERE step.metadata->>'attempted' = 'true'
+                             AND step.metadata->>'failure_type' IS DISTINCT FROM 'context_budget_rejected'
+                             AND step.metadata->>'failure_class' IS DISTINCT FROM 'ContextBudgetExceededError'
                        ) AS llm_call_count,
                        COUNT(*) FILTER (
                            WHERE step.status = 'success'
@@ -438,13 +440,17 @@ class PostgresProcessingLineageRepository:
                        COUNT(*) FILTER (
                            WHERE step.metadata->>'attempted' = 'true'
                              AND step.metadata->>'failure_type' = 'provider_or_runtime_error'
+                             AND step.metadata->>'failure_class' IS DISTINCT FROM 'ContextBudgetExceededError'
                        ) AS provider_failure_count,
                        COUNT(*) FILTER (
                            WHERE step.metadata->>'attempted' = 'true'
-                             AND step.metadata->>'failure_type' IN (
-                                 'invalid_json', 'invalid_groups',
-                                 'invalid_source_node_partition', 'cross_section_group',
-                                 'coverage_validation_failed'
+                             AND (
+                                 step.metadata->>'failure_type' IN (
+                                     'invalid_json', 'invalid_groups',
+                                     'invalid_source_node_partition', 'cross_section_group',
+                                     'coverage_validation_failed', 'context_budget_rejected'
+                                 )
+                                 OR step.metadata->>'failure_class' = 'ContextBudgetExceededError'
                              )
                        ) AS boundary_rejection_count,
                        COUNT(*) FILTER (
@@ -483,6 +489,8 @@ class PostgresProcessingLineageRepository:
                        COUNT(*) AS candidate_count,
                        COUNT(*) FILTER (
                            WHERE step.metadata->>'attempted' = 'true'
+                             AND step.metadata->>'failure_type' IS DISTINCT FROM 'context_budget_rejected'
+                             AND step.metadata->>'failure_class' IS DISTINCT FROM 'ContextBudgetExceededError'
                        ) AS llm_call_count,
                        COUNT(*) FILTER (
                            WHERE step.status = 'success'
@@ -491,13 +499,17 @@ class PostgresProcessingLineageRepository:
                        COUNT(*) FILTER (
                            WHERE step.metadata->>'attempted' = 'true'
                              AND step.metadata->>'failure_type' = 'provider_or_runtime_error'
+                             AND step.metadata->>'failure_class' IS DISTINCT FROM 'ContextBudgetExceededError'
                        ) AS provider_failure_count,
                        COUNT(*) FILTER (
                            WHERE step.metadata->>'attempted' = 'true'
-                             AND step.metadata->>'failure_type' IN (
-                                 'invalid_json', 'invalid_groups',
-                                 'invalid_source_node_partition', 'cross_section_group',
-                                 'coverage_validation_failed'
+                             AND (
+                                 step.metadata->>'failure_type' IN (
+                                     'invalid_json', 'invalid_groups',
+                                     'invalid_source_node_partition', 'cross_section_group',
+                                     'coverage_validation_failed', 'context_budget_rejected'
+                                 )
+                                 OR step.metadata->>'failure_class' = 'ContextBudgetExceededError'
                              )
                        ) AS boundary_rejection_count,
                        COUNT(*) FILTER (
@@ -529,6 +541,8 @@ class PostgresProcessingLineageRepository:
                        COALESCE(kb.audience, 'unknown') AS kb_audience,
                        COUNT(*) FILTER (
                            WHERE step.metadata->>'attempted' = 'true'
+                             AND step.metadata->>'failure_type' IS DISTINCT FROM 'context_budget_rejected'
+                             AND step.metadata->>'failure_class' IS DISTINCT FROM 'ContextBudgetExceededError'
                        ) AS llm_call_count,
                        COUNT(*) FILTER (
                            WHERE step.status = 'success'
@@ -537,13 +551,17 @@ class PostgresProcessingLineageRepository:
                        COUNT(*) FILTER (
                            WHERE step.metadata->>'attempted' = 'true'
                              AND step.metadata->>'failure_type' = 'provider_or_runtime_error'
+                             AND step.metadata->>'failure_class' IS DISTINCT FROM 'ContextBudgetExceededError'
                        ) AS provider_failure_count,
                        COUNT(*) FILTER (
                            WHERE step.metadata->>'attempted' = 'true'
-                             AND step.metadata->>'failure_type' IN (
-                                 'invalid_json', 'invalid_groups',
-                                 'invalid_source_node_partition', 'cross_section_group',
-                                 'coverage_validation_failed'
+                             AND (
+                                 step.metadata->>'failure_type' IN (
+                                     'invalid_json', 'invalid_groups',
+                                     'invalid_source_node_partition', 'cross_section_group',
+                                     'coverage_validation_failed', 'context_budget_rejected'
+                                 )
+                                 OR step.metadata->>'failure_class' = 'ContextBudgetExceededError'
                              )
                        ) AS boundary_rejection_count,
                        COUNT(*) FILTER (

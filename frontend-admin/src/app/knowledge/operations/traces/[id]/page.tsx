@@ -15,6 +15,8 @@ import {
   getEmbeddingCountsFromSpans,
   getTraceDocumentTitle,
   getTraceDocumentId,
+  findProcessingRunForTrace,
+  getSuccessfulIndexOutcomeLabel,
   getTraceDocumentIdentityError,
   getRegistryDocumentIdentityError,
   getProcessingRunDetailError,
@@ -109,10 +111,10 @@ export default function DocTracePage() {
     setProcessingRunHistoryFallback(false);
     setProcessingRunError("");
 
-    const loadDocumentIdentity = async () => {
+    const loadDocumentIdentity = async (): Promise<KnowledgeDoc | null> => {
       if (!documentIdParam) {
         if (!cancelled) setDocumentIdentityError("入口未提供文件 ID，无法核对文档登记");
-        return;
+        return null;
       }
       try {
         const response = await knowledgeService.getDocument(documentIdParam);
@@ -122,33 +124,41 @@ export default function DocTracePage() {
             detail, documentIdParam, documentName || undefined, fileHashParam || undefined,
           )
           : getAdminErrorLabel(String(response?.error || "文档登记详情读取失败"));
-        if (cancelled) return;
+        if (cancelled) return null;
         if (!detail) {
           setRegistryDocument(null);
           setDocumentIdentityError(identityError || "文档登记详情未返回");
-          return;
+          return null;
         }
         setRegistryDocument(detail);
         setDocumentIdentityError(identityError || "");
+        return detail;
       } catch {
         if (!cancelled) setDocumentIdentityError("文档登记详情读取失败");
+        return null;
       }
     };
 
     const loadRunDetail = async (
       options: { expectedTraceId?: string; allowHistoryFallback?: boolean } = {},
+      documentIdentity: Promise<KnowledgeDoc | null> = Promise.resolve(null),
     ) => {
       if (!documentIdParam) {
         if (!cancelled) setProcessingRunError("缺少文件 ID，无法核对历史处理记录");
         return;
       }
       const allowHistoryFallback = options.allowHistoryFallback ?? true;
+      const documentDetail = await documentIdentity;
+      const registryFileHash = String(
+        documentDetail?.file_hash || documentDetail?.hash || documentDetail?.sha256 || "",
+      ).trim();
+      const expectedFileHash = fileHashParam || registryFileHash;
       let firstError = "";
       if (runIdParam) {
         try {
           const detail = await knowledgeService.getProcessingRun(documentIdParam, runIdParam);
           const identityError = getProcessingRunDetailError(
-            detail, documentIdParam, runIdParam, fileHashParam, options.expectedTraceId,
+            detail, documentIdParam, runIdParam, expectedFileHash, options.expectedTraceId,
           );
           const hasSteps = Array.isArray(detail?.steps) && detail.steps.length > 0;
           if (!identityError && hasSteps) {
@@ -162,6 +172,36 @@ export default function DocTracePage() {
         } catch {
           firstError = "最近一次处理运行读取失败";
         }
+      } else if (options.expectedTraceId) {
+        try {
+          const history = await knowledgeService.getProcessingRuns(
+            documentIdParam, { page: 1, page_size: 100 },
+          );
+          const candidate = findProcessingRunForTrace(
+            Array.isArray(history?.items) ? history.items : [],
+            options.expectedTraceId,
+            expectedFileHash,
+          );
+          if (!candidate?.run_id) {
+            firstError = "没有找到与当前 Trace ID 和文件 SHA 一致的处理运行";
+          } else {
+            const detail = await knowledgeService.getProcessingRun(documentIdParam, candidate.run_id);
+            const identityError = getProcessingRunDetailError(
+              detail, documentIdParam, candidate.run_id, expectedFileHash, options.expectedTraceId,
+            );
+            if (!identityError && Array.isArray(detail?.steps) && detail.steps.length > 0) {
+              if (!cancelled) {
+                setProcessingRun(detail);
+                setProcessingRunHistoryFallback(false);
+                setProcessingRunError("");
+              }
+              return;
+            }
+            firstError = identityError || "该运行没有保存阶段明细";
+          }
+        } catch {
+          firstError = "按 Trace ID 查找处理运行失败";
+        }
       } else {
         firstError = "入口未提供处理运行 ID，无法核对 Trace 与运行记录";
       }
@@ -170,9 +210,9 @@ export default function DocTracePage() {
         if (!cancelled) setProcessingRunError(firstError ? getAdminErrorLabel(firstError) : "处理运行与 Trace 未通过身份核验");
         return;
       }
-      if (!fileHashParam) {
+      if (!expectedFileHash) {
         if (!cancelled) {
-          setProcessingRunError(firstError ? getAdminErrorLabel(firstError) : "文件未提供 SHA-256，无法核对历史处理版本");
+          setProcessingRunError(firstError ? getAdminErrorLabel(firstError) : "入口与文档登记均未提供 SHA-256，无法核对历史处理版本");
         }
         return;
       }
@@ -185,7 +225,7 @@ export default function DocTracePage() {
           .filter((run: ProcessingRunDetail) => (
             run?.run_id
             && run.run_id !== runIdParam
-            && String(run.file_hash || "").toLowerCase() === fileHashParam.toLowerCase()
+            && String(run.file_hash || "").toLowerCase() === expectedFileHash.toLowerCase()
           ));
         for (const candidate of candidates) {
           try {
@@ -193,7 +233,7 @@ export default function DocTracePage() {
               documentIdParam, candidate.run_id,
             );
             const identityError = getProcessingRunDetailError(
-              detail, documentIdParam, candidate.run_id, fileHashParam,
+              detail, documentIdParam, candidate.run_id, expectedFileHash,
             );
             if (identityError || !Array.isArray(detail?.steps) || detail.steps.length === 0) {
               continue;
@@ -226,20 +266,21 @@ export default function DocTracePage() {
       }
     };
 
+    const loadIdentityAndRunDetail = async (
+      options: { expectedTraceId?: string; allowHistoryFallback?: boolean } = {},
+    ) => {
+      const documentIdentity = loadDocumentIdentity();
+      await Promise.all([documentIdentity, loadRunDetail(options, documentIdentity)]);
+    };
+
     void (async () => {
       if (viewParam === "unavailable") {
-        await Promise.all([
-          loadDocumentIdentity(),
-          loadRunDetail({ allowHistoryFallback: true }),
-        ]);
+        await loadIdentityAndRunDetail({ allowHistoryFallback: true });
         if (!cancelled) setLoading(false);
         return;
       }
       if (viewParam === "processing-run") {
-        await Promise.all([
-          loadDocumentIdentity(),
-          loadRunDetail({ allowHistoryFallback: true }),
-        ]);
+        await loadIdentityAndRunDetail({ allowHistoryFallback: true });
         if (!cancelled) setLoading(false);
         return;
       }
@@ -256,20 +297,14 @@ export default function DocTracePage() {
         const identityError = traceIdError || documentIdError;
         if (!identityError) {
           setTrace(foundTrace);
-          await Promise.all([
-            loadDocumentIdentity(),
-            loadRunDetail({ expectedTraceId: foundTrace.id, allowHistoryFallback: false }),
-          ]);
+          await loadIdentityAndRunDetail({ expectedTraceId: foundTrace.id, allowHistoryFallback: false });
           if (!cancelled) setLoading(false);
           return;
         }
         setProcessingRunError(identityError);
       }
       if (documentIdParam) {
-        await Promise.all([
-          loadDocumentIdentity(),
-          loadRunDetail({ allowHistoryFallback: true }),
-        ]);
+        await loadIdentityAndRunDetail({ allowHistoryFallback: true });
         if (!cancelled && foundTrace && documentIdParam
           && getTraceDocumentIdentityError(getTraceDocumentId(foundTrace), documentIdParam)) {
           setProcessingRunError((current) => current ? `Trace 已拒绝展示（文档 ID 不匹配）；运行记录读取失败：${current}` : "Trace 文档 ID 不匹配");
@@ -353,14 +388,13 @@ export default function DocTracePage() {
     registryDocument
     && !documentIdentityError
     && processingRun
-    && runIdParam
-    && processingRun.run_id === runIdParam
+    && (!runIdParam || processingRun.run_id === runIdParam)
     && !processingRunError
-    && fileHashParam
+    && (fileHashParam || registryFileHash)
     && registryFileHash
-    && registryFileHash.toLowerCase() === fileHashParam.toLowerCase()
+    && registryFileHash.toLowerCase() === (fileHashParam || registryFileHash).toLowerCase()
     && processingRun.file_hash
-    && String(processingRun.file_hash).toLowerCase() === fileHashParam.toLowerCase()
+    && String(processingRun.file_hash).toLowerCase() === (fileHashParam || registryFileHash).toLowerCase()
     && documentIdParam
     && traceDocumentId === documentIdParam
     && trace?.id === id
@@ -378,7 +412,7 @@ export default function DocTracePage() {
     { label: "文档登记知识库编号", value: registryKnowledgeBaseId || "未核验" },
     { label: "处理追踪编号", value: trace?.id || "追踪记录未记录" },
     { label: "处理运行编号", value: processingRun?.run_id || (runIdParam ? "未核验" : "未记录") },
-    { label: "文件 SHA-256", value: processingRun?.file_hash || (fileHashParam ? "未核验" : "未记录") },
+    { label: "文件 SHA-256", value: processingRun?.file_hash || fileHashParam || registryFileHash || "未记录" },
     { label: "文档登记 SHA-256", value: registryFileHash || "未核验" },
     { label: "处理操作", value: getOperationLabel(processingRun?.operation) },
     { label: "处理状态", value: processingRun ? getProcessingStatusLabel(processingRun.status) : (runIdParam ? "未核验" : "未记录") },
@@ -392,7 +426,7 @@ export default function DocTracePage() {
     documentIdentityError,
     processingRunError,
     knowledgeBaseIdentityError,
-    !fileHashParam ? "入口未提供文件 SHA-256，无法核对文件版本" : "",
+    !fileHashParam && !registryFileHash ? "入口与文档登记均未提供文件 SHA-256，无法核对文件版本" : "",
   ]
     .filter(Boolean);
   const handleOpenChunkDetail = async () => { if(!docId)return; setChunkPanelOpen(true);setChunkDetailLoading(true);setChunkDetailError(""); try{const res=await knowledgeService.getChunkDetail(docId); setChunkDetailData((res as any)?.chunks??(res as any)?.data?.chunks??[]);}catch(e){setChunkDetailError(getAdminErrorLabel((e as Error).message));}finally{setChunkDetailLoading(false);} };
@@ -430,6 +464,7 @@ export default function DocTracePage() {
   );
 
   const badge = statusBadge(trace.status??"success");
+  const successfulIndexOutcome = getSuccessfulIndexOutcomeLabel(trace.status || "success", processingRun);
   const traceCost = getTraceCostDisplay({
     costCny: overview.costCny,
     costUsd: overview.costUsd,
@@ -444,7 +479,12 @@ export default function DocTracePage() {
 
       {/* Overview */}
       <div>
-        <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-3"><h1 className="text-base font-semibold text-slate-800">{traceDocumentTitle}</h1><span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span></div><span className="text-xs text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span></div>
+        <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-3"><h1 className="text-base font-semibold text-slate-800">{traceDocumentTitle}</h1><span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${successfulIndexOutcome ? "bg-amber-100 text-amber-800" : badge.bg}`}>{successfulIndexOutcome || badge.label}</span></div><span className="text-xs text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span></div>
+        {successfulIndexOutcome && trace.status === "error" && (
+          <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            处理运行终态为成功；Trace 保留可选模型阶段的失败/回退明细，请查看下方具体阶段。
+          </p>
+        )}
         <section aria-labelledby="trace-identity-heading" className="mb-3 rounded-xl border border-slate-200 bg-white p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 id="trace-identity-heading" className="text-xs font-medium text-slate-600">文件与处理身份</h2>

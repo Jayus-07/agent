@@ -45,6 +45,42 @@ function deferred<T>() {
 }
 
 describe('OperationsPanel 活动上传', () => {
+  it('Trace 链接携带文件、操作和处理身份参数', async () => {
+    operationApi.getOperations.mockResolvedValue({
+      items: [{
+        id: 3507,
+        doc_id: 'doc-1',
+        doc_name: 'scanned_partial_fail.pdf',
+        operation: 'reindex',
+        result: 'success',
+        created_at: '2026-11-16 19:11:03',
+        trace_id: 'trace-1',
+        batch_id: null,
+        detail: JSON.stringify({ chunk_count: 27, file_hash: '', executor: 'rag_index_worker' }),
+        duration_ms: 44313,
+        user_id: '1014',
+        source: '172.21.0.10 | Web',
+      }],
+      total: 1,
+      active_uploads: [],
+    })
+
+    const { root, container } = mount()
+    await act(async () => { await Promise.resolve() })
+
+    const link = container.querySelector<HTMLAnchorElement>('a[href*="/knowledge/operations/traces/trace-1"]')
+    expect(link).not.toBeNull()
+    const url = new URL(link!.href)
+    expect(url.searchParams.get('docId')).toBe('doc-1')
+    expect(url.searchParams.get('documentName')).toBe('scanned_partial_fail.pdf')
+    expect(url.searchParams.get('operation')).toBe('reindex')
+    expect(url.searchParams.get('operationAt')).toBe('2026-11-16 19:11:03')
+    expect(url.searchParams.get('returnTab')).toBe('operations')
+    expect(url.searchParams.has('fileHash')).toBe(false)
+
+    act(() => root.unmount())
+  })
+
   it('显示持久任务 ID 和状态，并在活动任务期间自动刷新', async () => {
     vi.useFakeTimers()
     operationApi.getOperations.mockResolvedValue({

@@ -4,6 +4,7 @@ import {
   formatTracePageCount, getEmbeddingCounts, getEmbeddingCountsFromSpans,
   getLogicalStageSpans, getMetadataPerformanceWarning,
   getTraceDocumentTitle, getProcessingRunDetailError, getTraceDocumentId,
+  findProcessingRunForTrace, getSuccessfulIndexOutcomeLabel,
   getTraceDocumentIdentityError, getRegistryDocumentIdentityError,
   getMetadataStageDuration,
   getQualityScore, getQualityScoreBreakdown, getQualityWarning, getTraceCostDisplay,
@@ -86,6 +87,26 @@ describe("Trace duration and quality metrics", () => {
       { doc_id: "doc-1", run_id: "run-1", file_hash: "current-hash" },
       "doc-1", "run-1", "current-hash", "trace-1",
     )).toBe("处理运行未记录 Trace ID，无法与当前详情核对");
+  });
+
+  it("操作日志 Trace 入口可按 Trace ID 和 SHA 找到对应处理运行", () => {
+    const runs = [
+      { run_id: "old-run", trace_id: "old-trace", file_hash: "same-hash" },
+      { run_id: "new-run", trace_id: "new-trace", file_hash: "same-hash" },
+    ];
+    expect(findProcessingRunForTrace(runs, "new-trace", "SAME-HASH")?.run_id).toBe("new-run");
+    expect(findProcessingRunForTrace(runs, "missing-trace", "same-hash")).toBeNull();
+    expect(findProcessingRunForTrace(runs, "new-trace", "other-hash")).toBeNull();
+  });
+
+  it("处理运行成功但含回退时，Trace 状态文案明确报告索引已成功", () => {
+    expect(getSuccessfulIndexOutcomeLabel("error", {
+      status: "success",
+      steps: [{ status: "fallback" }, { status: "success" }],
+    })).toBe("索引成功（1 个阶段已回退）");
+    expect(getSuccessfulIndexOutcomeLabel("error", { status: "success", steps: [] }))
+      .toBe("索引成功（Trace 含错误阶段）");
+    expect(getSuccessfulIndexOutcomeLabel("error", { status: "failed", steps: [] })).toBeNull();
   });
 
   it("文件名和文档 ID 必须来自匹配的 Registry 记录", () => {
