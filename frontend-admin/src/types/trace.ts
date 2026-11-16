@@ -324,10 +324,10 @@ export type SpanType = (typeof SPAN_TYPES)[number];
 /** Span type → 中文标签映射 */
 export const SPAN_TYPE_LABELS: Record<string, string> = {
   agent: "Agent",
-  llm_call: "LLM 调用",
+  llm_call: "大模型调用",
   embedding: "向量化",
   retrieval: "检索",
-  rerank: "Rerank",
+  rerank: "重排",
   tool_call: "工具调用",
   http: "HTTP 请求",
   sql: "SQL 查询",
@@ -367,14 +367,15 @@ export function statusDot(status: string): string {
 
 export function statusBadge(status: string): { bg: string; text: string; label: string } {
   switch (status) {
-    case "success":   return { bg: "bg-emerald-100 text-emerald-700", text: "text-emerald-700", label: "SUCCESS" };
-    case "error":     return { bg: "bg-red-100 text-red-700", text: "text-red-700", label: "ERROR" };
-    case "timeout":   return { bg: "bg-amber-100 text-amber-700", text: "text-amber-700", label: "TIMEOUT" };
-    case "partial":   return { bg: "bg-amber-100 text-amber-700", text: "text-amber-700", label: "PARTIAL" };
-    case "rejected":  return { bg: "bg-orange-100 text-orange-700", text: "text-orange-700", label: "REJECTED" };
-    case "cancelled": return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: "CANCELLED" };
-    case "skipped":   return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: "SKIPPED" };
-    default:          return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: status.toUpperCase() };
+    case "success":   return { bg: "bg-emerald-100 text-emerald-700", text: "text-emerald-700", label: "成功" };
+    case "error":     return { bg: "bg-red-100 text-red-700", text: "text-red-700", label: "失败" };
+    case "timeout":   return { bg: "bg-amber-100 text-amber-700", text: "text-amber-700", label: "超时" };
+    case "partial":   return { bg: "bg-amber-100 text-amber-700", text: "text-amber-700", label: "部分完成" };
+    case "rejected":  return { bg: "bg-orange-100 text-orange-700", text: "text-orange-700", label: "已拒绝" };
+    case "cancelled": return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: "已取消" };
+    case "skipped":   return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: "已跳过" };
+    case "running":   return { bg: "bg-blue-100 text-blue-700", text: "text-blue-700", label: "运行中" };
+    default:          return { bg: "bg-slate-100 text-slate-500", text: "text-slate-500", label: "未知状态" };
   }
 }
 
@@ -484,9 +485,9 @@ export function filterByTimeRange<T extends { timestamp: string }>(
 
 export function severityStyle(sev: AlertItem["severity"]): { bg: string; text: string; label: string } {
   switch (sev) {
-    case "critical": return { bg: "bg-red-100 text-red-700", text: "text-red-700", label: "CRITICAL" };
-    case "error":    return { bg: "bg-orange-100 text-orange-700", text: "text-orange-700", label: "ERROR" };
-    case "warning":  return { bg: "bg-amber-100 text-amber-700", text: "text-amber-700", label: "WARNING" };
+    case "critical": return { bg: "bg-red-100 text-red-700", text: "text-red-700", label: "严重" };
+    case "error":    return { bg: "bg-orange-100 text-orange-700", text: "text-orange-700", label: "错误" };
+    case "warning":  return { bg: "bg-amber-100 text-amber-700", text: "text-amber-700", label: "警告" };
   }
 }
 

@@ -8,26 +8,28 @@ import { knowledgeService, type ChunkDetailItem, type LLMChunkingFallbackStats }
 import UploadDialog from '@/components/knowledge/UploadDialog'
 import { useToast } from '@/components/shared/Toast'
 import { getReindexTerminalState } from '@/lib/reindex-status'
-
-// 中文标签映射
-const KB_LABELS: Record<string, string> = {
-  biz_inventory: '库存业务', biz_order: '订单业务', biz_product: '商品业务',
-  policy_hr: '人事制度', policy_finance: '财务制度', policy_general: '企业公共',
-}
-const DEPT_LABELS: Record<string, string> = {
-  warehouse: '仓储部', supply_chain: '供应链部', order_dept: '订单部', customer: '客服部',
-  product_dept: '商品部', hr: '人事部', finance: '财务部', admin: '行政部', general: '通用',
-}
-const DOC_TYPE_CN: Record<string, string> = {
-  compliance: '合规', policy: '制度', legal: '法律', financial: '财务',
-  faq: 'FAQ', product_spec: '商品规格', sop: '操作流程', listing: '上架', general: '通用',
-  travel_guide: '旅游指南',
-}
-const DOMAIN_CN: Record<string, string> = {
-  product: '商品', order: '订单', inventory: '库存', logistics: '物流',
-  customer: '客户', supplier: '供应商', marketing: '营销', advertising: '广告',
-  analytics: '数据分析', data: '数据治理', travel: '旅游', general: '通用',
-}
+import {
+  formatChunkMetadataValue,
+  getBusinessDomainLabel,
+  getChunkMetadataLabel,
+  getChunkStrategyLabel,
+  getChunkTypeLabel,
+  getDepartmentLabel,
+  getDocumentTypeLabel,
+  getFallbackTypeLabel,
+  getGranularityLabel,
+  getKnowledgeBaseLabel,
+  getCacheStatusLabel,
+  getModelRoleLabel,
+  getOperationLabel,
+  getParentScopeLabel,
+  getProcessingCodeLabel,
+  getProcessingRouteLabel,
+  getProcessingStageLabel,
+  getProcessingStatusLabel,
+  getProviderLabel,
+  getQualityIssueLabel,
+} from '@/lib/knowledge-display'
 
 const QUALITY_STATUS_CONFIG: Record<string, { label: string; className: string; title: string }> = {
   pass: { label: '质量通过', className: 'bg-green-50 text-green-700', title: '当前质量检查通过' },
@@ -36,70 +38,11 @@ const QUALITY_STATUS_CONFIG: Record<string, { label: string; className: string; 
   unknown: { label: '未核验', className: 'bg-gray-100 text-gray-600', title: '没有可用的质量结论，不能按通过处理' },
 }
 
-const CHUNK_METADATA_LABELS: Record<string, string> = {
-  source_format: '原文件格式',
-  parser_version: '解析器版本',
-  chunk_policy_version: '切分规则版本',
-  index_generation: '索引代次',
-  source_locators_json: '原文位置',
-  source_spans_json: '原文范围',
-  source_locations_json: '来源定位',
-  page: '页码',
-  pages: '页数',
-  table_id: '表格编号',
-  row_index: '表格行号',
-  row_part_index: '行分片号',
-  row_count: '表格行数',
-  col_count: '表格列数',
-  split_group_id: '拆分组',
-  split_part: '拆分序号',
-  split_total: '拆分总数',
-  content_hash: '分块内容校验值',
-  quality_flags: '质量标记',
-  filter_status: '过滤状态',
-  filter_reason: '过滤原因',
-  section_path: '章节路径',
-  section_level: '章节层级',
-  section_id: '章节编号',
-  parent_section_id: '父章节编号',
-  parent_scope: '父块范围',
-  content_unit: '内容单元',
-  content_unit_id: '内容单元编号',
-  content_unit_strategy: '内容单元切分方式',
-  chunk_tokens: 'Token 数',
-  embedding_model: '向量模型',
-  embedding_version: '向量版本',
-  embedding_fingerprint: '向量配置指纹',
-}
-
-function formatChunkMetadata(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (value === null || value === undefined) return '-'
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return JSON.stringify(value)
-}
-
-const PROCESSING_STAGE_CN: Record<string, string> = {
-  load: '读取文件', parser: '解析', ocr: 'OCR', metadata: '元数据编排',
-  metadata_extract: '元数据抽取', metadata_summary: '摘要', question_gen: '模拟问题',
-  table_describe: '表格描述', chunking_llm_fallback: 'LLM 切分边界兜底',
-  embedding: '向量化', vector_write: '写入向量库',
-}
-
-const CHUNK_FALLBACK_TYPE_CN: Record<string, string> = {
-  no_recognized_structure: '规则未识别结构',
-  rule_coverage_gap: '规则覆盖有缺口',
-}
-
 const KNOWLEDGE_BASE_AUDIENCE_CN: Record<string, string> = {
   customer: '对客库',
   internal: '内部库',
   test: '测试库',
   unknown: '未分类',
-}
-
-const PROCESSING_STATUS_CN: Record<string, string> = {
-  success: '成功', skipped: '跳过', cached: '缓存命中', fallback: '降级', failed: '失败',
 }
 
 /** 格式化文档时间：年-月-日 时:分:秒 */
@@ -123,6 +66,7 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   processing: { label: '处理中', className: 'bg-amber-50 text-amber-600' },
   error:      { label: '失败',   className: 'bg-red-50 text-red-600' },
   indexing:   { label: '索引中', className: 'bg-amber-50 text-amber-600' },
+  unknown:    { label: '未知状态', className: 'bg-gray-50 text-gray-500' },
 }
 
 export default function DocumentsPanel() {
@@ -157,7 +101,12 @@ export default function DocumentsPanel() {
   const llmFallbackStatsMountedRef = useRef(false)
   const llmFallbackStatsRequestRef = useRef(false)
   // G2：知识库筛选选项 = 后端注册库真实清单（含文档计数），不再硬编码
-  const [kbOptions, setKbOptions] = useState<Array<{ id: string; name: string; doc_count?: number }>>([])
+  const [kbOptions, setKbOptions] = useState<Array<{
+    id: string
+    name: string
+    doc_count?: number
+    depts?: Array<{ id: string; label: string }>
+  }>>([])
   // 受控搜索：本地 input 状态（立即响应）+ 防抖同步到 store（API 调用）
   const [inputValue, setInputValue] = useState(keyword)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -232,7 +181,12 @@ export default function DocumentsPanel() {
   const refreshKbOptions = useCallback(async () => {
     const d: any = await knowledgeService.listKnowledgeBases()
     if (!Array.isArray(d?.knowledge_bases)) return
-    setKbOptions(d.knowledge_bases.map((k: any) => ({ id: k.id, name: k.name || k.id, doc_count: k.doc_count })))
+    setKbOptions(d.knowledge_bases.map((k: any) => ({
+      id: k.id,
+      name: k.name || '',
+      doc_count: k.doc_count,
+      depts: Array.isArray(k.depts) ? k.depts : [],
+    })))
   }, [])
 
   useEffect(() => { void refreshKbOptions() }, [refreshKbOptions])
@@ -516,17 +470,17 @@ export default function DocumentsPanel() {
 
   return (
     <>
-      <div className="max-w-5xl mx-auto px-6 py-8">
+      <div className="w-full max-w-none px-3 py-5 sm:px-5 lg:px-8 lg:py-7">
 
         <section aria-labelledby="llm-fallback-stats-title" className="mb-5 rounded-lg border border-border-subtle bg-surface-base px-4 py-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 id="llm-fallback-stats-title" className="text-xs font-semibold text-text-primary">规则切分后的 LLM 兜底记录</h2>
+              <h2 id="llm-fallback-stats-title" className="text-xs font-semibold text-text-primary">规则切分后的大模型兜底记录</h2>
               <p className="mt-1 text-[10px] leading-4 text-text-muted">
                 最近 {llmFallbackStats?.window_days ?? 30} 天，按处理运行次数统计当前账号可见知识库；同一文件重复处理会分别计数。测试库单独标记，不触发生产规则升级提示；内部库和对客库同类调用达到 {llmFallbackStats?.review_threshold ?? 5} 次时提示人工评估，不自动改规则。
               </p>
             </div>
-            <button onClick={() => void refreshLlmFallbackStats()} disabled={llmFallbackStatsLoading} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50" aria-label="刷新 LLM 切分兜底统计">
+            <button onClick={() => void refreshLlmFallbackStats()} disabled={llmFallbackStatsLoading} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50" aria-label="刷新大模型切分兜底统计">
               <RefreshCw size={12} className={llmFallbackStatsLoading ? 'animate-spin' : ''} />
               刷新
             </button>
@@ -537,7 +491,7 @@ export default function DocumentsPanel() {
             <>
               <dl className="mt-3 grid grid-cols-2 gap-y-2 border-t border-border-subtle pt-3 text-[10px] sm:grid-cols-5">
                 <div><dt className="text-text-muted">触发记录</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.candidate_count ?? (llmFallbackStatsLoading ? '读取中' : 0)}</dd></div>
-                <div><dt className="text-text-muted">LLM 调用</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.llm_call_count ?? (llmFallbackStatsLoading ? '读取中' : 0)}</dd></div>
+                <div><dt className="text-text-muted">大模型调用</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.llm_call_count ?? (llmFallbackStatsLoading ? '读取中' : 0)}</dd></div>
                 <div><dt className="text-text-muted">边界采用</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.applied_count ?? (llmFallbackStatsLoading ? '读取中' : 0)} 次</dd></div>
                 <div><dt className="text-text-muted">未采用</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.not_applied_count ?? (llmFallbackStatsLoading ? '读取中' : 0)} 次</dd></div>
                 <div><dt className="text-text-muted">输出块</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.output_chunk_count ?? (llmFallbackStatsLoading ? '读取中' : 0)}</dd></div>
@@ -545,14 +499,14 @@ export default function DocumentsPanel() {
               {!!llmFallbackStats?.by_type?.length ? (
                 <div className="mt-3 overflow-x-auto border-t border-border-subtle pt-2">
                   <table className="w-full min-w-[840px] text-left text-[10px]">
-                    <thead className="text-text-muted"><tr><th className="py-1.5 font-medium">知识库受众</th><th className="py-1.5 font-medium">文件格式</th><th className="py-1.5 font-medium">触发类型</th><th className="py-1.5 font-medium">规则 / 解析版本</th><th className="py-1.5 font-medium">调用 / 采用</th><th className="py-1.5 font-medium">Provider失败 / 边界拒绝 / 输出块</th><th className="py-1.5 font-medium">规则复核</th></tr></thead>
+                    <thead className="text-text-muted"><tr><th className="py-1.5 font-medium">知识库受众</th><th className="py-1.5 font-medium">文件格式</th><th className="py-1.5 font-medium">触发类型</th><th className="py-1.5 font-medium">规则 / 解析版本</th><th className="py-1.5 font-medium">调用 / 采用</th><th className="py-1.5 font-medium">模型服务失败 / 边界拒绝 / 输出块</th><th className="py-1.5 font-medium">规则复核</th></tr></thead>
                     <tbody className="divide-y divide-border-subtle">
                       {llmFallbackStats.by_type.map((item) => (
                         <tr key={`${item.kb_audience}:${item.source_format}:${item.fallback_type}:${item.rule_strategy}:${item.rule_version}:${item.parser_version}`} className="text-text-secondary">
-                          <td className="py-1.5">{KNOWLEDGE_BASE_AUDIENCE_CN[item.kb_audience] || item.kb_audience}</td>
+                          <td className="py-1.5">{KNOWLEDGE_BASE_AUDIENCE_CN[item.kb_audience] || '未分类用途'}</td>
                           <td className="py-1.5">{item.source_format.toUpperCase()}</td>
-                          <td className="py-1.5">{CHUNK_FALLBACK_TYPE_CN[item.fallback_type] || item.fallback_type}</td>
-                          <td className="py-1.5">{item.rule_strategy} {item.rule_version} / {item.parser_version}</td>
+                          <td className="py-1.5">{getFallbackTypeLabel(item.fallback_type)}</td>
+                          <td className="py-1.5">{getChunkStrategyLabel(item.rule_strategy)}（{item.rule_version}）/ 解析器（{item.parser_version}）</td>
                           <td className="py-1.5">{item.llm_call_count} / {item.applied_count}</td>
                           <td className="py-1.5">{item.provider_failure_count} / {item.boundary_rejection_count} / {item.output_chunk_count}</td>
                           <td className="py-1.5">{item.upgrade_review_required ? <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">建议评估升级</span> : item.kb_audience === 'test' ? '测试观察（不触发升级）' : item.kb_audience === 'unknown' ? '未分类，先核对库身份' : '继续观察'}</td>
@@ -569,8 +523,8 @@ export default function DocumentsPanel() {
         </section>
 
         {/* Toolbar */}
-        <div className="flex items-center gap-3 mb-4">
-          <div className="flex items-center gap-2 flex-1 bg-surface-base rounded-lg border border-border-subtle px-3 py-2">
+        <div className="mb-4 flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="flex min-w-[220px] flex-[1_1_320px] items-center gap-2 bg-surface-base rounded-lg border border-border-subtle px-3 py-2">
             <Search size={14} className="text-text-muted" />
             <input
               placeholder="搜索文档..."
@@ -586,7 +540,7 @@ export default function DocumentsPanel() {
           <select
             value={status}
             onChange={e => setStatus(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors"
+            className="min-w-[132px] flex-1 px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors sm:flex-none"
           >
             <option value="">全部状态</option>
             <option value="active">活跃</option>
@@ -600,7 +554,7 @@ export default function DocumentsPanel() {
           <select
             value={type}
             onChange={e => setType(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors"
+            className="min-w-[132px] flex-1 px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors sm:flex-none"
           >
             <option value="">全部类型</option>
             <option value="pdf">PDF</option>
@@ -610,15 +564,15 @@ export default function DocumentsPanel() {
           </select>
           {/* KB 过滤（G2：真实注册库清单） */}
           <select value={kbId} onChange={e => setKbId(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors">
+            className="min-w-[160px] flex-1 px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors sm:flex-none">
             <option value="">全部知识库</option>
             {kbOptions.map(k => (
-              <option key={k.id} value={k.id}>{k.name}{typeof k.doc_count === 'number' ? `（${k.doc_count}）` : ''}</option>
+              <option key={k.id} value={k.id}>{getKnowledgeBaseLabel(k.id, kbOptions)}{typeof k.doc_count === 'number' ? `（${k.doc_count}）` : ''}</option>
             ))}
           </select>
           {/* 部门过滤 */}
           <select value={dept} onChange={e => setDept(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors">
+            className="min-w-[132px] flex-1 px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40 transition-colors sm:flex-none">
             <option value="">全部部门</option>
             <option value="warehouse">仓储部</option>
             <option value="supply_chain">供应链部</option>
@@ -630,7 +584,7 @@ export default function DocumentsPanel() {
             <option value="admin">行政部</option>
             <option value="general">通用</option>
           </select>
-          <button onClick={() => setUploadOpen(true)} className="px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors">+ 上传文档</button>
+          <button onClick={() => setUploadOpen(true)} className="min-w-[132px] flex-1 px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors sm:flex-none">+ 上传文档</button>
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4 text-[11px] text-text-muted">
@@ -672,8 +626,8 @@ export default function DocumentsPanel() {
         {/* Table */}
         {loading && <div className="bg-surface-base rounded-xl border border-border-subtle p-3 text-center text-xs text-text-muted animate-pulse mb-2">加载中...</div>}
         {error && <div className="bg-surface-base rounded-xl border border-red-200 p-3 text-center text-xs text-red-500 mb-2">{error}</div>}
-        <div className="bg-surface-base rounded-xl border border-border-subtle overflow-hidden">
-          <table className="w-full text-xs">
+        <div className="overflow-x-auto bg-surface-base rounded-xl border border-border-subtle">
+          <table className="w-full min-w-[1080px] text-xs">
             <thead><tr className="border-b border-border-subtle bg-surface-elevated text-text-muted">
               <th className="text-left px-4 py-2.5 w-8">
                 {documents.length > 0 && (
@@ -698,10 +652,10 @@ export default function DocumentsPanel() {
                       <span className="text-text-primary hover:text-accent transition-colors truncate max-w-[240px]">{d.name}</span>
                     </div>
                   </td>
-                  <td className="px-4 py-2.5 text-text-muted text-[10px]">{KB_LABELS[d.kb_id] || (d.kb_id !== 'default' ? d.kb_id : '-')}</td>
-                  <td className="px-4 py-2.5 text-text-muted text-[10px]">{DEPT_LABELS[d.department || ''] || d.department || '-'}</td>
-                  <td className="px-4 py-2.5 text-text-muted text-[10px]">{DOMAIN_CN[d.business_domain || ''] || d.business_domain || '-'}</td>
-                  <td className="px-4 py-2.5 text-text-muted">{DOC_TYPE_CN[d.doc_type || ''] || d.doc_type || '-'}</td>
+                  <td className="px-4 py-2.5 text-text-muted text-[10px]">{getKnowledgeBaseLabel(d.kb_id, kbOptions)}</td>
+                  <td className="px-4 py-2.5 text-text-muted text-[10px]">{getDepartmentLabel(d.department, kbOptions.flatMap(k => k.depts || []))}</td>
+                  <td className="px-4 py-2.5 text-text-muted text-[10px]">{getBusinessDomainLabel(d.business_domain)}</td>
+                  <td className="px-4 py-2.5 text-text-muted">{getDocumentTypeLabel(d.doc_type)}</td>
                   <td className="px-4 py-2.5">
                     <StatusBadge status={d.status} />
                     {(() => {
@@ -709,7 +663,7 @@ export default function DocumentsPanel() {
                       const legacyReport = (d.quality_issues || '').includes('legacy_quality_record_incomplete')
                       const title = legacyReport
                         ? '旧报告缺少分块完整性、内容覆盖和清洗覆盖检查；当前需复核，旧分数仅供参考。'
-                        : d.quality_issues || quality.title
+                        : getQualityIssueLabel(d.quality_issues) || quality.title
                       const scoreText = d.quality_score
                         ? `${legacyReport ? '旧分' : ''}${Number(d.quality_score).toFixed(0)}${legacyReport ? '' : '分'}`
                         : ''
@@ -717,7 +671,7 @@ export default function DocumentsPanel() {
                     })()}
                     {(d.processing_status || d.metadata_route || d.model_count) && (
                       <div className="mt-1 text-[10px] text-text-muted">
-                        {d.metadata_route ? `路由 ${d.metadata_route}` : '已处理'}
+                        {d.metadata_route ? '处理流程：' + getProcessingRouteLabel(d.metadata_route) : '已处理'}
                         {typeof d.model_count === 'number' ? ` · ${d.model_count} 个模型` : ''}
                       </div>
                     )}
@@ -728,14 +682,14 @@ export default function DocumentsPanel() {
                     )}
                   </td>
                   <td className="px-4 py-2.5 text-text-muted text-[10px]">
-                    {d.last_operation_at ? `${fmtDocTime(d.last_operation_at)} ${d.last_operation === 'upload' ? '上传' : d.last_operation === 'reindex' ? '重建' : d.last_operation === 'delete' ? '删除' : d.last_operation}` : '-'}
+                    {d.last_operation_at ? fmtDocTime(d.last_operation_at) + ' ' + getOperationLabel(d.last_operation) : '-'}
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-1">
                       <button onClick={(e) => handleStopPropagation(e, () => { void openChunkDetails({ id: d.id, name: d.name }) })} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看分块" aria-label={"查看分块：" + d.name}><Grid3X3 size={13} /></button>
                       <button onClick={(e) => handleStopPropagation(e, () => openProcessingTrace(d))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看 Trace / 运行记录" aria-label={"查看 Trace / 运行记录：" + d.name}><Activity size={13} /></button>
                       <button onClick={(e) => handleStopPropagation(e, () => openLineage({ id: d.id, name: d.name }))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看模型血缘"><Cpu size={13} /></button>
-                      <button onClick={(e) => handleStopPropagation(e, () => handleReindex(d.id, d.name))} disabled={reindexing.has(d.id)} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors disabled:opacity-50" title="重新解析">
+                      <button onClick={(e) => handleStopPropagation(e, () => handleReindex(d.id, d.name))} disabled={reindexing.has(d.id)} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors disabled:opacity-50" title="重新解析并重建索引">
                         {reindexing.has(d.id) ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                       </button>
                       <button onClick={(e) => handleStopPropagation(e, () => setDeleteTarget({ id: d.id, name: d.name }))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-red-500 transition-colors" title="删除"><Trash2 size={13} /></button>
@@ -766,7 +720,7 @@ export default function DocumentsPanel() {
 
     {chunkDoc && (
       <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={closeChunkDetails}>
-        <aside role="dialog" aria-modal="true" aria-label={"分块详情：" + chunkDoc.name} className="flex h-full w-full max-w-3xl flex-col overflow-hidden border-l border-border-subtle bg-surface-base shadow-xl" onClick={event => event.stopPropagation()}>
+        <aside role="dialog" aria-modal="true" aria-label={"分块详情：" + chunkDoc.name} className="flex h-full w-full max-w-[1440px] flex-col overflow-hidden border-l border-border-subtle bg-surface-base shadow-xl sm:w-[94vw] xl:w-[82vw]" onClick={event => event.stopPropagation()}>
           <header className="flex items-center gap-3 border-b border-border-subtle px-5 py-4">
             <Grid3X3 size={16} className="shrink-0 text-accent" />
             <div className="min-w-0">
@@ -775,7 +729,7 @@ export default function DocumentsPanel() {
             </div>
             <button onClick={closeChunkDetails} className="ml-auto rounded p-1 text-text-muted hover:bg-surface-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent" aria-label="关闭分块详情"><X size={15} /></button>
           </header>
-          <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
             {chunkLoading && <div className="flex items-center gap-2 py-8 text-xs text-text-muted"><Loader2 size={14} className="animate-spin" />正在读取分块与来源信息…</div>}
             {!chunkLoading && chunkError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">{chunkError}</div>}
             {!chunkLoading && !chunkError && chunkItems.length === 0 && <div className="py-8 text-center text-xs text-text-muted">该文档没有可查看的分块。</div>}
@@ -783,7 +737,7 @@ export default function DocumentsPanel() {
               const metadata = chunk.metadata || {}
               const entries = Object.entries(metadata)
               const metadataReturned = Object.prototype.hasOwnProperty.call(chunk, 'metadata')
-              const granularityLabel = chunk.granularity === 'parent' ? '父块' : chunk.granularity === 'leaf' ? '检索块' : chunk.granularity || '未记录'
+              const granularityLabel = getGranularityLabel(chunk.granularity)
               return (
                 <section key={chunk.chunk_id || chunk.chunk_index || index} className="mb-4 overflow-hidden rounded-xl border border-border-subtle">
                   <div className="flex flex-wrap items-start gap-2 border-b border-border-subtle bg-surface-elevated px-4 py-3">
@@ -797,12 +751,12 @@ export default function DocumentsPanel() {
                   </div>
                   <div className="space-y-3 p-4">
                     <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[10px]">
-                      <div><dt className="text-text-muted">知识库</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.kb_id || '-'}</dd></div>
-                      <div><dt className="text-text-muted">文档类型</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.doc_type || '-'}</dd></div>
-                      <div><dt className="text-text-muted">所属部门</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.department || '-'}</dd></div>
+                      <div><dt className="text-text-muted">知识库</dt><dd className="mt-0.5 break-all text-text-primary">{getKnowledgeBaseLabel(chunk.kb_id, kbOptions)}</dd></div>
+                      <div><dt className="text-text-muted">文档类型</dt><dd className="mt-0.5 break-all text-text-primary">{getDocumentTypeLabel(chunk.doc_type)}</dd></div>
+                      <div><dt className="text-text-muted">所属部门</dt><dd className="mt-0.5 break-all text-text-primary">{getDepartmentLabel(chunk.department, kbOptions.flatMap(k => k.depts || []))}</dd></div>
                       <div><dt className="text-text-muted">父块编号</dt><dd className="mt-0.5 break-all font-mono text-text-primary">{chunk.parent_chunk_id || '-'}</dd></div>
-                      <div><dt className="text-text-muted">块类型</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.chunk_type || '-'}</dd></div>
-                      <div><dt className="text-text-muted">父块范围</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.parent_scope || '-'}</dd></div>
+                      <div><dt className="text-text-muted">块类型</dt><dd className="mt-0.5 break-all text-text-primary">{getChunkTypeLabel(chunk.chunk_type)}</dd></div>
+                      <div><dt className="text-text-muted">父块范围</dt><dd className="mt-0.5 break-all text-text-primary">{getParentScopeLabel(chunk.parent_scope)}</dd></div>
                       <div className="col-span-2"><dt className="text-text-muted">覆盖章节</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.section_titles?.join('、') || chunk.section_title || '-'}</dd></div>
                     </dl>
                     <details open className="rounded-lg border border-border-subtle">
@@ -811,8 +765,8 @@ export default function DocumentsPanel() {
                         <dl className="grid grid-cols-1 gap-2 border-t border-border-subtle p-3 sm:grid-cols-2">
                           {entries.map(([key, value]) => (
                             <div key={key} className="min-w-0 rounded bg-surface-elevated px-2.5 py-2">
-                              <dt className="text-[10px] text-text-muted">{CHUNK_METADATA_LABELS[key] || key}</dt>
-                              <dd className="mt-1 break-all whitespace-pre-wrap font-mono text-[10px] text-text-primary">{formatChunkMetadata(value)}</dd>
+                              <dt className="text-[10px] text-text-muted">{getChunkMetadataLabel(key)}</dt>
+                              <dd className="mt-1 break-all whitespace-pre-wrap font-mono text-[10px] text-text-primary">{formatChunkMetadataValue(key, value)}</dd>
                             </div>
                           ))}
                         </dl>
@@ -862,7 +816,7 @@ export default function DocumentsPanel() {
               {lineageRuns.map(run => (
                 <button key={run.run_id} onClick={() => selectLineageRun(run.run_id)} className={`w-full text-left rounded-lg px-3 py-2 mb-1 transition-colors ${lineageDetail?.run_id === run.run_id ? 'bg-accent/10 text-accent' : 'hover:bg-surface-hover text-text-secondary'}`}>
                   <div className="text-[11px] font-mono truncate">{run.run_id}</div>
-                  <div className="text-[10px] mt-1 flex justify-between"><span>{run.status || '-'}</span><span>{fmtDocTime(run.started_at)}</span></div>
+                  <div className="text-[10px] mt-1 flex justify-between"><span>{getProcessingStatusLabel(run.status)}</span><span>{fmtDocTime(run.started_at)}</span></div>
                 </button>
               ))}
               {!lineageLoading && lineageRuns.length === 0 && <div className="text-[10px] text-text-muted px-2 py-5">暂无运行记录</div>}
@@ -871,13 +825,13 @@ export default function DocumentsPanel() {
               {lineageLoading && <div className="text-xs text-text-muted animate-pulse">加载血缘中...</div>}
               {!lineageLoading && lineageDetail && (
                 <>
-                  <div className="grid grid-cols-2 gap-2 mb-4 text-[10px]">
-                    <div className="rounded-lg bg-surface-elevated px-3 py-2"><span className="text-text-muted">Pipeline</span><div className="font-mono text-text-primary mt-1">{lineageDetail.pipeline_version || '-'}</div></div>
-                    <div className="rounded-lg bg-surface-elevated px-3 py-2"><span className="text-text-muted">Trace / Task</span><div className="font-mono text-text-primary mt-1 truncate">{lineageDetail.trace_id || lineageDetail.task_id || '-'}</div></div>
+                    <div className="grid grid-cols-2 gap-2 mb-4 text-[10px]">
+                    <div className="rounded-lg bg-surface-elevated px-3 py-2"><span className="text-text-muted">处理流水线版本</span><div className="font-mono text-text-primary mt-1">{lineageDetail.pipeline_version || '-'}</div></div>
+                    <div className="rounded-lg bg-surface-elevated px-3 py-2"><span className="text-text-muted">Trace / 任务 ID</span><div className="font-mono text-text-primary mt-1 truncate">{lineageDetail.trace_id || lineageDetail.task_id || '-'}</div></div>
                   </div>
-                  {!!lineageDetail.model_summary?.length && <div className="mb-5"><div className="text-xs font-medium text-text-primary mb-2">本次实际使用模型</div><div className="flex flex-wrap gap-2">{lineageDetail.model_summary.map((model: any, index: number) => <span key={`${model.role || model.stage}-${index}`} className="rounded-full bg-accent/10 text-accent px-2.5 py-1 text-[10px]">{model.stage || model.role}: {model.provider ? `${model.provider}/` : ''}{model.model_name || '-'}</span>)}</div></div>}
+                  {!!lineageDetail.model_summary?.length && <div className="mb-5"><div className="text-xs font-medium text-text-primary mb-2">本次实际使用模型</div><div className="flex flex-wrap gap-2">{lineageDetail.model_summary.map((model: any, index: number) => <span key={`${model.role || model.stage}-${index}`} className="rounded-full bg-accent/10 text-accent px-2.5 py-1 text-[10px]">{model.stage ? getProcessingStageLabel(model.stage) : getModelRoleLabel(model.role)}： {model.provider ? '供应商 ' + getProviderLabel(model.provider) + ' / ' : ''}{model.model_name || '-'}</span>)}</div></div>}
                   <div className="text-xs font-medium text-text-primary mb-2">阶段时间线</div>
-                   <div className="space-y-2">{(lineageDetail.steps || []).map((step: any) => <div key={step.step_id} className="rounded-lg border border-border-subtle px-3 py-2"><div className="flex items-center gap-2"><span className="text-xs font-medium text-text-primary">{PROCESSING_STAGE_CN[step.stage] || step.stage}</span><span className="text-[10px] text-text-muted">{step.role || step.engine_type || '-'}</span><span className="ml-auto text-[10px] text-text-muted">{PROCESSING_STATUS_CN[step.status] || step.status}</span></div><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-text-muted"><span>模型：<b className="font-mono text-text-secondary">{step.model_name ? `${step.provider ? `${step.provider}/` : ''}${step.model_name}` : (step.skip_reason || '确定性处理')}</b></span><span>输入/输出：{step.input_count ?? 0}/{step.output_count ?? 0}</span>{step.total_tokens ? <span>Token：{step.total_tokens}</span> : null}{step.duration_ms ? <span>耗时：{Math.round(step.duration_ms)}ms</span> : null}{step.cache_status && step.cache_status !== 'miss' ? <span>缓存：{step.cache_status}</span> : null}{step.prompt_version ? <span>Prompt：{step.prompt_version}</span> : null}{step.rules_version ? <span>规则：{step.rules_version}</span> : null}{step.taxonomy_version ? <span>Taxonomy：{step.taxonomy_version}</span> : null}</div></div>)}</div>
+                   <div className="space-y-2">{(lineageDetail.steps || []).map((step: any) => <div key={step.step_id} className="rounded-lg border border-border-subtle px-3 py-2"><div className="flex items-center gap-2"><span className="text-xs font-medium text-text-primary">{getProcessingStageLabel(step.stage)}</span><span className="text-[10px] text-text-muted">{getModelRoleLabel(step.role || step.engine_type)}</span><span className="ml-auto text-[10px] text-text-muted">{getProcessingStatusLabel(step.status)}</span></div><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-text-muted"><span>模型：<b className="font-mono text-text-secondary">{step.model_name ? `${step.provider ? '供应商 ' + getProviderLabel(step.provider) + ' / ' : ''}${step.model_name}` : getProcessingCodeLabel(step.skip_reason) + '（未调用模型）'}</b></span><span>输入/输出：{step.input_count ?? 0}/{step.output_count ?? 0}</span>{step.total_tokens ? <span>词元数：{step.total_tokens}</span> : null}{step.duration_ms ? <span>耗时：{Math.round(step.duration_ms)} 毫秒</span> : null}{step.cache_status && step.cache_status !== 'miss' ? <span>缓存：{getCacheStatusLabel(step.cache_status)}</span> : null}{step.prompt_version ? <span>提示词版本：{step.prompt_version}</span> : null}{step.rules_version ? <span>规则版本：{step.rules_version}</span> : null}{step.taxonomy_version ? <span>分类体系版本：{step.taxonomy_version}</span> : null}</div></div>)}</div>
                 </>
               )}
             </div>
@@ -927,6 +881,6 @@ export default function DocumentsPanel() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const config = STATUS_CONFIG[status] || STATUS_CONFIG.active
+  const config = STATUS_CONFIG[status] || STATUS_CONFIG.unknown
   return <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${config.className}`}>{config.label}</span>
 }

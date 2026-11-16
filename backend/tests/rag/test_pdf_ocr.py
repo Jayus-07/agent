@@ -218,11 +218,17 @@ class TestPdfParserOcrFallback:
             ocr_mod, "get_ocr_model_identity",
             lambda: SimpleNamespace(provider="rapidocr"),
         )
+        base_dpi = 180
+        retry_dpi = 360
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_DPI", base_dpi)
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_RETRY_DPI", retry_dpi)
 
         ast = PdfParser().parse(pdf)
 
         assert len(calls) == 2
-        assert calls[1][0] > calls[0][0]
+        # PyMuPDF 以 PDF 点换算像素，边界取整可能相差 1 像素。
+        expected_width = round(calls[0][0] * retry_dpi / base_dpi)
+        assert abs(calls[1][0] - expected_width) <= 1
         assert ast.ocr_failed_page_numbers == []
         assert ast.ocr_pages == 1
         assert any(
@@ -700,6 +706,39 @@ def test_precheck_rejects_scanned_pdf_when_ocr_off(upload_env, tmp_path, monkeyp
     ))
     assert res["ok"] is False
     assert "文本层" in res["error"]
+
+
+def test_upload_precheck_uses_ocr_threshold_and_checks_past_first_ten_pages(tmp_path):
+    """预检复用解析阈值，并在解析页数预算内检查完整 PDF。"""
+    import fitz
+    from backend.app.api.routes.rag_upload import _pdf_has_text_layer
+
+    threshold = pdf_parser_mod.RAG_OCR_MIN_TEXT_CHARS
+    late_text_path = tmp_path / "late-text-layer.pdf"
+    doc = fitz.open()
+    for page_number in range(12):
+        page = doc.new_page()
+        if page_number == 11:
+            page.insert_text((72, 72), "可提取文本" * (threshold // 5 + 2))
+    doc.save(str(late_text_path))
+    doc.close()
+    assert _pdf_has_text_layer(str(late_text_path)) is True
+
+    short_text_path = _make_pdf(
+        tmp_path,
+        "below-ocr-threshold.pdf",
+        pages=1,
+        text="短" * (threshold - 1),
+    )
+    assert _pdf_has_text_layer(short_text_path) is False
+
+    enough_text_path = _make_pdf(
+        tmp_path,
+        "at-ocr-threshold.pdf",
+        pages=1,
+        text="字" * threshold,
+    )
+    assert _pdf_has_text_layer(enough_text_path) is True
 
 
 # ============ 云端按页缓存 + 限流（D6 ③，2026-09-17）============

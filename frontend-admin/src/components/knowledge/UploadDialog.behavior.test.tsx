@@ -15,6 +15,12 @@ const mocks = vi.hoisted(() => ({
   },
 }))
 
+const READY_HEALTH = {
+  ready: true,
+  upload_sse_max_duration_seconds: 300,
+  upload_sse_idle_timeout_seconds: 120,
+}
+
 vi.mock('@/api/knowledge', () => ({
   knowledgeService: { uploadDocument: mocks.uploadDocument },
 }))
@@ -48,11 +54,48 @@ function mount(open: boolean, onClose: () => void, onSuccess: () => void) {
 }
 
 describe('UploadDialog 后台上传体验', () => {
+  it('健康接口未返回上传时限时禁止启动上传', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      if (url.includes('knowledge-bases')) {
+        return new Response(JSON.stringify({
+          knowledge_bases: [{
+            id: 'policy_general',
+            name: '政策库',
+            depts: [{ id: 'general', label: '通用' }],
+          }],
+        }), { status: 200 })
+      }
+      throw new Error('健康接口不可用')
+    })
+
+    const { root, container } = mount(true, vi.fn(), vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [new File(['fixture'], 'report.pdf')],
+    })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    const uploadButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('读取服务端上传设置'))
+    expect(uploadButton?.disabled).toBe(true)
+    expect(container.textContent).toContain('正在读取服务端上传进度时限')
+
+    act(() => uploadButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(mocks.uploadDocument).not.toHaveBeenCalled()
+
+    act(() => root.unmount())
+  })
+
   it('关闭窗口后保留上传任务，并通知受理和最终结果', async () => {
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')
         ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
-        : { ready: true }
+        : { ...READY_HEALTH }
       return new Response(JSON.stringify(body), { status: 200 })
     })
 
@@ -116,7 +159,7 @@ describe('UploadDialog 后台上传体验', () => {
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')
         ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
-        : { ready: true }
+        : { ...READY_HEALTH }
       return new Response(JSON.stringify(body), { status: 200 })
     })
     mocks.uploadDocument.mockResolvedValue({
@@ -162,7 +205,7 @@ describe('UploadDialog 后台上传体验', () => {
               ] },
             ],
           }
-        : { ready: true }
+        : { ...READY_HEALTH }
       return new Response(JSON.stringify(body), { status: 200 })
     })
 
@@ -188,10 +231,11 @@ describe('UploadDialog 后台上传体验', () => {
   })
 
   it('超限文件选择即拒：过滤 + 提示，不再进入上传流程（2026-11-10 评审）', async () => {
+    const maxFileSizeMb = 50
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')
         ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
-        : { ready: true }
+        : { ...READY_HEALTH, max_file_size_mb: maxFileSizeMb }
       return new Response(JSON.stringify(body), { status: 200 })
     })
 
@@ -201,8 +245,8 @@ describe('UploadDialog 后台上传体验', () => {
     const input = container.querySelector('input[type="file"]') as HTMLInputElement
     const smallFile = new File(['small'], 'ok.md')
     const bigFile = new File(['big'], 'huge.pdf')
-    // File.size 只读，测试里伪造超大体积（50MB 上限 + 1 字节）
-    Object.defineProperty(bigFile, 'size', { value: 50 * 1024 * 1024 + 1 })
+    // File.size 只读，测试里伪造超大体积（健康接口上限 + 1 字节）
+    Object.defineProperty(bigFile, 'size', { value: maxFileSizeMb * 1024 * 1024 + 1 })
     Object.defineProperty(input, 'files', {
       configurable: true,
       value: [smallFile, bigFile],
@@ -213,7 +257,7 @@ describe('UploadDialog 后台上传体验', () => {
 
     // 超限文件被过滤，合规文件保留，错误提示出现
     expect(container.textContent).toContain('huge.pdf')
-    expect(container.textContent).toContain(`超过 50MB 上限`)
+    expect(container.textContent).toContain(`超过 ${maxFileSizeMb} MB 上限`)
     const uploadButton = Array.from(container.querySelectorAll('button'))
       .find(button => button.textContent?.includes('上传并索引'))
     expect(uploadButton).toBeTruthy()
@@ -232,7 +276,7 @@ describe('UploadDialog 后台上传体验', () => {
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')
         ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
-        : { ready: true }
+        : { ...READY_HEALTH }
       return new Response(JSON.stringify(body), { status: 200 })
     })
 
@@ -267,7 +311,7 @@ describe('UploadDialog 后台上传体验', () => {
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')
         ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
-        : { ready: true }
+        : { ...READY_HEALTH }
       return new Response(JSON.stringify(body), { status: 200 })
     })
     let captureProgress!: (stage: string, message: string) => void
@@ -292,14 +336,15 @@ describe('UploadDialog 后台上传体验', () => {
       await Promise.resolve()
     })
 
-    // 未知 stage（后端新增键）→ 显示原始 key + 阶段全点亮（A3 兜底）
+    // 未知 stage（后端新增键）→ 使用中文兜底标签 + 阶段全点亮（A3 兜底）
     await act(async () => { captureProgress('brand_new_stage', '新阶段处理中') })
-    expect(container.textContent).toContain('brand_new_stage…')
+    expect(container.textContent).toContain('其他处理阶段…')
+    expect(container.textContent).not.toContain('brand_new_stage')
     expect(container.textContent).toContain('新阶段处理中')
 
     // 已知 stage → 显示中文 label 而非 key
     await act(async () => { captureProgress('chunking', '正在切分') })
-    expect(container.textContent).toContain('Chunk 切分…')
+    expect(container.textContent).toContain('文本切分…')
     expect(container.textContent).toContain('正在切分')
     act(() => root.unmount())
   })
@@ -323,7 +368,7 @@ describe('UploadDialog 后台上传体验', () => {
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')
         ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
-        : { ready: true }
+        : { ...READY_HEALTH }
       return new Response(JSON.stringify(body), { status: 200 })
     })
 
@@ -377,7 +422,7 @@ describe('UploadDialog 后台上传体验', () => {
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')
         ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
-        : { ready: true }
+        : { ...READY_HEALTH }
       return new Response(JSON.stringify(body), { status: 200 })
     })
     mocks.uploadDocument
@@ -411,7 +456,7 @@ describe('UploadDialog 后台上传体验', () => {
       if (url.includes('knowledge-bases')) {
         return new Response(JSON.stringify({ detail: '知识库或部门目录暂不可用' }), { status: 503 })
       }
-      return new Response(JSON.stringify({ ready: true }), { status: 200 })
+      return new Response(JSON.stringify(READY_HEALTH), { status: 200 })
     })
 
     const { root, container } = mount(true, vi.fn(), vi.fn())
@@ -456,7 +501,7 @@ describe('UploadDialog 后台上传体验', () => {
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')
         ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
-        : { ready: true }
+        : { ...READY_HEALTH }
       return new Response(JSON.stringify(body), { status: 200 })
     })
     const onClose = vi.fn()
@@ -480,7 +525,7 @@ describe('UploadDialog 后台上传体验', () => {
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')
         ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
-        : { ready: true }
+        : { ...READY_HEALTH }
       return new Response(JSON.stringify(body), { status: 200 })
     })
     const { root, container, onClose } = await mountUploading()
@@ -497,11 +542,11 @@ describe('UploadDialog 后台上传体验', () => {
     act(() => root.unmount())
   })
 
-  it('#7 批量选择 >20 文件时提示分批（不阻断）', async () => {
+  it('#7 批量选择超过 20 个文件仍全部保留（不设未经配置的批量提示）', async () => {
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')
         ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
-        : { ready: true }
+        : { ...READY_HEALTH }
       return new Response(JSON.stringify(body), { status: 200 })
     })
     const { root, container } = mount(true, vi.fn(), vi.fn())
@@ -517,9 +562,9 @@ describe('UploadDialog 后台上传体验', () => {
       await Promise.resolve()
     })
 
-    expect(container.textContent).toContain('建议分批')
     // 不阻断：21 个文件全部进入待上传列表
     expect(container.textContent).toContain('（21 个文件）')
+    expect(container.textContent).not.toContain('建议分批')
     act(() => root.unmount())
   })
 })

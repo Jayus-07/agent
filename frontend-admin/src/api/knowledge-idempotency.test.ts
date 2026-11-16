@@ -11,6 +11,9 @@ vi.mock("@/api/client", () => apiMock);
 
 import { knowledgeService } from "./knowledge";
 
+const TEST_SSE_DURATION_SECONDS = 300;
+const TEST_SSE_IDLE_TIMEOUT_SECONDS = 120;
+
 describe("knowledgeService 上传幂等接线", () => {
   beforeEach(() => {
     apiMock.fetchRaw.mockReset();
@@ -24,6 +27,14 @@ describe("knowledgeService 上传幂等接线", () => {
   it("上传请求使用稳定幂等键，并在服务端拒绝时不建立第二条 SSE 请求", async () => {
     const result = await knowledgeService.uploadDocument(
       new File(["content"], "policy.pdf", { type: "application/pdf" }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      TEST_SSE_DURATION_SECONDS,
+      TEST_SSE_IDLE_TIMEOUT_SECONDS,
     );
 
     expect(result).toEqual({ ok: false, error: "校验失败" });
@@ -59,6 +70,7 @@ describe("knowledgeService 上传幂等接线", () => {
 
     const result = await knowledgeService.uploadDocument(
       file, undefined, undefined, undefined, undefined, onAccepted,
+      undefined, TEST_SSE_DURATION_SECONDS, TEST_SSE_IDLE_TIMEOUT_SECONDS,
     );
 
     expect(result.ok).toBe(true);
@@ -69,13 +81,14 @@ describe("knowledgeService 上传幂等接线", () => {
     const file = new File(["pdf"], "long-scan.pdf", { type: "application/pdf" });
 
     await knowledgeService.uploadDocument(
-      file, undefined, undefined, "policy_general", "general", undefined, 200,
+      file, undefined, undefined, "policy_general", "general", undefined, 100,
+      TEST_SSE_DURATION_SECONDS, TEST_SSE_IDLE_TIMEOUT_SECONDS,
     );
 
     const [, options] = apiMock.mutationFetchRaw.mock.calls[0];
     expect(options.body).toBeInstanceOf(FormData);
-    expect((options.body as FormData).get("ocr_page_budget")).toBe("200");
-    expect(options.dedupeKey).toContain("200");
+    expect((options.body as FormData).get("ocr_page_budget")).toBe("100");
+    expect(options.dedupeKey).toContain("100");
   });
 
   it("操作日志请求错误继续向调用方抛出", async () => {

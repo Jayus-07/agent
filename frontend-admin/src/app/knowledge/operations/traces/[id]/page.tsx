@@ -21,6 +21,15 @@ import {
 } from "../trace-metrics";
 import ProcessingRunDetailView from "../processing-run-detail";
 import {
+  getAdminErrorLabel,
+  getBusinessDomainLabel,
+  getChunkStrategyLabel,
+  getDocumentTypeLabel,
+  getModelRoleLabel,
+  getOperationLabel,
+  getProcessingStatusLabel,
+} from "@/lib/knowledge-display";
+import {
   getChunkHeading,
   SIMULATED_QUESTIONS_LABEL,
 } from "../chunk-detail-labels";
@@ -28,10 +37,10 @@ import {
 const SPAN_LABELS: Record<string, { label: string; order: number }> = {
   load: { label: "文件加载", order: 1 }, parse: { label: "解析文档", order: 2 },
   clean: { label: "数据清洗", order: 3 }, dedup: { label: "去重检查", order: 4 },
-  chunk: { label: "文本分块", order: 5 }, llm: { label: "元数据生成", order: 6 },
+  chunk: { label: "文本分块", order: 5 }, llm: { label: "大模型元数据生成", order: 6 },
   embedding: { label: "向量嵌入", order: 7 }, vector_db: { label: "写入向量库", order: 8 },
   workflow: { label: "索引编排", order: 0 },
-  llm_call: { label: "LLM 调用", order: 6.5 },
+  llm_call: { label: "大模型调用", order: 6.5 },
   stage: { label: "内部阶段", order: 99 },
 };
 function spanOrder(s: Span): number { return SPAN_LABELS[s.type]?.order ?? 99; }
@@ -48,35 +57,7 @@ function normalizeKeywords(arr: unknown): {word: string; source: string}[] {
 }
 
 const STRATEGY_LABEL = (s: string, llm: boolean, rule: boolean) => {
-  if (!llm && rule) return "规则"; if (llm && rule) return "LLM/规则"; if (llm && !rule) return "LLM"; return "";
-};
-
-const DOC_TYPE_CN: Record<string, string> = {
-  compliance: "合规文档", policy: "制度文档", legal: "法律文档", financial: "财务文档",
-  faq: "常见问题", product_spec: "商品规格", listing: "商品上架", sop: "操作流程",
-  training: "培训文档", ad_policy: "广告政策", security: "安全文档",
-  customer_data: "客户数据", contract_template: "合同模板", general: "通用文档",
-  travel_guide: "旅游指南",
-};
-
-const BUSINESS_DOMAIN_CN: Record<string, string> = {
-  product: "商品", order: "订单", inventory: "库存", logistics: "物流",
-  advertising: "广告", customer: "客户", supplier: "供应商", analytics: "数据分析",
-  data: "数据治理", financial: "财务", hr: "人事", travel: "旅游", general: "通用",
-};
-
-const CHUNK_STRATEGY_CN: Record<string, string> = {
-  "ManualPolicyChunkStrategy": "制度/规范文档", "ProjectReportChunkStrategy": "项目/报告",
-  "QAChunkStrategy": "FAQ 问答", "GeneralChunkStrategy": "通用",
-  "ManualChunkStrategy": "操作手册", "ContractChunkStrategy": "合同条款",
-};
-const CHUNK_METHOD_CN: Record<string, string> = {
-  "ManualPolicyChunkStrategy": "按章节标题切分（#、第X章、一、），超长段(>2000字)递归子分块",
-  "ProjectReportChunkStrategy": "按 Markdown 标题切分（#/##/###），保留 Header 层级元数据，超长段(>1500字)子分块",
-  "QAChunkStrategy": "按 Q&A 边界切分（Q:/问:/【问】），一问一答一条 chunk",
-  "GeneralChunkStrategy": "递归分割（\\n\\n→\\n→。→.→空格），固定 chunk_size=1000, overlap=100",
-  "ManualChunkStrategy": "按步骤编号切分（步骤1、Step 1、①、1.），保持步骤完整，超长步骤(>3000字)才子分块",
-  "ContractChunkStrategy": "按条款边界切分（第X条、Article X、§X），禁止跨条款切割，短条款(<2000字)合并",
+  if (!llm && rule) return "规则"; if (llm && rule) return "大模型 / 规则"; if (llm && !rule) return "大模型"; return "";
 };
 
 interface ChunkDetail { chunk_index: number; content: string; char_count: number; keywords: string; llm_keywords?: string; llm_model?: string; granularity?: string; parent_scope?: string; document_title?: string; section_title?: string; section_titles?: string[]; chunk_type?: string; doc_type?: string; simulated_questions?: string[]; }
@@ -133,7 +114,7 @@ export default function DocTracePage() {
           ? getRegistryDocumentIdentityError(
             detail, documentIdParam, documentName || undefined, fileHashParam || undefined,
           )
-          : String(response?.error || "文档登记详情读取失败");
+          : getAdminErrorLabel(String(response?.error || "文档登记详情读取失败"));
         if (cancelled) return;
         if (!detail) {
           setRegistryDocument(null);
@@ -179,12 +160,12 @@ export default function DocTracePage() {
       }
 
       if (!allowHistoryFallback) {
-        if (!cancelled) setProcessingRunError(firstError || "处理运行与 Trace 未通过身份核验");
+        if (!cancelled) setProcessingRunError(firstError ? getAdminErrorLabel(firstError) : "处理运行与 Trace 未通过身份核验");
         return;
       }
       if (!fileHashParam) {
         if (!cancelled) {
-          setProcessingRunError(firstError || "文件未提供 SHA-256，无法核对历史处理版本");
+          setProcessingRunError(firstError ? getAdminErrorLabel(firstError) : "文件未提供 SHA-256，无法核对历史处理版本");
         }
         return;
       }
@@ -223,7 +204,7 @@ export default function DocTracePage() {
         if (!cancelled) {
           setProcessingRunError(
             firstError
-              ? `${firstError}；未找到 SHA 一致且保存了阶段的历史运行`
+              ? `${getAdminErrorLabel(firstError)}；未找到 SHA 一致且保存了阶段的历史运行`
               : "未找到与当前文件 SHA 一致且保存了阶段明细的处理运行",
           );
         }
@@ -231,7 +212,7 @@ export default function DocTracePage() {
         if (!cancelled) {
           setProcessingRunError(
             firstError
-              ? `${firstError}；历史处理记录读取失败`
+              ? `${getAdminErrorLabel(firstError)}；历史处理记录读取失败`
               : "历史处理记录读取失败",
           );
         }
@@ -339,7 +320,6 @@ export default function DocTracePage() {
     if(trace){const performanceWarning=getMetadataPerformanceWarning(
       getMetadataStageDuration(trace.spans||[],trace.root_span_id),trace.duration_ms,
     ); if(performanceWarning) items.push(performanceWarning);}
-    if(overview.fileSize>0&&overview.fileSize<500) items.push(`文档过短 (${overview.fileSize} bytes)`);
     return items;
   }, [overview, trace]);
 
@@ -393,12 +373,12 @@ export default function DocTracePage() {
     { label: "run_id", value: processingRun?.run_id || (runIdParam ? "未核验" : "未记录") },
     { label: "文件 SHA-256", value: processingRun?.file_hash || (fileHashParam ? "未核验" : "未记录") },
     { label: "文档登记 SHA-256", value: registryFileHash || "未核验" },
-    { label: "处理操作", value: processingRun?.operation || "未记录" },
-    { label: "处理状态", value: processingRun?.status || (runIdParam ? "未核验" : "未记录") },
+    { label: "处理操作", value: getOperationLabel(processingRun?.operation) },
+    { label: "处理状态", value: processingRun ? getProcessingStatusLabel(processingRun.status) : (runIdParam ? "未核验" : "未记录") },
     { label: "处理开始", value: processingRun?.started_at ? formatTime(processingRun.started_at) : "未记录" },
     { label: "处理结束", value: processingRun?.finished_at ? formatTime(processingRun.finished_at) : "未记录" },
-    { label: "SLA 阈值", value: traceSla ? `${traceSla.threshold_ms} ms` : "未记录" },
-    { label: "SLA 结果", value: traceSla ? (traceSla.breached ? "已超限" : "未超限") : "未记录" },
+    { label: "服务时限阈值", value: traceSla ? `${traceSla.threshold_ms} 毫秒` : "未记录" },
+    { label: "服务时限判定", value: traceSla ? (traceSla.breached ? "已超限" : "未超限") : "未记录" },
   ];
   const identityWarnings = [
     documentIdentityError,
@@ -407,7 +387,7 @@ export default function DocTracePage() {
     !fileHashParam ? "入口未提供文件 SHA-256，无法核对文件版本" : "",
   ]
     .filter(Boolean);
-  const handleOpenChunkDetail = async () => { if(!docId)return; setChunkPanelOpen(true);setChunkDetailLoading(true);setChunkDetailError(""); try{const res=await knowledgeService.getChunkDetail(docId); setChunkDetailData((res as any)?.chunks??(res as any)?.data?.chunks??[]);}catch(e){setChunkDetailError((e as Error).message);}finally{setChunkDetailLoading(false);} };
+  const handleOpenChunkDetail = async () => { if(!docId)return; setChunkPanelOpen(true);setChunkDetailLoading(true);setChunkDetailError(""); try{const res=await knowledgeService.getChunkDetail(docId); setChunkDetailData((res as any)?.chunks??(res as any)?.data?.chunks??[]);}catch(e){setChunkDetailError(getAdminErrorLabel((e as Error).message));}finally{setChunkDetailLoading(false);} };
 
   if(loading) return <div className="flex-1 flex items-center justify-center"><p className="text-sm text-slate-400">加载中…</p></div>;
   if (!trace && processingRun) {
@@ -499,22 +479,22 @@ export default function DocTracePage() {
           )}
         </section>
         <div className="grid grid-cols-4 gap-2 mb-2">
-          {[{label:'文件大小',value:overview.fileSize>0?`${(overview.fileSize/1024).toFixed(1)}KB`:'-',sub:`${overview.fileSize} bytes`},{label:'Chunks',value:overview.chunkCount>0?String(overview.chunkCount):'-',sub:'文本分块数'},{label:'Tokens',value:overview.totalTokens>0?overview.totalTokens.toLocaleString():'-',sub:'prompt+completion'},{label:'成本',value:traceCost.value,sub:traceCost.detail}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 font-mono">{c.value}</div><div className="text-[9px] text-slate-400">{c.sub}</div></div>))}
+          {[{label:'文件大小',value:overview.fileSize>0?`${(overview.fileSize/1024).toFixed(1)} KB`:'-',sub:`${overview.fileSize} 字节`},{label:'文本分块数',value:overview.chunkCount>0?String(overview.chunkCount):'-',sub:'文本分块数'},{label:'词元数',value:overview.totalTokens>0?overview.totalTokens.toLocaleString():'-',sub:'输入与输出词元数'},{label:'成本',value:traceCost.value,sub:traceCost.detail}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 font-mono">{c.value}</div><div className="text-[9px] text-slate-400">{c.sub}</div></div>))}
         </div>
         <div className="grid grid-cols-4 gap-2">
-          {[{label:'文档类型',value:DOC_TYPE_CN[overview.docType]||overview.docType||'未记录'},{label:'业务领域',value:BUSINESS_DOMAIN_CN[overview.businessDomain]||overview.businessDomain||'未记录'},{label:'模型',value:overview.model||trace.model?.name||'-',sub:overview.models.length>0?`${overview.models.length} 个模型 · ${overview.llmCalls} 次调用`:undefined},{label:'总耗时',value:trace.duration_ms>0?`${(trace.duration_ms/1000).toFixed(1)}s`:'-',sub:`${childSpans.length} spans · ${trace.id?.slice(0,8)}`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 truncate">{c.value}</div>{c.sub&&<div className="text-[9px] text-slate-400">{c.sub}</div>}{c.label==='模型'&&overview.models.length>1&&<div className="mt-1 pt-1 border-t border-slate-100 space-y-0.5">{overview.models.map(m=>(<div key={m.component+m.model} className="flex items-center justify-between gap-2 text-[9px]"><span className="text-slate-500 truncate">{m.component}: {m.model}</span><span className="font-mono text-slate-400 shrink-0">{m.total_tokens.toLocaleString()} tok{m.cost_cny>0?` · ¥${m.cost_cny.toFixed(4)}`:''}</span></div>))}</div>}</div>))}
+          {[{label:'文档类型',value:getDocumentTypeLabel(overview.docType)},{label:'业务领域',value:getBusinessDomainLabel(overview.businessDomain)},{label:'模型',value:overview.model||trace.model?.name||'-',sub:overview.models.length>0?`${overview.models.length} 个模型 · ${overview.llmCalls} 次调用`:undefined},{label:'总耗时',value:trace.duration_ms>0?`${(trace.duration_ms/1000).toFixed(1)} 秒`:'-',sub:`${childSpans.length} 个处理阶段 · ${trace.id?.slice(0,8)}`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 truncate">{c.value}</div>{c.sub&&<div className="text-[9px] text-slate-400">{c.sub}</div>}{c.label==='模型'&&overview.models.length>1&&<div className="mt-1 pt-1 border-t border-slate-100 space-y-0.5">{overview.models.map(m=>(<div key={m.component+m.model} className="flex items-center justify-between gap-2 text-[9px]"><span className="text-slate-500 truncate">{getModelRoleLabel(m.component)}: {m.model}</span><span className="font-mono text-slate-400 shrink-0">{m.total_tokens.toLocaleString()} 个词元{m.cost_cny>0?` · ¥${m.cost_cny.toFixed(4)}`:''}</span></div>))}</div>}</div>))}
         </div>
       </div>
 
-      {/* Pipeline 耗时分布 */}
-      {pipelineGroups.length>0&&trace.duration_ms>0&&(<div className="bg-white border border-slate-200 rounded-xl p-5"><h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">⏱ Pipeline 耗时分布</h2><p className="text-[9px] text-slate-400 mb-3">口径：根 Span 的逻辑阶段耗时 / Trace 墙钟总耗时；嵌套调用不重复累加。</p><div className="space-y-1.5">{pipelineGroups.map(({type,totalMs})=>{const info=SPAN_LABELS[type]??{label:type,order:99};const pct=(totalMs/trace.duration_ms)*100;const isHot=pct>30;const barColor=isHot?'bg-amber-400':pct>10?'bg-blue-400':'bg-slate-300';return(<div key={type} className="flex items-center gap-2 text-xs"><span className="w-20 text-slate-500 text-right shrink-0">{info.label}</span><div className="flex-1 bg-slate-100 rounded-full h-4 overflow-hidden"><div className={`h-full rounded-full transition-all ${barColor}`} style={{width:`${Math.min(Math.max(pct,0.5),100)}%`,minWidth:pct>0?'4px':'0'}} /></div><span className="w-20 text-right font-mono text-slate-600 shrink-0">{totalMs}ms</span><span className="w-10 text-right text-slate-400 shrink-0">{pct.toFixed(0)}%</span></div>);})}</div></div>)}
+      {/* 处理阶段耗时分布 */}
+      {pipelineGroups.length>0&&trace.duration_ms>0&&(<div className="bg-white border border-slate-200 rounded-xl p-5"><h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">⏱ 处理阶段耗时分布</h2><p className="text-[9px] text-slate-400 mb-3">口径：根 Span 的逻辑阶段耗时 / Trace 墙钟总耗时；嵌套调用不重复累加。</p><div className="space-y-1.5">{pipelineGroups.map(({type,totalMs})=>{const info=SPAN_LABELS[type]??{label:type,order:99};const pct=(totalMs/trace.duration_ms)*100;const isHot=pct>30;const barColor=isHot?'bg-amber-400':pct>10?'bg-blue-400':'bg-slate-300';return(<div key={type} className="flex items-center gap-2 text-xs"><span className="w-20 text-slate-500 text-right shrink-0">{info.label}</span><div className="flex-1 bg-slate-100 rounded-full h-4 overflow-hidden"><div className={`h-full rounded-full transition-all ${barColor}`} style={{width:`${Math.min(Math.max(pct,0.5),100)}%`,minWidth:pct>0?'4px':'0'}} /></div><span className="w-20 text-right font-mono text-slate-600 shrink-0">{totalMs} 毫秒</span><span className="w-10 text-right text-slate-400 shrink-0">{pct.toFixed(0)}%</span></div>);})}</div></div>)}
 
       {/* 处理流水线 */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <div className="px-5 py-3 border-b border-slate-100"><h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider">📦 处理流水线</h2></div>
         <div className="divide-y divide-slate-50">
           {typeGroups.map(([type,spans])=>{
-            const info=SPAN_LABELS[type]??{label:spans[0]?.name||type,order:99};
+            const info=SPAN_LABELS[type]??{label:"其他处理阶段",order:99};
             const logicalStageMs=pipelineGroups.find(group=>group.type===type)?.totalMs;
             const totalMs=logicalStageMs??spans.reduce((sum,s)=>sum+(s.duration_ms||0),0);
             const hasError=spans.some(s=>s.status==="error"); const hasSkipped=spans.some(s=>s.status==="skipped");
@@ -522,10 +502,10 @@ export default function DocTracePage() {
             const expanded=expandedTypes.has(type); const summary=summaryMetrics(spans);
 
             // clean
-            if(type==="clean"){const s=spans[0];const metrics=s.metrics||{};const cb=metrics.chars_before as number||0;const ca=metrics.chars_after as number||0;const ops=metrics.operations as string||"";const errMsg=metrics.error as string||"";const reduction=cb>0?(1-ca/cb)*100:0;const isNoop=cb>0&&cb===ca;return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>{ops&&ops!=="none"&&<span className="text-xs text-slate-400 truncate">{ops}</span>}{isNoop&&!hasError&&<span className="text-[10px] text-slate-300 shrink-0">（文本已规范，无需清洗）</span>}</div><div className="ml-9 space-y-1 text-xs">{hasError?<div className="text-red-600 bg-red-50 rounded px-2 py-1 font-mono text-[11px]">❌ 清洗失败：{errMsg||"未知错误"}（已降级使用原始文本继续）</div>:<>{cb>0&&<div className="text-slate-500">清洗前 <span className="font-mono text-slate-600">{cb.toLocaleString()}</span> 字符 → 清洗后 <span className="font-mono text-slate-600">{ca.toLocaleString()}</span> 字符<span className={`ml-1 ${isNoop?"text-slate-300":"text-slate-400"}`}>（{reduction.toFixed(1)}% 缩减）</span></div>}</>}</div></div>);}
+            if(type==="clean"){const s=spans[0];const metrics=s.metrics||{};const cb=metrics.chars_before as number||0;const ca=metrics.chars_after as number||0;const ops=metrics.operations as string||"";const errMsg=metrics.error as string||"";const reduction=cb>0?(1-ca/cb)*100:0;const isNoop=cb>0&&cb===ca;return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs} 毫秒</span>{ops&&ops!=="none"&&<span className="text-xs text-slate-400 truncate">{ops}</span>}{isNoop&&!hasError&&<span className="text-[10px] text-slate-300 shrink-0">（文本已规范，无需清洗）</span>}</div><div className="ml-9 space-y-1 text-xs">{hasError?<div className="text-red-600 bg-red-50 rounded px-2 py-1 font-mono text-[11px]">❌ 清洗失败：{errMsg||"未知错误"}（已降级使用原始文本继续）</div>:<>{cb>0&&<div className="text-slate-500">清洗前 <span className="font-mono text-slate-600">{cb.toLocaleString()}</span> 字符 → 清洗后 <span className="font-mono text-slate-600">{ca.toLocaleString()}</span> 字符<span className={`ml-1 ${isNoop?"text-slate-300":"text-slate-400"}`}>（{reduction.toFixed(1)}% 缩减）</span></div>}</>}</div></div>);}
 
             // chunk
-            if(type==="chunk"){const fs=spans[0];const output=(fs?.output||{}) as Record<string,unknown>;const preview=(output["preview"] as string[])||[];const total=(output["total"] as number)||(fs?.metrics?.kept_chunks as number)||0;const rawChunks=fs?.metrics?.raw_chunks as number||0;const filteredOut=fs?.metrics?.filtered_out as number||0;const strategy=(output["strategy"] as string)||"";const strategyCN=CHUNK_STRATEGY_CN[strategy]||strategy;return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span><span className="text-xs text-slate-400">切分 <span className="font-mono text-slate-600">{total}</span> 块{rawChunks>0&&<span className="text-slate-400 ml-1">（原始 {rawChunks}{filteredOut>0?`，过滤 ${filteredOut}`:""}）</span>}</span>{docId&&total>0&&<button onClick={handleOpenChunkDetail} className="ml-auto text-xs text-accent hover:text-accent-hover hover:underline">📋 查看完整内容 →</button>}</div>{strategy&&<div className="ml-9 mb-2 text-[10px] text-slate-400"><span>✂️ 切分方案: </span><span className="text-slate-600 font-medium">{strategyCN||'—'}</span>{strategy&&CHUNK_METHOD_CN[strategy]&&<div className="text-[9px] text-slate-400 mt-0.5">切法: {CHUNK_METHOD_CN[strategy]}</div>}</div>}{preview.length>0&&<div className="ml-9 space-y-1 mb-2">{preview.map((text,i)=>(<div key={i} className="text-xs text-slate-500 bg-slate-50 rounded px-2 py-1 truncate"><span className="text-slate-300 mr-1">预览块 {i+1}</span>{text.slice(0,120)}{text.length>120?"…":""}</div>))}</div>}</div>);}
+            if(type==="chunk"){const fs=spans[0];const output=(fs?.output||{}) as Record<string,unknown>;const preview=(output["preview"] as string[])||[];const total=(output["total"] as number)||(fs?.metrics?.kept_chunks as number)||0;const rawChunks=fs?.metrics?.raw_chunks as number||0;const filteredOut=fs?.metrics?.filtered_out as number||0;const strategy=(output["strategy"] as string)||"";const strategyCN=getChunkStrategyLabel(strategy);return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs} 毫秒</span><span className="text-xs text-slate-400">切分 <span className="font-mono text-slate-600">{total}</span> 块{rawChunks>0&&<span className="text-slate-400 ml-1">（原始 {rawChunks}{filteredOut>0?`，过滤 ${filteredOut}`:""}）</span>}</span>{docId&&total>0&&<button onClick={handleOpenChunkDetail} className="ml-auto text-xs text-accent hover:text-accent-hover hover:underline">📋 查看完整内容 →</button>}</div>{strategy&&<div className="ml-9 mb-2 text-[10px] text-slate-400"><span>✂️ 切分方案: </span><span className="text-slate-600 font-medium">{strategyCN||'—'}</span></div>}{preview.length>0&&<div className="ml-9 space-y-1 mb-2">{preview.map((text,i)=>(<div key={i} className="text-xs text-slate-500 bg-slate-50 rounded px-2 py-1 truncate"><span className="text-slate-300 mr-1">预览块 {i+1}</span>{text.slice(0,120)}{text.length>120?"…":""}</div>))}</div>}</div>);}
 
             // llm / metadata
             if(type==="llm"){
@@ -564,18 +544,18 @@ export default function DocTracePage() {
 
               return (<div key={type} className="px-5 py-3 cursor-pointer hover:bg-violet-50/50 transition-colors" onClick={()=>toggleTypeExpand(type)}>
                 <div className="flex items-center gap-4 flex-wrap">
-                  <span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>
+                  <span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs} 毫秒</span>
                   {strategyLabel&&<span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${llmUsed?"bg-violet-200 text-violet-700":"bg-slate-100 text-slate-600"}`}>{strategyLabel}</span>}
-                  {docType&&<span className="text-[10px] text-slate-400">{DOC_TYPE_CN[docType]||docType}<span className="text-slate-300">({docType})</span>{confidence>0&&<span className="text-slate-400 ml-0.5">· 置信度 {(confidence*100).toFixed(0)}%</span>}</span>}
+                  {docType&&<span className="text-[10px] text-slate-400">{getDocumentTypeLabel(docType)}{confidence>0&&<span className="text-slate-400 ml-0.5">· 置信度 {(confidence*100).toFixed(0)}%</span>}</span>}
                   <span className="ml-auto text-[10px] text-slate-300">{expanded?"▲ 收起":"▼ 展开"}</span>
                 </div>
 
                 {expanded&&(<div className="mt-2 ml-9 space-y-0.5" onClick={e=>e.stopPropagation()}>
                   {[
-                    {k:'classify',icon:'📄',label:'文档分类',value:`${DOC_TYPE_CN[docType]||docType} · ${(confidence*100).toFixed(0)}%`,hint:'规则关键词加权计分',show:true,
+                    {k:'classify',icon:'📄',label:'文档分类',value:`${getDocumentTypeLabel(docType)} · ${(confidence*100).toFixed(0)}%`,hint:'规则关键词加权计分',show:true,
                       detail:()=>(<div className="space-y-1">
-                        {topTypes.length>0&&(<div>{topTypes.map(([t,s])=>(<div key={t} className="flex items-center gap-2" style={{fontSize:'9px'}}><span className="w-16 text-slate-500 text-right">{DOC_TYPE_CN[t]||t}</span><div className="flex-1 bg-slate-200 rounded-full h-2.5 overflow-hidden"><div className="h-full rounded-full bg-blue-400" style={{width:Math.max(s/20*100,2)+'%'}}/></div><span className="w-8 text-right font-mono text-slate-500">{s}</span></div>))}<div className="text-[9px] text-slate-400">置信度 = 最高分/(最高分+次高分)</div></div>)}
-                        {clsKeywordHits.length>0&&(<div className="border-t border-slate-100 pt-1 mt-1">{(()=>{const g:Record<string,any[]>={};for(const h of clsKeywordHits){if(!g[h.type])g[h.type]=[];g[h.type].push(h);}for(const[t,hits]of Object.entries(g)){const mg:Record<string,any>={};for(const h of hits){const key=h.keyword+(h.source||'');if(mg[key]){mg[key].w+=h.weight;mg[key].c++}else mg[key]={k:h.keyword,w:h.weight,s:h.source,c:1}}g[t]=Object.values(mg)}return Object.entries(g).sort((a,b)=>b[1].reduce((s:number,h:any)=>s+h.w,0)-a[1].reduce((s:number,h:any)=>s+h.w,0)).slice(0,5).map(([t,hits])=>(<div key={t}><span className="text-[9px] text-slate-400">{DOC_TYPE_CN[t]||t}: </span>{hits.map((h:any)=>(<span key={h.k+h.s} className="text-[9px] text-slate-500 mr-2">{h.s==='title'?'📌':h.s==='filename'?'📎':''}{h.k}<span className="font-mono text-slate-300 ml-0.5">+{h.w}{h.c>1?`×${h.c}`:''}</span></span>))}</div>));})()}</div>)}
+                        {topTypes.length>0&&(<div>{topTypes.map(([t,s])=>(<div key={t} className="flex items-center gap-2" style={{fontSize:'9px'}}><span className="w-16 text-slate-500 text-right">{getDocumentTypeLabel(t)}</span><div className="flex-1 bg-slate-200 rounded-full h-2.5 overflow-hidden"><div className="h-full rounded-full bg-blue-400" style={{width:Math.max(s/20*100,2)+'%'}}/></div><span className="w-8 text-right font-mono text-slate-500">{s}</span></div>))}<div className="text-[9px] text-slate-400">置信度 = 最高分/(最高分+次高分)</div></div>)}
+                        {clsKeywordHits.length>0&&(<div className="border-t border-slate-100 pt-1 mt-1">{(()=>{const g:Record<string,any[]>={};for(const h of clsKeywordHits){if(!g[h.type])g[h.type]=[];g[h.type].push(h);}for(const[t,hits]of Object.entries(g)){const mg:Record<string,any>={};for(const h of hits){const key=h.keyword+(h.source||'');if(mg[key]){mg[key].w+=h.weight;mg[key].c++}else mg[key]={k:h.keyword,w:h.weight,s:h.source,c:1}}g[t]=Object.values(mg)}return Object.entries(g).sort((a,b)=>b[1].reduce((s:number,h:any)=>s+h.w,0)-a[1].reduce((s:number,h:any)=>s+h.w,0)).slice(0,5).map(([t,hits])=>(<div key={t}><span className="text-[9px] text-slate-400">{getDocumentTypeLabel(t)}: </span>{hits.map((h:any)=>(<span key={h.k+h.s} className="text-[9px] text-slate-500 mr-2">{h.s==='title'?'📌':h.s==='filename'?'📎':''}{h.k}<span className="font-mono text-slate-300 ml-0.5">+{h.w}{h.c>1?`×${h.c}`:''}</span></span>))}</div>));})()}</div>)}
                       </div>)},
                     {k:'domain',icon:'🌐',label:'业务领域',value:overview.businessDomain||'—',hint:'关键词命中最高',show:!!(domainTopTypes.length||domainHits.length),
                       detail:()=>(<div className="space-y-1">{domainTopTypes.length>0&&(<div>{domainTopTypes.map(([t,s])=>(<div key={t} className="flex items-center gap-2" style={{fontSize:'9px'}}><span className="w-16 text-slate-500 text-right">{t}</span><div className="flex-1 bg-slate-200 rounded-full h-2.5 overflow-hidden"><div className="h-full rounded-full bg-cyan-400" style={{width:Math.max(s/10*100,2)+'%'}}/></div><span className="w-8 text-right font-mono text-slate-500">{s}</span></div>))}</div>)}{domainHits.length>0&&<div className="flex flex-wrap gap-x-2 gap-y-0.5">{domainHits.map((h:string,i:number)=>{const m=h.match(/^(.+)\+(\d+)$/);return <span key={'dh'+i} className="text-[9px] text-slate-500">▸ {m?m[1]:h}{m&&<span className="font-mono text-cyan-500 ml-0.5">+{m[2]}</span>}</span>;})}</div>}</div>)},
@@ -585,15 +565,15 @@ export default function DocTracePage() {
                         {qualityCalculatedScore!==null?<div className="text-slate-500">本次计分：max(0，{qualityBreakdown.base} − {qualityBreakdown.hardDeduction}×{qualityBreakdown.hardCount} − {qualityBreakdown.warningDeduction}×{qualityBreakdown.warningCount}) = {qualityCalculatedScore}/100（异常 {qualityBreakdown.totalCount??(qualityBreakdown.hardCount!+qualityBreakdown.warningCount!)} 项）{overview.qualityScore!==null&&overview.qualityScore!==qualityCalculatedScore&&<span className="text-amber-600">；Trace 记录 {overview.qualityScore}/100，与现行公式不一致</span>}</div>:<div className="text-slate-500">此 Trace 未记录完整异常计数。</div>}
                         <div className="text-slate-400">硬异常会阻止文档发布；此分数反映解析与索引校验异常，不代表答案语义正确或检索召回效果。</div>
                       </div>)},
-                    {k:'llm_decision',icon:'🔮',label:'LLM 决策',value:llmUsed?`评分${llmScore} · ${llmStrategy==='llm_force'?'强制触发':llmScore>=50?'达标触发':'未触发'}`:'未使用 LLM',hint:llmUsed?'评分累加':'—',show:llmUsed,
-                      detail:()=>(<div className="space-y-1">{llmReason&&llmReason.split(";").map((s:string)=>s.trim()).filter(Boolean).map((p:string)=>{let label=p;let score=0;let forced=false;const sm=p.match(/\((\+?\d+)\)/);const parsed=sm?parseInt(sm[1]):0;const cv=(v:string)=>v.replace(/\(.*\)/,'').trim();if(p.includes("high_value:")){label=`${DOC_TYPE_CN[cv(p.split(":")[1])]||cv(p.split(":")[1])} 高价值`;score=parsed}else if(p.includes("risk_hits:")){label=`命中 ${cv(p.split(":")[1])} 个风险词`;score=parsed}else if(p.includes("low_conf:")){label=`分类置信度不足（${(parseFloat(cv(p.split(":")[1]))*100).toFixed(0)}%）`;score=parsed}else if(p.includes("forced:high_risk")){label="高风险类强制触发";forced=true}return(<div key={p} className="flex items-center gap-2 text-[9px]"><span className="text-slate-500 flex-1">· {label}</span>{forced?<span className="font-mono text-slate-300">—</span>:<span className={`font-mono ${score>0?'text-violet-500':'text-slate-300'}`}>+{score}</span>}</div>)})}{tokenOk&&<div className="text-[9px] text-slate-400 mt-1 pt-1 border-t border-slate-100">模型: {String(llmTokens["model"]||"")} · 入{llmTokens["prompt_tokens"]}/出{llmTokens["completion_tokens"]??0}{costOk&&<span> · ${costUsd!.toFixed(6)}</span>}</div>}</div>)},
-                    {k:'summary',icon:'📝',label:'摘要',value:summaryText?summaryText.slice(0,50)+'…':'—',hint:llmUsed?'LLM 生成':'抽取式',show:!!summaryText,
+                    {k:'llm_decision',icon:'🔮',label:'大模型决策',value:llmUsed?`评分${llmScore} · ${llmStrategy==='llm_force'?'强制触发':llmScore>=50?'达标触发':'未触发'}`:'未使用大模型',hint:llmUsed?'评分累加':'—',show:llmUsed,
+                      detail:()=>(<div className="space-y-1">{llmReason&&llmReason.split(";").map((s:string)=>s.trim()).filter(Boolean).map((p:string)=>{let label="其他触发条件";let score=0;let forced=false;const sm=p.match(/\((\+?\d+)\)/);const parsed=sm?parseInt(sm[1]):0;const cv=(v:string)=>v.replace(/\(.*\)/,'').trim();if(p.includes("high_value:")){label=`${getDocumentTypeLabel(cv(p.split(":")[1]))} 高价值`;score=parsed}else if(p.includes("risk_hits:")){label=`命中 ${cv(p.split(":")[1])} 个风险词`;score=parsed}else if(p.includes("low_conf:")){label=`分类置信度不足（${(parseFloat(cv(p.split(":")[1]))*100).toFixed(0)}%）`;score=parsed}else if(p.includes("forced:high_risk")){label="高风险类强制触发";forced=true}return(<div key={p} className="flex items-center gap-2 text-[9px]"><span className="text-slate-500 flex-1">· {label}</span>{forced?<span className="font-mono text-slate-300">—</span>:<span className={`font-mono ${score>0?'text-violet-500':'text-slate-300'}`}>+{score}</span>}</div>)})}{tokenOk&&<div className="text-[9px] text-slate-400 mt-1 pt-1 border-t border-slate-100">模型: {String(llmTokens["model"]||"")} · 入{llmTokens["prompt_tokens"]}/出{llmTokens["completion_tokens"]??0}{costOk&&<span> · ${costUsd!.toFixed(6)}</span>}</div>}</div>)},
+                    {k:'summary',icon:'📝',label:'摘要',value:summaryText?summaryText.slice(0,50)+'…':'—',hint:llmUsed?'大模型生成':'抽取式',show:!!summaryText,
                       detail:()=>(<div className="text-[10px] text-slate-700 leading-relaxed">{summaryText.length>200?<SummaryExpand text={summaryText}/>:summaryText}</div>)},
                     {k:'sections',icon:'📑',label:'章节',value:`${sections.length} 个`,hint:'正则提取',show:sections.length>0,
                       detail:()=>(<div className="flex flex-wrap gap-1">{sections.map((s:string,i:number)=>(<span key={i} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-slate-100 text-slate-600">{s}</span>))}</div>)},
                     {k:'rule_kw',icon:'🏷️',label:'规则关键词',value:`${kwsRule.length} 个`,hint:'模式匹配',show:hasRule,
                       detail:()=>(<div className="flex flex-wrap gap-1">{kwsRule.map((kw,i)=>(<span key={i} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-slate-100 text-slate-600 ring-1 ring-slate-200">{kw.word}</span>))}</div>)},
-                    {k:'llm_kw',icon:'💬',label:'LLM 关键词',value:`${kwsLlm.length} 个`,hint:String(llmTokens["model"]||"LLM"),show:llmUsed&&kwsLlm.length>0,
+                    {k:'llm_kw',icon:'💬',label:'大模型关键词',value:`${kwsLlm.length} 个`,hint:String(llmTokens["model"]||"大模型"),show:llmUsed&&kwsLlm.length>0,
                       detail:()=>(<div className="flex flex-wrap gap-1">{kwsLlm.map(kw=>(<span key={kw.word} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-violet-100 text-violet-700 ring-1 ring-violet-200">{kw.word}</span>))}</div>)},
                   ].filter(r=>r.show).map(r=>{const open=expandedMeta.has(r.k);return(<div key={r.k}><div className="flex items-center gap-2 py-1 px-1 rounded hover:bg-slate-50 cursor-pointer" onClick={()=>toggleMeta(r.k)}><span className="text-[10px] w-5 text-center">{r.icon}</span><span className="text-[10px] text-slate-500 w-16 shrink-0">{r.label}</span><span className="text-[10px] text-slate-700 font-medium flex-1 truncate">{r.value}</span><span className="text-[9px] text-slate-300 shrink-0">{r.hint} {open?'▾':'▸'}</span></div>{open&&<div className="ml-11 mr-2 mb-1.5 p-2 bg-slate-50 rounded border border-slate-100" onClick={e=>e.stopPropagation()}>{r.detail()}</div>}</div>);})}
                 </div>)}
@@ -601,14 +581,14 @@ export default function DocTracePage() {
             }
 
             if(type==="llm_call"){
-              return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="text-xs text-slate-400">{spans.length} 次真实 Provider 调用</span></div><div className="ml-9 space-y-1">{spans.map((span,index)=>{const metrics=span.metrics||{};const providerMs=typeof metrics.provider_duration_ms==="number"?metrics.provider_duration_ms:span.duration_ms;const promptTokens=typeof metrics.prompt_tokens==="number"?metrics.prompt_tokens:0;const completionTokens=typeof metrics.completion_tokens==="number"?metrics.completion_tokens:0;return(<div key={span.id||index} className="flex items-center gap-3 text-[10px] text-slate-500"><span className="truncate flex-1">{span.name}</span><span className="font-mono shrink-0">Provider {providerMs}ms</span><span className="font-mono shrink-0">{promptTokens.toLocaleString()} 入 / {completionTokens.toLocaleString()} 出</span><span className="shrink-0">{String(metrics.model||"模型未回报")}</span></div>);})}</div></div>);
+              return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="text-xs text-slate-400">{spans.length} 次模型服务调用</span></div><div className="ml-9 space-y-1">{spans.map((span,index)=>{const metrics=span.metrics||{};const providerMs=typeof metrics.provider_duration_ms==="number"?metrics.provider_duration_ms:span.duration_ms;const promptTokens=typeof metrics.prompt_tokens==="number"?metrics.prompt_tokens:0;const completionTokens=typeof metrics.completion_tokens==="number"?metrics.completion_tokens:0;return(<div key={span.id||index} className="flex items-center gap-3 text-[10px] text-slate-500"><span className="truncate flex-1">{span.name}</span><span className="font-mono shrink-0">模型服务调用 {providerMs}ms</span><span className="font-mono shrink-0">{promptTokens.toLocaleString()} 入 / {completionTokens.toLocaleString()} 出</span><span className="shrink-0">{String(metrics.model||"模型未回报")}</span></div>);})}</div></div>);
             }
 
             // embedding
-            if(type==="embedding"){const {attempted,succeeded,failed}=getEmbeddingCountsFromSpans(spans);const embModel=(overview.models||[]).find(m=>m.component==='embedding')?.model||trace?.tags?.embedding_model||"";return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span><span className="text-xs text-slate-400">{attempted===null&&succeeded===null?"Trace 未记录计数":<><span>成功 <span className="font-mono text-green-600">{succeeded===null?"—":succeeded.toLocaleString()}</span></span>{failed!==null&&failed>0&&<span className="ml-1">失败 <span className="font-mono text-red-500">{failed.toLocaleString()}</span></span>}<span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted===null?"—":attempted.toLocaleString()}</span></span></>}</span>{embModel&&<span className="ml-auto text-[10px] text-slate-300 shrink-0">模型: {embModel}</span>}</div></div>);}
+            if(type==="embedding"){const {attempted,succeeded,failed}=getEmbeddingCountsFromSpans(spans);const embModel=(overview.models||[]).find(m=>m.component==='embedding')?.model||trace?.tags?.embedding_model||"";return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs} 毫秒</span><span className="text-xs text-slate-400">{attempted===null&&succeeded===null?"Trace 未记录计数":<><span>成功 <span className="font-mono text-green-600">{succeeded===null?"—":succeeded.toLocaleString()}</span></span>{failed!==null&&failed>0&&<span className="ml-1">失败 <span className="font-mono text-red-500">{failed.toLocaleString()}</span></span>}<span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted===null?"—":attempted.toLocaleString()}</span></span></>}</span>{embModel&&<span className="ml-auto text-[10px] text-slate-300 shrink-0">模型: {embModel}</span>}</div></div>);}
 
             // dedup
-            if(type==="dedup"){const s=spans[0];const cached=s.metrics?.cached as boolean|undefined;const existingDocId=s.metrics?.existing_doc_id as string||"";return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>{cached?<span className="text-xs text-amber-600">⚡ 命中缓存 → doc {existingDocId}</span>:<span className="text-xs text-slate-400">未命中缓存 → 进入完整索引流程</span>}</div></div>);}
+            if(type==="dedup"){const s=spans[0];const cached=s.metrics?.cached as boolean|undefined;const existingDocId=s.metrics?.existing_doc_id as string||"";return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs} 毫秒</span>{cached?<span className="text-xs text-amber-600">⚡ 命中缓存 → doc {existingDocId}</span>:<span className="text-xs text-slate-400">未命中缓存 → 进入完整索引流程</span>}</div></div>);}
 
             const groupId = `pipeline-span-group-${encodeURIComponent(type)}`;
             return (
@@ -623,7 +603,7 @@ export default function DocTracePage() {
                 >
                   <span className="text-xs w-5 shrink-0">{statusIcon}</span>
                   <span className="w-24 text-slate-500 shrink-0">{info.label}</span>
-                  <span className={`font-mono text-xs w-16 text-right shrink-0 ${hasError ? "text-red-500" : "text-slate-400"}`}>{totalMs}ms</span>
+                  <span className={`font-mono text-xs w-16 text-right shrink-0 ${hasError ? "text-red-500" : "text-slate-400"}`}>{totalMs} 毫秒</span>
                   <span className="text-xs text-slate-300 flex-1 truncate">{isMulti && <span className="mr-1">×{spans.length}</span>}{summary}</span>
                   {isMulti && <span className="text-[10px] text-slate-300">{expanded ? "▲ 收起" : "▼ 展开"}</span>}
                 </button>
@@ -655,8 +635,8 @@ export default function DocTracePage() {
       {warnings.length>0&&(<div className="bg-amber-50 border border-amber-200 rounded-xl p-5"><h2 className="text-xs font-medium text-amber-700 uppercase tracking-wider mb-2">⚠ 警告</h2><ul className="space-y-1">{warnings.map((w,i)=>(<li key={i} className="text-xs text-amber-800 flex items-start gap-2"><span className="shrink-0 mt-0.5">⚠</span><span>{w}</span></li>))}</ul></div>)}
 
       {/* Chunk 详情侧边面板 */}
-      {chunkPanelOpen&&(<div className="fixed inset-0 z-50 flex justify-end"><div className="absolute inset-0 bg-black/20" onClick={()=>setChunkPanelOpen(false)}/><div className="relative w-[520px] bg-white shadow-xl border-l border-slate-200 flex flex-col h-full"><div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 shrink-0"><div><h3 className="text-sm font-semibold text-slate-800">📋 Chunk 完整内容</h3><p className="text-[10px] text-slate-400 mt-0.5">文档 {docId}</p></div><button onClick={()=>setChunkPanelOpen(false)} className="p-1 rounded-md hover:bg-slate-100 text-slate-400"><X size={16}/></button></div><div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">{chunkDetailLoading&&<div className="flex items-center justify-center py-12"><Loader2 size={20} className="animate-spin text-accent"/><span className="ml-2 text-sm text-slate-400">加载中...</span></div>}{chunkDetailError&&<div className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">{chunkDetailError}</div>}{!chunkDetailLoading&&!chunkDetailError&&chunkDetailData.length===0&&<p className="text-sm text-slate-400 text-center py-8">暂无 Chunk 数据</p>}{!chunkDetailLoading&&chunkDetailData.map((ch,i)=>{const ruleKws=ch.keywords?ch.keywords.split(',').map(k=>k.trim()).filter(Boolean):[];const llmKws=ch.llm_keywords?ch.llm_keywords.split(',').map(k=>k.trim()).filter(Boolean):[];const heading=getChunkHeading(ch);return(<div key={i} className="bg-slate-50 rounded-lg p-3 border border-slate-100"><div className="flex items-center justify-between mb-2"><span className="text-[10px] font-semibold text-slate-500">Chunk #{ch.chunk_index}</span><div className="flex items-center gap-2 text-[10px] text-slate-400"><span>{ch.char_count.toLocaleString()} tokens</span></div></div><div className="space-y-1 mb-2">{heading&&<div className="flex items-center gap-1.5 text-[10px]"><span className="text-slate-400 shrink-0">{heading.label}</span>{heading.title&&<span className="text-slate-600">{heading.title}</span>}</div>}{ruleKws.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-slate-400 shrink-0 mt-0.5">📋 规则</span><div className="flex flex-wrap gap-0.5">{ruleKws.map((kw,j)=><span key={j} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-slate-100 text-slate-600 ring-1 ring-slate-200">{kw}</span>)}</div></div>}{llmKws.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-violet-400 shrink-0 mt-0.5">🔮 LLM</span><div className="flex flex-wrap gap-0.5">{llmKws.map((kw,j)=><span key={j} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-violet-50 text-violet-600 ring-1 ring-violet-200">{kw}</span>)}</div>{ch.llm_model&&<span className="text-[9px] text-slate-300 ml-auto shrink-0">{ch.llm_model}</span>}</div>}
-{ch.simulated_questions&&ch.simulated_questions.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-amber-500 shrink-0 mt-0.5">{SIMULATED_QUESTIONS_LABEL}</span><div className="flex flex-col gap-0.5">{ch.simulated_questions.map((q,j)=><span key={j} className="text-slate-600 leading-relaxed">• {q}</span>)}</div></div>}</div><p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap break-words border-t border-slate-200 pt-2">{ch.content}</p></div>);})}</div><div className="px-5 py-2.5 border-t border-slate-100 text-[10px] text-slate-400 shrink-0">共 {chunkDetailData.length} 个 Chunk</div></div></div>)}
+      {chunkPanelOpen&&(<div className="fixed inset-0 z-50 flex justify-end"><div className="absolute inset-0 bg-black/20" onClick={()=>setChunkPanelOpen(false)}/><div className="relative h-full w-[92vw] max-w-[760px] bg-white shadow-xl border-l border-slate-200 flex flex-col h-full"><div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 shrink-0"><div><h3 className="text-sm font-semibold text-slate-800">📋 分块完整内容</h3><p className="text-[10px] text-slate-400 mt-0.5">文档 {docId}</p></div><button onClick={()=>setChunkPanelOpen(false)} className="p-1 rounded-md hover:bg-slate-100 text-slate-400"><X size={16}/></button></div><div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">{chunkDetailLoading&&<div className="flex items-center justify-center py-12"><Loader2 size={20} className="animate-spin text-accent"/><span className="ml-2 text-sm text-slate-400">加载中...</span></div>}{chunkDetailError&&<div className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">{chunkDetailError}</div>}{!chunkDetailLoading&&!chunkDetailError&&chunkDetailData.length===0&&<p className="text-sm text-slate-400 text-center py-8">暂无分块数据</p>}{!chunkDetailLoading&&chunkDetailData.map((ch,i)=>{const ruleKws=ch.keywords?ch.keywords.split(',').map(k=>k.trim()).filter(Boolean):[];const llmKws=ch.llm_keywords?ch.llm_keywords.split(',').map(k=>k.trim()).filter(Boolean):[];const heading=getChunkHeading(ch);return(<div key={i} className="bg-slate-50 rounded-lg p-3 border border-slate-100"><div className="flex items-center justify-between mb-2"><span className="text-[10px] font-semibold text-slate-500">分块 #{ch.chunk_index}</span><div className="flex items-center gap-2 text-[10px] text-slate-400"><span>{ch.char_count.toLocaleString()} 个字符</span></div></div><div className="space-y-1 mb-2">{heading&&<div className="flex items-center gap-1.5 text-[10px]"><span className="text-slate-400 shrink-0">{heading.label}</span>{heading.title&&<span className="text-slate-600">{heading.title}</span>}</div>}{ruleKws.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-slate-400 shrink-0 mt-0.5">📋 规则</span><div className="flex flex-wrap gap-0.5">{ruleKws.map((kw,j)=><span key={j} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-slate-100 text-slate-600 ring-1 ring-slate-200">{kw}</span>)}</div></div>}{llmKws.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-violet-400 shrink-0 mt-0.5">🔮 大模型</span><div className="flex flex-wrap gap-0.5">{llmKws.map((kw,j)=><span key={j} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-violet-50 text-violet-600 ring-1 ring-violet-200">{kw}</span>)}</div>{ch.llm_model&&<span className="text-[9px] text-slate-300 ml-auto shrink-0">{ch.llm_model}</span>}</div>}
+{ch.simulated_questions&&ch.simulated_questions.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-amber-500 shrink-0 mt-0.5">{SIMULATED_QUESTIONS_LABEL}</span><div className="flex flex-col gap-0.5">{ch.simulated_questions.map((q,j)=><span key={j} className="text-slate-600 leading-relaxed">• {q}</span>)}</div></div>}</div><p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap break-words border-t border-slate-200 pt-2">{ch.content}</p></div>);})}</div><div className="px-5 py-2.5 border-t border-slate-100 text-[10px] text-slate-400 shrink-0">共 {chunkDetailData.length} 个分块</div></div></div>)}
     </div></div>
   );
 }

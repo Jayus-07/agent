@@ -19,6 +19,7 @@ class FakeRedis:
 
     def __init__(self):
         self.store: dict = {}
+        self.ttls: dict = {}
 
     def mget(self, keys):
         return [self.store.get(k) for k in keys]
@@ -28,6 +29,7 @@ class FakeRedis:
 
     def setex(self, key, ttl, value):
         self.store[key] = value
+        self.ttls[key] = ttl
 
     def execute(self):
         return []
@@ -42,6 +44,59 @@ def fake_redis(monkeypatch):
 
 
 class TestEmbeddingCache:
+
+    def test_ingest_cache_ttls_must_be_positive(self):
+        from backend.config.rag import _validate_rag_ingest_cache_config
+
+        with pytest.raises(ValueError, match="METADATA_CACHE_TTL_SECONDS"):
+            _validate_rag_ingest_cache_config(
+                metadata_cache_ttl_seconds=0,
+                embedding_cache_ttl_seconds=1,
+                rule_local_cache_seconds=0,
+            )
+        with pytest.raises(ValueError, match="RAG_EMBED_CACHE_TTL_SECONDS"):
+            _validate_rag_ingest_cache_config(
+                metadata_cache_ttl_seconds=1,
+                embedding_cache_ttl_seconds=-1,
+                rule_local_cache_seconds=0,
+            )
+
+    def test_rule_snapshot_cache_ttl_must_be_finite_and_non_negative(self):
+        from backend.config.rag import _validate_rag_ingest_cache_config
+
+        for value in (-0.1, float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="METADATA_RULE_LOCAL_CACHE_SECONDS"):
+                _validate_rag_ingest_cache_config(
+                    metadata_cache_ttl_seconds=1,
+                    embedding_cache_ttl_seconds=1,
+                    rule_local_cache_seconds=value,
+                )
+
+    def test_default_ttl_uses_rag_config(self, fake_redis, monkeypatch):
+        import backend.config.rag as rag_config
+
+        monkeypatch.setattr(rag_config, "RAG_EMBED_CACHE_TTL_SECONDS", 4321)
+        monkeypatch.setattr(rag_config, "RAG_EMBED_CACHE_ENABLED", True)
+        cache = EmbeddingCache("bge-large")
+        cache.put_many(["hello"], [[0.1]])
+
+        key = next(iter(fake_redis.store))
+        assert fake_redis.ttls[key] == 4321
+
+    def test_explicit_ttl_overrides_rag_config(self, fake_redis, monkeypatch):
+        import backend.config.rag as rag_config
+
+        monkeypatch.setattr(rag_config, "RAG_EMBED_CACHE_TTL_SECONDS", 4321)
+        monkeypatch.setattr(rag_config, "RAG_EMBED_CACHE_ENABLED", True)
+        cache = EmbeddingCache("bge-large", ttl_seconds=60)
+        cache.put_many(["hello"], [[0.1]])
+
+        key = next(iter(fake_redis.store))
+        assert fake_redis.ttls[key] == 60
+
+    def test_non_positive_explicit_ttl_is_rejected(self):
+        with pytest.raises(ValueError, match="TTL"):
+            EmbeddingCache("bge-large", ttl_seconds=0)
 
     def test_roundtrip(self, fake_redis):
         cache = EmbeddingCache("bge-large")

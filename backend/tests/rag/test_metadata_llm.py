@@ -6,6 +6,7 @@
   3. 失败路径：LLM 抛异常 / 超时返回 None → 调用方降级规则路径；
   4. 开关关闭时不走 LLM（config 契约）。
 """
+import asyncio
 import json
 from unittest.mock import MagicMock
 
@@ -230,6 +231,36 @@ async def test_extract_timeout_and_empty_output_return_none(_patch_prompt, monke
     assert invalid_meta["provider_call_attempted"] is True
     assert invalid_meta["provider_called"] is True
     assert invalid_meta["fallback_reason"] == "invalid_output"
+
+
+@pytest.mark.asyncio
+async def test_llm_slot_timeout_skips_provider_without_bypassing_limit(
+    _patch_prompt, monkeypatch,
+):
+    import backend.rag.preprocessing.metadata_llm as m
+
+    class SaturatedSemaphore:
+        async def acquire(self):
+            raise asyncio.TimeoutError
+
+        def release(self):
+            raise AssertionError("未获得并发槽时不能释放")
+
+    provider_calls = []
+
+    async def _provider_call(*args, **kwargs):
+        provider_calls.append((args, kwargs))
+        raise AssertionError("等待超时后不得绕过并发限制调用 Provider")
+
+    monkeypatch.setattr(m, "_get_loop_llm_semaphore", lambda: SaturatedSemaphore())
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _provider_call)
+
+    assert await extract_metadata_llm_async("文档内容", "slot-timeout.md") is None
+    assert provider_calls == []
+    call_meta = get_last_metadata_call_meta()
+    assert call_meta["provider_call_attempted"] is False
+    assert call_meta["provider_called"] is False
+    assert call_meta["fallback_reason"] == "llm_slot_wait_timeout"
 
 
 @pytest.mark.asyncio

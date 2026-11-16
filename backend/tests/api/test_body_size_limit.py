@@ -14,7 +14,7 @@ from backend.app.api.middleware.body_limit import (
     body_size_limit_middleware,
     request_body_limit,
 )
-from backend.config.rag import RAG_MAX_FILE_SIZE, RAG_UPLOAD_MULTIPART_OVERHEAD
+from backend.config.rag import RAG_UPLOAD_INGRESS_MAX_BODY_BYTES
 
 
 def _client() -> TestClient:
@@ -39,11 +39,8 @@ def _client() -> TestClient:
 def test_request_body_limit_rules() -> None:
     assert request_body_limit("/webhooks/automations/t/a") == 1024 * 1024
     assert request_body_limit("/selection-funnel/import/file") == 32 * 1024 * 1024
-    # /rag/upload 带 multipart 开销余量（F10），与路由层预检同源；
-    # 贴上限文件（cl = 文件体 + 封装开销）不被中间件 413 误拒
-    assert request_body_limit("/rag/upload") == (
-        RAG_MAX_FILE_SIZE * 1024 * 1024 + RAG_UPLOAD_MULTIPART_OVERHEAD
-    )
+    # multipart 请求体总上限与 APISIX 一致；文件本身由上传流精确限长。
+    assert request_body_limit("/rag/upload") == RAG_UPLOAD_INGRESS_MAX_BODY_BYTES
     assert request_body_limit("/chat/stream") == DEFAULT_BODY_LIMIT
 
 
@@ -74,18 +71,12 @@ def test_get_is_not_limited() -> None:
     assert client.get("/echo").status_code == 200
 
 
-def test_rag_upload_boundary_body_within_margin_passes(monkeypatch) -> None:
-    """F10 回归（缩比复现）：文件体 + multipart 开销的请求体不被中间件误拒。
-
-    此前 /rag/upload 规则用精确 RAG_MAX_FILE_SIZE 判 Content-Length，
-    贴上限文件在中间件层 413，路由层特意留的余量形同虚设
-    （2026-11-10 评审发现）。真实常量由 test_request_body_limit_rules 钉死，
-    本用例缩比验证中间件「总包 ≤ 上限」的判定逻辑本身。
-    """
+def test_rag_upload_request_body_within_ingress_limit_passes(monkeypatch) -> None:
+    """multipart 总体在入口上限内时放行，文件体由上传流单独核验。"""
     from backend.app.api.middleware import body_limit as body_limit_mod
 
     monkeypatch.setattr(
-        body_limit_mod, "_BODY_LIMIT_RULES", (("/rag/upload", 1024 + 16),)
+        body_limit_mod, "_BODY_LIMIT_RULES", (("/rag/upload", 1024),)
     )
     client = _client()
 
@@ -93,18 +84,17 @@ def test_rag_upload_boundary_body_within_margin_passes(monkeypatch) -> None:
     async def rag_upload_stub(request: Request):  # noqa: F811 — 测试内注册
         return {"length": len(await request.body())}
 
-    # 文件体 1024 + 封装开销 16 = 总包 1040，恰在上限内 → 放行
-    resp = client.post("/rag/upload", content=b"x" * 1040)
+    resp = client.post("/rag/upload", content=b"x" * 1024)
     assert resp.status_code == 200
-    assert resp.json() == {"length": 1040}
+    assert resp.json() == {"length": 1024}
 
 
-def test_rag_upload_over_total_limit_rejected(monkeypatch) -> None:
-    """总包超过「文件上限 + 余量」仍 413；文件体精确上限由路由流式计数兜底。"""
+def test_rag_upload_over_ingress_limit_rejected(monkeypatch) -> None:
+    """multipart 总包超过入口限制仍 413。"""
     from backend.app.api.middleware import body_limit as body_limit_mod
 
     monkeypatch.setattr(
-        body_limit_mod, "_BODY_LIMIT_RULES", (("/rag/upload", 1024 + 16),)
+        body_limit_mod, "_BODY_LIMIT_RULES", (("/rag/upload", 1024),)
     )
     client = _client()
 

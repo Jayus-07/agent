@@ -567,7 +567,7 @@ async def reject_pending_doc(doc_id: str, request: Request):
 @router.get("/documents/{doc_id}")
 async def get_document(doc_id: str, request: Request):
     """文档详情 — 含 chunk 配置、embedding 模型等完整信息（先授权后取数）"""
-    from backend.config import CHUNK_SIZE, CHUNK_OVERLAP
+    from backend.config import CHUNK_OVERLAP, LEAF_CHUNK_TOKENS
 
     try:
         authz = await _require_authz(request)
@@ -609,8 +609,10 @@ async def get_document(doc_id: str, request: Request):
                 "confidence": doc.get("confidence", 0),
                 "business_domain": doc.get("business_domain", ""),
                 "embedding_model": embedding_model_name,
-                "chunk_size": CHUNK_SIZE,
+                "chunk_size": LEAF_CHUNK_TOKENS,
+                "chunk_size_unit": "token",
                 "overlap": CHUNK_OVERLAP,
+                "overlap_unit": "token",
                 "index_version": 1,
                 "last_indexed": doc.get("last_indexed"),
                 "created_at": doc.get("created_at"),
@@ -789,7 +791,7 @@ def _submit_reindex_task(doc_id: str, doc_name: str, *, batch_id: str | None,
 
 
 @router.post("/documents/{doc_id}/reindex", dependencies=[Depends(require_rag_editor)])
-async def reindex_document(doc_id: str, request: Request, force: bool = False):
+async def reindex_document(doc_id: str, request: Request):
     """单文件重新索引 — 幂等提交（rag_index 队列）；降级时本机同步执行。
 
     2026-10-02 remote 断层收口：remote 模式下 app 持有的是代理 pipeline，

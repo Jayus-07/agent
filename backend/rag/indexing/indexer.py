@@ -1656,19 +1656,22 @@ class IncrementalIndexer:
             type="chunk",
             kind=SpanKind.INDEX_CHUNK.value,
         )
+        from backend.config import CHUNK_OVERLAP, LEAF_CHUNK_TOKENS
         chunk_lineage = None
         if lineage_recorder is not None:
             chunk_lineage = lineage_recorder.begin_stage(
                 "semantic_chunk", role=None, engine_type="chunker",
-                metadata={"strategy": "pipeline", "overlap": 50},
+                metadata={
+                    "strategy": "pipeline",
+                    "overlap": CHUNK_OVERLAP,
+                },
             )
         try:
-            from backend.config import LEAF_CHUNK_TOKENS
             # 复用 parse 段的 chunks，避免重复调用 parse_and_chunk
             chunks = getattr(self, "_current_chunks", None) or []
             strategy_name = "pipeline"   # 具体策略名由 pipeline 日志输出
             chunk_size = LEAF_CHUNK_TOKENS
-            chunk_overlap = 50
+            chunk_overlap = CHUNK_OVERLAP
             for i, ch in enumerate(chunks):
                 ch.metadata["doc_id"] = doc_id
                 ch.metadata["chunk_index"] = i

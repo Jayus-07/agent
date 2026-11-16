@@ -216,11 +216,11 @@ class TestExecuteIndexTaskImpl:
         monkeypatch.setattr(ru, "_settle_index_result", MagicMock())
 
         result = it.execute_index_task_impl(
-            "u-ocr", "/docs/scan.pdf", "scan.pdf", ocr_page_budget=200,
+            "u-ocr", "/docs/scan.pdf", "scan.pdf", ocr_page_budget=80,
         )
 
         assert result["status"] == "done"
-        assert captured["ocr_page_budget"] == 200
+        assert captured["ocr_page_budget"] == 80
 
     def test_worker_settle_carries_actor_id_from_run(self, monkeypatch):
         """Worker 收口审计必须带回派发时写入运行记录的上传者。"""
@@ -734,8 +734,9 @@ class TestRedisPollEvents:
     async def test_empty_mirror_after_grace_reports_expired(self, monkeypatch):
         """镜像持续为空（upload_id 真不存在 / TTL 已过期）→ grace 耗尽明确报过期。"""
         monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
-        monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_POLLS", 3)
+        monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_SECONDS", 0.02)
         monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: ("missing", None))
+        monkeypatch.setattr(ru, "_run_still_active", lambda uid: False)
 
         chunks = []
         async for chunk in ru._redis_poll_events("u-gone"):
@@ -751,8 +752,8 @@ class TestRedisPollEvents:
         异常在宽限期内（< error grace）必须继续轮询等待自愈（仅 keepalive），
         绝不能误报「不存在或已过期」；宽限耗尽才报「进度服务暂不可用」。"""
         monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
-        monkeypatch.setattr(ru, "_SSE_REDIS_ERROR_GRACE_POLLS", 5)
-        # Redis 持续异常 3 次（< 宽限 5）后自愈，随后正常事件到达
+        monkeypatch.setattr(ru, "_SSE_REDIS_ERROR_GRACE_SECONDS", 0.05)
+        # Redis 在故障宽限期内自愈，随后正常事件到达
         state = {"polls": 0}
 
         def flaky_redis(uid):
@@ -777,7 +778,7 @@ class TestRedisPollEvents:
     async def test_redis_error_persisting_reports_unavailable(self, monkeypatch):
         """Redis 异常超过宽限 → 报「进度服务暂不可用」（不是「不存在或已过期」）。"""
         monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
-        monkeypatch.setattr(ru, "_SSE_REDIS_ERROR_GRACE_POLLS", 3)
+        monkeypatch.setattr(ru, "_SSE_REDIS_ERROR_GRACE_SECONDS", 0.02)
         monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: ("error", None))
 
         chunks = []
@@ -794,7 +795,7 @@ class TestRedisPollEvents:
         """batch8 缺陷 B 兜底：镜像键消失但 run_store 显示任务在途 → 不判
         过期，重置宽限继续轮询直至拿到终态（模拟 Redis 丢键/极端过期）。"""
         monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
-        monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_POLLS", 3)
+        monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_SECONDS", 0.02)
         state = {"polls": 0}
 
         def missing_then_ok(uid):
@@ -820,7 +821,7 @@ class TestRedisPollEvents:
     async def test_missing_with_gone_run_reports_expired(self, monkeypatch):
         """镜像键消失且 run_store 无在途运行 → 维持过期语义（不无限等待）。"""
         monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
-        monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_POLLS", 3)
+        monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_SECONDS", 0.02)
         monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: ("missing", None))
         monkeypatch.setattr(ru, "_run_still_active", lambda uid: False)
 
@@ -830,6 +831,22 @@ class TestRedisPollEvents:
 
         msgs = self._messages(chunks)
         assert any("不存在或已过期" in m.get("message", "") for m in msgs)
+
+    @pytest.mark.asyncio
+    async def test_overall_deadline_applies_while_run_store_is_active(self, monkeypatch):
+        """镜像持续缺失但运行记录仍在途时，总时限仍须收口。"""
+        monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(ru, "_SSE_REDIS_POLL_MAX_SECONDS", 0.025)
+        monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_SECONDS", 0.005)
+        monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: ("missing", None))
+        monkeypatch.setattr(ru, "_run_still_active", lambda uid: True)
+
+        chunks = []
+        async for chunk in ru._redis_poll_events("u-active-missing"):
+            chunks.append(chunk)
+
+        msgs = self._messages(chunks)
+        assert any("轮询超时" in m.get("message", "") for m in msgs)
 
     def test_progress_mirror_ttl_aligns_poll_max(self, monkeypatch):
         """batch8 缺陷 B：镜像 TTL 与 SSE 轮询上限同源——长阶段静默（单阶段

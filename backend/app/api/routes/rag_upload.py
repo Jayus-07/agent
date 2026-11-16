@@ -1,5 +1,5 @@
 """RAG 上传路由 — PR-2.x 从 rag.py 抽出。"""
-import asyncio, json, os, re, shutil, threading, time, uuid
+import asyncio, json, math, os, re, shutil, threading, time, uuid
 from asyncio import Queue
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Depends
 from fastapi.responses import StreamingResponse
@@ -13,12 +13,19 @@ from backend.app.api.identity import require_principal, resolve_identity, resolv
 from backend.config.rag import (
     RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE,
     RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS, RAG_UPLOAD_PATH_GUARD,
-    RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT, RAG_UPLOAD_MULTIPART_OVERHEAD,
+    RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT, RAG_OCR_MIN_TEXT_CHARS,
+    RAG_PDF_MAX_PAGES,
 )
 from backend.config.rag import (
     RAG_MAX_CONCURRENT_INDEX,
+    RAG_SSE_REDIS_EMPTY_GRACE_SECONDS,
+    RAG_SSE_REDIS_ERROR_GRACE_SECONDS,
+    RAG_SSE_REDIS_KEEPALIVE_SECONDS,
     RAG_SSE_REDIS_POLL_MAX_SECONDS,
     RAG_SSE_REDIS_POLL_SECONDS,
+    RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS,
+    RAG_UPLOAD_LOCK_STALE_SECONDS,
+    RAG_UPLOAD_PROGRESS_GC_INTERVAL_SECONDS,
 )
 # F7: IncrementalIndexer 不在模块顶层导入（导入链含 langchain/tracer 等重依赖），
 # 改为 _do_index_sync 内惰性导入，路由模块冷启动不再被拖慢。
@@ -91,16 +98,11 @@ class UploadIdempotencyConflict(Exception):
         self.upload_id = upload_id
 
 
-# Stale 锁 TTL:进程崩溃残留的 .lock 超过该时长后允许被新请求接管(自愈)。
-# 背景:旧实现无任何回收路径,索引中途崩溃后 .lock 永久残留,
-# 同名文件此后每次上传都被 FileLockedByOtherError 拒绝。
-# 取 30 分钟:语义是"心跳超时判定"——持锁方有心跳线程持续刷新时间戳,
-# 活锁永不超时(超长索引任务不再被误抢);持有进程死亡后心跳停止,
-# 超过该时长即可安全接管。取值需远大于心跳间隔(LOCK_HEARTBEAT_SECONDS)。
-LOCK_STALE_SECONDS = 30 * 60
+# 上传锁的恢复时限与心跳由 config/rag.py 统一管理，便于按运行时观测校准。
+LOCK_STALE_SECONDS = RAG_UPLOAD_LOCK_STALE_SECONDS
 
 # 锁心跳间隔:持锁期间每 N 秒重写 .lock 时间戳。判死需 TTL >> 该值。
-LOCK_HEARTBEAT_SECONDS = 60.0
+LOCK_HEARTBEAT_SECONDS = RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS
 
 
 def _validate_ocr_page_budget(
@@ -214,16 +216,18 @@ def acquire_index_lock(filepath: str) -> int:
     )
 
 
-def _pdf_has_text_layer(path: str, max_pages: int = 10) -> bool | None:
+def _pdf_has_text_layer(
+    path: str, max_pages: int = RAG_PDF_MAX_PAGES,
+) -> bool | None:
     """检测 PDF 是否有文本层（扫描件预检，纯函数便于测试）。
 
+    使用解析器的页数预算与 OCR 触发阈值，避免上传预检维护第二套边界。
     Returns:
-        True  — 检查的前 max_pages 页中存在足够文本 → 正常解析
+        True  — 资源预算内存在足够文本 → 正常解析
         False — 检查页全部无文本 → 扫描件/纯图片，索引必然失败，入口即拒
         None  — 无法判定（加密/损坏/PyMuPDF 异常）→ 放行，交给解析层报错
 
-    判定阈值：单页可提取文本 ≥ 20 字符即认为有文本层（页码/水印级噪音
-    不算）。只查前 max_pages 页：扫描件通常整本无文本，无需全量扫描。
+    判定阈值与解析器共用 RAG_OCR_MIN_TEXT_CHARS。
     """
     try:
         import fitz  # PyMuPDF（pdf_parser 同源依赖）
@@ -233,14 +237,16 @@ def _pdf_has_text_layer(path: str, max_pages: int = 10) -> bool | None:
             for i, page in enumerate(doc):
                 if i >= max_pages:
                     break
-                if len(page.get_text().strip()) >= 20:
+                if len(page.get_text().strip()) >= RAG_OCR_MIN_TEXT_CHARS:
                     return True
             return False
     except Exception:
         return None
 
 
-def sha256_of_file(path: str, chunk_size: int = 8 * 1024 * 1024) -> str:
+def sha256_of_file(
+    path: str, chunk_size: int = RAG_UPLOAD_CHUNK_SIZE,
+) -> str:
     """分块流式计算文件 SHA256 — 避免整文件读入内存。
 
     背景:旧实现 hashlib.sha256(f.read()) 对 50MB 上限的文件一次性
@@ -367,8 +373,7 @@ def cleanup_stale_upload_artifacts(docs_dir: str, tmp_dir: str,
 def cleanup_expired_progress_queues() -> int:
     """清理超过 PROGRESS_QUEUE_TTL_SECONDS 的进度队列，返回清理条数。
 
-    安全:队列残留只发生在客户端从未订阅 SSE 且后台任务已结束的极端场景；
-    超 30 分钟的队列不可能仍有活跃消费者（后台索引远超此时长）。
+    队列保留期跟随 SSE 总时限，避免后台索引仍可被订阅时本机队列先被清理。
     """
     now = time.time()
     expired = [uid for uid, q in _progress_queues.items()
@@ -382,7 +387,9 @@ def cleanup_expired_progress_queues() -> int:
     return len(expired)
 
 
-async def progress_queue_gc_loop(interval_seconds: float = 300) -> None:
+async def progress_queue_gc_loop(
+    interval_seconds: float = RAG_UPLOAD_PROGRESS_GC_INTERVAL_SECONDS,
+) -> None:
     """后台定时清理过期进度队列（F11），由 server 启动时 create_task。
 
     异常不退出循环 — GC 任务自身挂掉比队列滞留更糟，单轮失败只告警。
@@ -438,24 +445,23 @@ ALLOWED_MIME_TYPES: dict[str, set[str]] = {
 
 SUPPORTED_EXTS: frozenset[str] = frozenset(ALLOWED_MIME_TYPES.keys())
 
-# F10: Content-Length 预检余量 — multipart 封装（boundary + 头字段）比裸文件大
-# 几百字节到几 KB，贴上限的文件会被误拒；预检放宽一个余量，
-# 精确上限仍由 sync_upload_impl 流式字节计数强制执行（双保险不放松）。
-# 2026-11-10 评审收口：常量上移 config/rag.py（RAG_UPLOAD_MULTIPART_OVERHEAD），
-# body_limit 中间件对 /rag/upload 的 Content-Length 预检同源引用——此前中间件
-# 用精确 50MiB 判总包，贴上限文件在此被 413 误拒，路由层余量形同虚设。
-_MULTIPART_OVERHEAD = RAG_UPLOAD_MULTIPART_OVERHEAD
+# 请求体总上限与 APISIX 一致；单文件上限由流式字节计数精确执行。
 
 # F11: 进度队列过期阈值（与 sync_upload_impl 内联清理同口径）
-PROGRESS_QUEUE_TTL_SECONDS = 1800
+PROGRESS_QUEUE_TTL_SECONDS = math.ceil(RAG_SSE_REDIS_POLL_MAX_SECONDS)
 
-# P2: SSE 心跳间隔（秒）— 无事件期间发 ": keepalive" 注释帧防代理断连。
-# 抽为常量便于测试 patch（生产值 15s，测试中可缩到毫秒级）。
-SSE_KEEPALIVE_TIMEOUT_SECONDS = 15.0
+# 本机队列和 Redis 轮询通道共用心跳间隔，避免两种上传模式各自写一份值。
+SSE_KEEPALIVE_TIMEOUT_SECONDS = RAG_SSE_REDIS_KEEPALIVE_SECONDS
 
 # batch3 P3-2：X-Batch-Id 白名单（字母数字 + _.:-，≤64 字符）。前端
 # randomId('batch')（uuid 或 batch-<ts>-<rand>）天然满足。
-_BATCH_ID_PATTERN = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
+# UUID 36 字符，降级生成的 batch-时间戳-随机串更短；64 是持久化关联头的
+# 防御性上限，避免任意长客户端值进入任务消息与操作台账。
+_BATCH_ID_MAX_LENGTH = 64
+_BATCH_ID_PATTERN = re.compile(rf"[A-Za-z0-9_.:-]{{1,{_BATCH_ID_MAX_LENGTH}}}")
+_MAGIC_PREFIX_BYTES = max(
+    len(b"%PDF-"), len(b"PK\x03\x04"), len(b"\xff\xfe"), len(b"\xfe\xff"),
+)
 
 
 def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
@@ -478,7 +484,7 @@ def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
         文本格式 NUL + UTF-16 BOM 探测）。
     """
     if ext not in SUPPORTED_EXTS:
-        return False, f"unsupported ext: .{ext}"
+        return False, f"不支持 .{ext} 文件格式"
     if not content_type or not content_type.strip():
         # content_type 为空（curl 命令行等场景）→ 走 magic 校验兜底
         return True, ""
@@ -493,11 +499,13 @@ def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
     if ctype == "application/octet-stream":
         return True, ""
     if ctype not in ALLOWED_MIME_TYPES[ext]:
-        return False, f"MIME type not allowed for .{ext}: {ctype}"
+        return False, f".{ext} 文件 MIME 类型不匹配：{ctype}"
     return True, ""
 
 
-def _magic_matches(ext: str, head: bytes) -> bool:
+def _magic_matches(
+    ext: str, head: bytes, *, contains_nul: bool | None = None,
+) -> bool:
     """按扩展名校验上传文件头；文本格式拒绝明显的二进制伪装。"""
     if ext == "pdf":
         return head.startswith(b"%PDF-")
@@ -506,7 +514,8 @@ def _magic_matches(ext: str, head: bytes) -> bool:
     if ext in {
         "md", "markdown", "txt", "csv", "html", "htm", "json", "xml",
     }:
-        return b"\x00" not in head and head[:2] not in (b"\xff\xfe", b"\xfe\xff")
+        has_nul = b"\x00" in head if contains_nul is None else contains_nul
+        return not has_nul and head[:2] not in (b"\xff\xfe", b"\xfe\xff")
     return True
 
 
@@ -550,19 +559,13 @@ async def upload_document(request: Request, file: UploadFile = File(...),
     # 均匹配此模式，合法链路不受影响；校验与 MIME 同口径（200 + ok:false）。
     batch_id_header = (request.headers.get("X-Batch-Id") or "").strip()
     if batch_id_header and not _BATCH_ID_PATTERN.fullmatch(batch_id_header):
-        return {"ok": False, "error": "invalid X-Batch-Id header"}
-
-    max_size = RAG_MAX_FILE_SIZE * 1024 * 1024
-    cl = request.headers.get("content-length")
-    # F10: 预检带 multipart 余量，贴上限文件不误拒；超限仍由流式计数拦截
-    if cl and cl.isdigit() and int(cl) > max_size + _MULTIPART_OVERHEAD:
-        return {"ok": False, "error": f"file too large (max {RAG_MAX_FILE_SIZE}MB)"}
+        return {"ok": False, "error": "批次标识格式不正确"}
 
     try:
         # sync_upload_impl 现在是 async def, 不需要 threadpool 包装
         # (file.read() 是 async, 必须在 async context 调, 同步 I/O 也用 sync open/write)
         result = await sync_upload_impl(
-            file, request, max_size,
+            file, request, RAG_MAX_FILE_SIZE * 1024 * 1024,
             RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE, RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS,
             kb_id=kb_id, department=department,
             tenant_id=identity.tenant_id,
@@ -714,7 +717,7 @@ async def sync_upload_impl(
             except (UnicodeDecodeError, UnicodeEncodeError):
                 continue
     if not safe_name or safe_name.startswith("."):
-        return {"ok": False, "error": "invalid filename"}
+        return {"ok": False, "error": "文件名无效"}
     # P1 fix: 用 realpath 解析 backend/data junction 符号链接
     # 避免同一物理文件被存为两条不同 file_path 记录（SQLite 主键冲突 → 重复 doc_id）
     abs_docs_dir = os.path.realpath(_DOCS_DIRECTORY)
@@ -732,9 +735,9 @@ async def sync_upload_impl(
     final_path = os.path.realpath(final_path)
     try:
         if os.path.commonpath([abs_docs_dir, final_path]) != abs_docs_dir:
-            return {"ok": False, "error": "invalid path"}
+            return {"ok": False, "error": "文件保存路径无效"}
     except ValueError:
-        return {"ok": False, "error": "invalid path"}
+        return {"ok": False, "error": "文件保存路径无效"}
 
     # F9: was_overwrite 检测移到 os.replace 前一刻（原在函数入口，与 replace
     # 隔了整段上传+校验流程，TOCTOU 窗口内并发同名上传可基于陈旧状态决策
@@ -748,11 +751,11 @@ async def sync_upload_impl(
         import hashlib
         upload_id = hashlib.sha256(
             f"{tenant_id}:{actor_id}:{idempotency_key}".encode("utf-8")
-        ).hexdigest()[:12]
+        ).hexdigest()
     else:
-        upload_id = uuid.uuid4().hex[:12]
+        upload_id = uuid.uuid4().hex
     # generation：本次候选代次（向量候选 collection / BM25 staging 目录共用）
-    generation = uuid.uuid4().hex[:16]
+    generation = uuid.uuid4().hex
     # 暂存文件：独立随机命名、不可变——Worker 只读它，索引成功才由发布
     # 协议 os.replace 到正式路径（旧实现在上传 API 进程、拿锁之前就覆盖
     # 正式文件，是并发覆盖竞态的根源，已废除）。
@@ -784,6 +787,8 @@ async def sync_upload_impl(
         cl_str = request.headers.get("content-length", "0")
         cl_int = int(cl_str) if cl_str.isdigit() else None
         hasher = _hashlib.sha256()
+        magic_prefix = bytearray()
+        contains_nul = False
 
         with open(staging_path, "wb") as f:
             while True:
@@ -798,8 +803,13 @@ async def sync_upload_impl(
                         os.unlink(staging_path)
                     except OSError as cleanup_error:
                         logger.warning(f"[RAG] 超限上传暂存文件清理失败: {cleanup_error}")
-                    return {"ok": False, "error": f"file too large (max {max_size//1024//1024}MB, uploaded {total} bytes)"}
+                    return {"ok": False, "error": f"文件超过 {max_size // 1024 // 1024} MB 上限"}
                 f.write(chunk)
+                if len(magic_prefix) < _MAGIC_PREFIX_BYTES:
+                    magic_prefix.extend(
+                        chunk[:_MAGIC_PREFIX_BYTES - len(magic_prefix)]
+                    )
+                contains_nul = contains_nul or b"\x00" in chunk
                 # 流式计算 SHA256（B 阶段）：哈希与字节同源，Worker 校验
                 # 「上传源哈希 = 处理哈希」不再依赖二次读盘
                 hasher.update(chunk)
@@ -822,21 +832,21 @@ async def sync_upload_impl(
                 os.unlink(staging_path)
             except OSError:
                 pass
-            return {"ok": False, "error": "file is empty"}
-        with open(staging_path, "rb") as _f:
-            head = _f.read(8192)
-        _magic_ok = _magic_matches(ext, head)
+            return {"ok": False, "error": "文件内容为空"}
+        _magic_ok = _magic_matches(
+            ext, bytes(magic_prefix), contains_nul=contains_nul,
+        )
         if not _magic_ok:
             try:
                 os.unlink(staging_path)
             except OSError:
                 pass
-            return {"ok": False, "error": f"file is corrupted or not a valid .{ext} file (magic check failed)"}
+            return {"ok": False, "error": f"文件内容与 .{ext} 格式不符或已损坏"}
         # 扫描件预检：PDF 无文本层时，OCR 兜底已启用（RAG_OCR_PROVIDER != off）
         # 则放行交给索引链路走 OCR；OCR 关闭时索引必然产出 0 chunk，
         # 入口直接明确拒绝，不让用户等后台索引几十秒才报错（预检失败不误杀）
         if ext == "pdf":
-            from backend.config.rag import RAG_PDF_PRECHECK_PAGES, RAG_OCR_PROVIDER
+            from backend.config.rag import RAG_OCR_PROVIDER
             from backend.rag.preprocessing.parser.pdf_parser import check_pdf_budget
             # fitz 逐页计数/文本提取是秒级 CPU+IO 块，必须挪出事件循环
             # （2026-11-10 评审：同步执行期间所有并发请求被卡住）
@@ -847,11 +857,14 @@ async def sync_upload_impl(
                 except OSError:
                     pass
                 return {"ok": False, "error": budget_error}
-            _precheck_no_text = await asyncio.to_thread(
-                _pdf_has_text_layer, staging_path, RAG_PDF_PRECHECK_PAGES,
-            )
-            if (RAG_PDF_PRECHECK_PAGES > 0 and RAG_OCR_PROVIDER == "off"
-                    and _precheck_no_text is False):
+            _precheck_no_text = None
+            if RAG_OCR_PROVIDER == "off":
+                # OCR 开启时无需在上传阶段额外扫文本层；关闭 OCR 时检查整个
+                # 已通过资源预算的 PDF，避免文本层只在采样窗口之外而被误拒。
+                _precheck_no_text = await asyncio.to_thread(
+                    _pdf_has_text_layer, staging_path, RAG_PDF_MAX_PAGES,
+                )
+            if _precheck_no_text is False:
                 try:
                     os.unlink(staging_path)
                 except OSError:
@@ -1609,8 +1622,8 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
 
         # 同步索引（在线程池跑，不阻塞事件循环）；返回含 trace_id
         loop = asyncio.get_running_loop()
-        # 并发闸门：解析/chunks/向量都驻留单任务内存，限制同时索引数防
-        # 内存峰值叠加；槽位满时提示排队（emit 用 uploading 阶段，前端无感）
+        # 仅限制 API 进程本地回退执行；Celery 正常路径的并发由
+        # RAG_INDEX_WORKER_CONCURRENCY 控制。槽位满时提示排队。
         sem = _get_index_semaphore()
         if sem.locked():
             await emit("uploading",
@@ -1849,7 +1862,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
     tenant_id = str(tenant_id or (run or {}).get("tenant_id") or "default")
     if run is None:
         # 旧消息/回退路径现场登记（base 取当前 registry 指针）
-        generation = generation or uuid.uuid4().hex[:16]
+        generation = generation or uuid.uuid4().hex
         existing0 = reg.get_by_path(filepath)
         run = run_store.create_run(
             upload_id=upload_id, generation=generation, file_path=filepath,
@@ -2103,13 +2116,10 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
 # 进程，进程内队列里没有 Worker 的事件，SSE 必须改为轮询 Redis。
 _SSE_REDIS_POLL_SECONDS = RAG_SSE_REDIS_POLL_SECONDS
 _SSE_REDIS_POLL_MAX_SECONDS = RAG_SSE_REDIS_POLL_MAX_SECONDS
-_SSE_REDIS_EMPTY_GRACE_POLLS = 20   # 连续无镜像判定过期（20 × 0.5s = 10s）
-# Redis 连接异常宽限（batch3 P2-2）：异常不是「键过期」的证据，宽限 120s
-# 等 Redis 自愈；期间按既有节流节奏发 keepalive 防代理断连。远大于
-# empty grace——键不存在 10s 即可定论，连接故障需要给足恢复窗口。
-_SSE_REDIS_ERROR_GRACE_POLLS = 240
+_SSE_REDIS_EMPTY_GRACE_SECONDS = RAG_SSE_REDIS_EMPTY_GRACE_SECONDS
+_SSE_REDIS_ERROR_GRACE_SECONDS = RAG_SSE_REDIS_ERROR_GRACE_SECONDS
+_SSE_REDIS_KEEPALIVE_SECONDS = RAG_SSE_REDIS_KEEPALIVE_SECONDS
 _SSE_TERMINAL_STAGES = ("done", "error", "duplicate")
-_SSE_KEEPALIVE_EVERY_N_POLLS = 60   # 无变化时每 30s 一条 keepalive
 
 # 已成功入队 Celery 的 upload_id（进程内标记）。SSE 通道以此做上传级路由：
 # 命中 → Redis 轮询通道（Worker 在另一进程，进程内队列没有它的事件）；
@@ -2179,39 +2189,45 @@ async def _redis_poll_events(upload_id: str, last_sig: str | None = None):
     事件格式与队列模式完全一致（_sse_encode("message", evt)），前端零感知。
 
     轮询三态（batch3 P2-2）：("ok", evt) 正常推进；("missing", None) 计入
-    empty grace（键真不存在，10s 判过期——grace 耗尽后先查 run_store 兜底，
+    empty grace（键真不存在，按秒配置判过期——grace 耗尽后先查 run_store 兜底，
     任务仍在途则重置宽限续看，batch8 缺陷 B）；("error", None) 是 Redis 连接
-    故障，不计入过期证据，宽限 120s 等自愈，期间低频 keepalive 保活。
+    故障，不计入过期证据，按秒配置宽限自愈，期间低频 keepalive 保活。
     """
-    empty_polls = 0
-    error_polls = 0
-    unchanged_polls = 0
-    deadline = asyncio.get_running_loop().time() + _SSE_REDIS_POLL_MAX_SECONDS
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _SSE_REDIS_POLL_MAX_SECONDS
+    empty_since: float | None = None
+    error_since: float | None = None
+    last_keepalive_at = loop.time()
     while True:
+        if loop.time() >= deadline:
+            yield _sse_encode("error", {"message": "索引进度轮询超时（任务可能仍在后台执行）"})
+            return
         status, evt = await asyncio.to_thread(_read_progress_redis, upload_id)
+        now = loop.time()
         if status == "error":
-            error_polls += 1
-            if error_polls >= _SSE_REDIS_ERROR_GRACE_POLLS:
+            if error_since is None:
+                error_since = now
+            if now - error_since >= _SSE_REDIS_ERROR_GRACE_SECONDS:
                 yield _sse_encode("error", {"message": "索引进度服务暂时不可用，请稍后刷新确认任务状态"})
                 return
-            unchanged_polls += 1
-            if unchanged_polls >= _SSE_KEEPALIVE_EVERY_N_POLLS:
-                unchanged_polls = 0
+            if now - last_keepalive_at >= _SSE_REDIS_KEEPALIVE_SECONDS:
+                last_keepalive_at = now
                 yield ": keepalive\n\n"
             await asyncio.sleep(_SSE_REDIS_POLL_SECONDS)
             continue
-        error_polls = 0
+        error_since = None
         if status == "missing":
-            empty_polls += 1
-            if empty_polls >= _SSE_REDIS_EMPTY_GRACE_POLLS:
+            if empty_since is None:
+                empty_since = now
+            if now - empty_since >= _SSE_REDIS_EMPTY_GRACE_SECONDS:
                 # batch8 缺陷 B 兜底：键消失（Redis 丢键/极端过期）但任务仍在
                 # 途时，run_store 是权威终局——查到非终态运行则不计过期证据，
                 # 重置宽限继续轮询（每个 grace 周期只查一次 DB，频次有界）。
                 if await asyncio.to_thread(_run_still_active, upload_id):
-                    empty_polls = 0
-                    unchanged_polls += 1
-                    if unchanged_polls >= _SSE_KEEPALIVE_EVERY_N_POLLS:
-                        unchanged_polls = 0
+                    empty_since = loop.time()
+                    now = empty_since
+                    if now - last_keepalive_at >= _SSE_REDIS_KEEPALIVE_SECONDS:
+                        last_keepalive_at = now
                         yield ": keepalive\n\n"
                     await asyncio.sleep(_SSE_REDIS_POLL_SECONDS)
                     continue
@@ -2219,23 +2235,18 @@ async def _redis_poll_events(upload_id: str, last_sig: str | None = None):
                 return
             await asyncio.sleep(_SSE_REDIS_POLL_SECONDS)
             continue
-        empty_polls = 0
+        empty_since = None
         import json as _json
         sig = _json.dumps(evt, sort_keys=True, ensure_ascii=False, default=str)
         if sig != last_sig:
             last_sig = sig
-            unchanged_polls = 0
+            last_keepalive_at = now
             yield _sse_encode("message", evt)
             if evt.get("stage") in _SSE_TERMINAL_STAGES:
                 return
-        else:
-            unchanged_polls += 1
-            if unchanged_polls >= _SSE_KEEPALIVE_EVERY_N_POLLS:
-                unchanged_polls = 0
-                yield ": keepalive\n\n"
-        if asyncio.get_running_loop().time() > deadline:
-            yield _sse_encode("error", {"message": "索引进度轮询超时（任务可能仍在后台执行）"})
-            return
+        elif now - last_keepalive_at >= _SSE_REDIS_KEEPALIVE_SECONDS:
+            last_keepalive_at = now
+            yield ": keepalive\n\n"
         await asyncio.sleep(_SSE_REDIS_POLL_SECONDS)
 
 

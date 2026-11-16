@@ -68,7 +68,11 @@ class TestGetRagStatusNonBlocking:
             elapsed = time.time() - t0
             assert elapsed < 1.0, f"get_rag_status 阻塞了 {elapsed:.1f}s（回归：不得等初始化锁）"
             status.pop("max_file_size_mb", None)
+            status.pop("ocr_page_budget_max_pages", None)
+            status.pop("upload_sse_max_duration_seconds", None)
+            status.pop("upload_sse_idle_timeout_seconds", None)
             status.pop("multipart_overhead_bytes", None)
+            status.pop("upload_request_body_limit_bytes", None)
             assert status == {
                 "ready": False,
                 "status": "initializing",
@@ -81,18 +85,31 @@ class TestGetRagStatusNonBlocking:
         monkeypatch.setattr(pipeline_mod, "_pipeline_singleton", object())
         status = deps.get_rag_status()
         status.pop("max_file_size_mb", None)
+        status.pop("ocr_page_budget_max_pages", None)
+        status.pop("upload_sse_max_duration_seconds", None)
+        status.pop("upload_sse_idle_timeout_seconds", None)
         status.pop("multipart_overhead_bytes", None)
+        status.pop("upload_request_body_limit_bytes", None)
         assert status == {"ready": True, "status": "ready"}
 
     def test_status_carries_upload_limit_fields(self, clean_pipeline_state, monkeypatch):
         """#6（2026-11-11 batch4b）：health 透传上传预检上限——前端 fail-fast
         的权威值来源，改 RAG_MAX_FILE_SIZE env 后前端跟随。"""
         import backend.config.rag as rag_cfg
-        monkeypatch.setattr(rag_cfg, "RAG_MAX_FILE_SIZE", 100)
+        monkeypatch.setattr(rag_cfg, "RAG_MAX_FILE_SIZE", 60)
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT", 2500)
+        monkeypatch.setattr(rag_cfg, "RAG_SSE_REDIS_POLL_MAX_SECONDS", 1200)
+        monkeypatch.setattr(rag_cfg, "RAG_UPLOAD_SSE_IDLE_TIMEOUT_SECONDS", 90)
         monkeypatch.setattr(pipeline_mod, "_pipeline_singleton", object())
         status = deps.get_rag_status()
-        assert status["max_file_size_mb"] == 100
-        assert status["multipart_overhead_bytes"] == rag_cfg.RAG_UPLOAD_MULTIPART_OVERHEAD
+        assert status["max_file_size_mb"] == 60
+        assert status["ocr_page_budget_max_pages"] == 2500
+        assert status["upload_sse_max_duration_seconds"] == 1200
+        assert status["upload_sse_idle_timeout_seconds"] == 90
+        assert status["upload_request_body_limit_bytes"] == rag_cfg.RAG_UPLOAD_INGRESS_MAX_BODY_BYTES
+        assert status["multipart_overhead_bytes"] == (
+            rag_cfg.RAG_UPLOAD_INGRESS_MAX_BODY_BYTES - 60 * 1024 * 1024
+        )
 
     def test_status_error(self, clean_pipeline_state, monkeypatch):
         monkeypatch.setattr(pipeline_mod, "_pipeline_init_error", "init failed")

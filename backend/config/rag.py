@@ -3,6 +3,7 @@
 包含 chunk、citation、multi_query、自适应检索、文档分类、清洗等。
 """
 import hashlib
+import math
 import os
 
 from dotenv import load_dotenv
@@ -53,7 +54,8 @@ CHUNK_LLM_MODEL = os.getenv("CHUNK_LLM_MODEL", "qwen2.5:3b")
 # ====================================
 # 文件上传限制 (P0-1 流式上传)
 # ====================================
-# 单文件最大 50MB,企业可调到 100MB;超过 1GB 应改用对象存储
+# 当前 APISIX 与 BFF 的请求体硬上限为 64 MiB；文件上限必须严格小于请求体
+# 上限，为 multipart 封装留出空间。提高文件上限前需先同步调整入口配置。
 RAG_MAX_FILE_SIZE = int(os.getenv("RAG_MAX_FILE_SIZE", "50"))  # 单位 MB
 # 临时文件目录 (atomic rename 前存这里, Docker 容器内安全)
 # 用 RAG_DATA_DIR 派生绝对路径，消除相对路径的 CWD 依赖
@@ -79,18 +81,44 @@ RAG_UPLOAD_CHUNK_SIZE = int(os.getenv("RAG_UPLOAD_CHUNK_SIZE", str(1024 * 1024))
 # SSE 进度推送间隔: 每 5MB 或 500ms 触发一次
 RAG_UPLOAD_EMIT_BYTES = int(os.getenv("RAG_UPLOAD_EMIT_BYTES", str(5 * 1024 * 1024)))
 RAG_UPLOAD_EMIT_MS = int(os.getenv("RAG_UPLOAD_EMIT_MS", "500"))
-# 索引并发闸门：解析 AST + chunks + 向量全在单任务内存里，多文件并发上传
-# 会叠加内存峰值（50MB 文件可展开成数百 MB），信号量排队限制同时索引数
+# API 进程本地回退索引的并发闸门。正常 Celery 上传由
+# RAG_INDEX_WORKER_CONCURRENCY 控制；这两个值不能互相替代。
+# 每个任务会同时驻留解析 AST、chunks 和向量等对象，真实峰值需按运行数据标定。
 RAG_MAX_CONCURRENT_INDEX = int(os.getenv("RAG_MAX_CONCURRENT_INDEX", "2"))
-# multipart 封装开销余量（F10）：boundary + 表单头字段比裸文件大几百字节到
-# 几 KB。Content-Length 预检（路由层与 body_limit 中间件）都要放宽这个余量，
-# 精确上限仍由流式字节计数强制执行。协议常量而非运维参数，不开放 env。
-RAG_UPLOAD_MULTIPART_OVERHEAD = 16 * 1024
-# PDF 扫描件预检：上传入口检查前 N 页是否有文本层，无文本层（扫描件/纯图片）
-# 直接明确报错，不再等索引走到分块阶段才失败（0 = 关闭预检）。
-# 注意：OCR 启用时预检自动放行扫描件（交给 OCR 兜底），仅 OCR=off 时拒绝
-RAG_PDF_PRECHECK_PAGES = int(os.getenv("RAG_PDF_PRECHECK_PAGES", "10"))
+# 与 apisix/config.yaml 的 client_max_body_size: 64m、BFF 默认请求体上限一致。
+RAG_UPLOAD_INGRESS_MAX_BODY_BYTES = 64 * 1024 * 1024
 
+# 上传辅助任务的运行参数。默认值控制清理频率/崩溃锁恢复时长，不改变索引结果。
+# 如运行观测显示清理延迟或误接管，应按实际任务时长调整，而不是改业务切分阈值。
+RAG_UPLOAD_LOCK_STALE_SECONDS = float(
+    os.getenv("RAG_UPLOAD_LOCK_STALE_SECONDS", str(30 * 60))
+)
+RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS = float(
+    os.getenv("RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS", "60")
+)
+RAG_UPLOAD_PROGRESS_GC_INTERVAL_SECONDS = float(
+    os.getenv("RAG_UPLOAD_PROGRESS_GC_INTERVAL_SECONDS", "300")
+)
+
+
+def _validate_rag_upload_ingress_limit(
+    file_limit_mb: int, ingress_limit_bytes: int,
+) -> None:
+    if file_limit_mb <= 0:
+        raise ValueError("RAG_MAX_FILE_SIZE 必须大于 0 MB")
+    if ingress_limit_bytes <= 0:
+        raise ValueError("RAG_UPLOAD_INGRESS_MAX_BODY_BYTES 必须大于 0")
+    if file_limit_mb * 1024 * 1024 >= ingress_limit_bytes:
+        raise ValueError(
+            "RAG_MAX_FILE_SIZE 必须低于当前 64 MiB 请求体上限并为 multipart 留出空间；"
+            "请先同步调整 APISIX 和管理端 BFF 请求体上限"
+        )
+
+
+_validate_rag_upload_ingress_limit(
+    RAG_MAX_FILE_SIZE,
+    RAG_UPLOAD_INGRESS_MAX_BODY_BYTES,
+)
 # ── PDF OCR 兜底（扫描件/无文本层）──
 # 供应商：rapidocr（默认，离线免费）| dashscope（备选，qwen-vl 逐页识别，
 # token 用量计入 /observability/tokens 的 OCR 维度）| off（关闭，入口拒绝扫描件）
@@ -101,6 +129,7 @@ RAG_OCR_PROVIDER = "rapidocr"
 RAG_OCR_MIN_TEXT_CHARS = int(os.getenv("RAG_OCR_MIN_TEXT_CHARS", "30"))
 # 渲染 DPI（越高越准越慢）与单文档 OCR 页数上限（防异常大文档失控烧钱/耗时）
 RAG_OCR_DPI = int(os.getenv("RAG_OCR_DPI", "200"))
+RAG_OCR_RETRY_DPI = int(os.getenv("RAG_OCR_RETRY_DPI", "300"))
 RAG_OCR_MAX_PAGES = int(os.getenv("RAG_OCR_MAX_PAGES", "100"))
 # PDF 解析资源预算（2026-11-09 审计）：正常文档远低于此，只挡恶意超大文档。
 # 页数、单页面积（pt²）、总页面面积任一超限即拒绝解析。
@@ -111,8 +140,48 @@ RAG_PDF_MAX_TOTAL_PAGE_AREA = float(
 # OCR 单次渲染像素上限（含高 DPI 重试），防超大幅面渲染耗尽内存。
 RAG_OCR_MAX_PAGE_PIXELS = int(
     os.getenv("RAG_OCR_MAX_PAGE_PIXELS", "120000000"))
-# 仅管理员单次 PDF 上传可以覆盖全局预算；该硬上限不由请求方或环境变量提高。
-RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT = 500
+# 单次上传可下调 OCR 页预算，但不得高于运维配置的默认 OCR 预算；
+# PDF 解析页数上限只保护文件结构扫描，不代表可接受同等数量的 OCR 成本。
+RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT = RAG_OCR_MAX_PAGES
+_positive_upload_settings = {
+    "RAG_MAX_FILE_SIZE": RAG_MAX_FILE_SIZE,
+    "RAG_UPLOAD_CHUNK_SIZE": RAG_UPLOAD_CHUNK_SIZE,
+    "RAG_UPLOAD_EMIT_BYTES": RAG_UPLOAD_EMIT_BYTES,
+    "RAG_UPLOAD_EMIT_MS": RAG_UPLOAD_EMIT_MS,
+    "RAG_MAX_CONCURRENT_INDEX": RAG_MAX_CONCURRENT_INDEX,
+    "RAG_OCR_MIN_TEXT_CHARS": RAG_OCR_MIN_TEXT_CHARS,
+    "RAG_OCR_DPI": RAG_OCR_DPI,
+    "RAG_OCR_RETRY_DPI": RAG_OCR_RETRY_DPI,
+    "RAG_OCR_MAX_PAGES": RAG_OCR_MAX_PAGES,
+    "RAG_PDF_MAX_PAGES": RAG_PDF_MAX_PAGES,
+    "RAG_PDF_MAX_PAGE_AREA": RAG_PDF_MAX_PAGE_AREA,
+    "RAG_PDF_MAX_TOTAL_PAGE_AREA": RAG_PDF_MAX_TOTAL_PAGE_AREA,
+    "RAG_OCR_MAX_PAGE_PIXELS": RAG_OCR_MAX_PAGE_PIXELS,
+    "RAG_UPLOAD_LOCK_STALE_SECONDS": RAG_UPLOAD_LOCK_STALE_SECONDS,
+    "RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS": RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS,
+    "RAG_UPLOAD_PROGRESS_GC_INTERVAL_SECONDS": RAG_UPLOAD_PROGRESS_GC_INTERVAL_SECONDS,
+}
+def _validate_rag_ocr_dpi(base_dpi: int, retry_dpi: int) -> None:
+    """重试必须提高渲染分辨率，且两档都不能低于 PDF 坐标基准。"""
+    if base_dpi < 72 or retry_dpi < 72:
+        raise ValueError("RAG OCR DPI 配置不得低于 PDF 的 72 DPI 坐标基准")
+    if retry_dpi <= base_dpi:
+        raise ValueError("RAG_OCR_RETRY_DPI 必须高于基础 DPI，重试才会增加分辨率")
+
+
+_validate_rag_ocr_dpi(RAG_OCR_DPI, RAG_OCR_RETRY_DPI)
+invalid_upload_settings = [
+    name for name, value in _positive_upload_settings.items()
+    if not math.isfinite(value) or value <= 0
+]
+if invalid_upload_settings:
+    raise ValueError(
+        "RAG 上传/解析配置必须大于 0: " + ", ".join(invalid_upload_settings)
+    )
+if RAG_UPLOAD_LOCK_STALE_SECONDS <= RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS:
+    raise ValueError(
+        "RAG_UPLOAD_LOCK_STALE_SECONDS 必须大于锁心跳间隔，避免误接管活锁"
+    )
 # 云端 OCR 的供应商、Key、URL 与模型由管理端 ocr 角色绑定和凭据表提供。
 # 模型名走角色注册表（role=ocr，代码默认 qwen-vl-max）
 RAG_OCR_DASHSCOPE_MODEL = _literal_model("ocr")
@@ -123,6 +192,22 @@ RAG_OCR_DASHSCOPE_TIMEOUT = int(os.getenv("RAG_OCR_DASHSCOPE_TIMEOUT", "60"))
 # + 相邻调用最小间隔毫秒（批量入库限流，防平台 429）。仅对 dashscope 供应商生效
 RAG_OCR_CACHE_ENABLED = os.getenv("RAG_OCR_CACHE_ENABLED", "1") == "1"
 RAG_OCR_MIN_INTERVAL_MS = int(os.getenv("RAG_OCR_MIN_INTERVAL_MS", "300"))
+
+
+def _validate_cloud_ocr_runtime_config(
+    *, timeout_seconds: int, min_interval_ms: int,
+) -> None:
+    """校验云 OCR 超时和限流间隔，0 间隔表示显式关闭限流。"""
+    if timeout_seconds <= 0:
+        raise ValueError("RAG_OCR_DASHSCOPE_TIMEOUT 必须大于 0 秒")
+    if min_interval_ms < 0:
+        raise ValueError("RAG_OCR_MIN_INTERVAL_MS 不得小于 0")
+
+
+_validate_cloud_ocr_runtime_config(
+    timeout_seconds=RAG_OCR_DASHSCOPE_TIMEOUT,
+    min_interval_ms=RAG_OCR_MIN_INTERVAL_MS,
+)
 # 五路存储一致性清扫（Sweeper）：写路径的补偿回滚自身可能失败留下孤儿/幽灵，
 # 事后定期对账 + 修复。首次延迟避开启动期全量增量索引，之后按小时周期跑
 RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN = int(os.getenv("RAG_CONSISTENCY_SWEEP_FIRST_DELAY_MIN", "10"))
@@ -145,7 +230,8 @@ METADATA_LLM_EXTRACT_MIN_CHARS = int(os.getenv("METADATA_LLM_EXTRACT_MIN_CHARS",
 METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS = int(
     os.getenv("METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS", "1024")
 )
-# 参与抽取的文本采样上限（超长文档按 60/20/20 头中尾采样，控制 token 成本）
+# 章节感知抽取的最大文本长度，限制单文档元数据增强的输入成本；
+# 具体阈值仍需用真实文档校准摘要和实体覆盖率。
 METADATA_LLM_EXTRACT_MAX_CHARS = int(os.getenv("METADATA_LLM_EXTRACT_MAX_CHARS", "6000"))
 
 
@@ -154,6 +240,48 @@ METADATA_LLM_EXTRACT_MAX_CHARS = int(os.getenv("METADATA_LLM_EXTRACT_MAX_CHARS",
 METADATA_EMBED_CONCURRENCY = int(os.getenv("METADATA_EMBED_CONCURRENCY", "4"))
 METADATA_LLM_CONCURRENCY = int(os.getenv("METADATA_LLM_CONCURRENCY", "8"))
 METADATA_DB_CONCURRENCY = int(os.getenv("METADATA_DB_CONCURRENCY", "16"))
+# LLM 元数据槽位等待上限；超时后的降级语义见 metadata_llm.py。
+METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT = float(
+    os.getenv("METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT", "10")
+)
+
+
+def _validate_metadata_extraction_config(
+    *, min_text_chars: int, max_text_chars: int, max_output_tokens: int,
+    embed_concurrency: int, llm_concurrency: int, db_concurrency: int,
+    semaphore_wait_timeout: float,
+) -> None:
+    """校验上传期元数据抽取预算和并发参数。"""
+    values = {
+        "METADATA_LLM_EXTRACT_MIN_CHARS": min_text_chars,
+        "METADATA_LLM_EXTRACT_MAX_CHARS": max_text_chars,
+        "METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS": max_output_tokens,
+        "METADATA_EMBED_CONCURRENCY": embed_concurrency,
+        "METADATA_LLM_CONCURRENCY": llm_concurrency,
+        "METADATA_DB_CONCURRENCY": db_concurrency,
+        "METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT": semaphore_wait_timeout,
+    }
+    invalid = [
+        name for name, value in values.items()
+        if not math.isfinite(value) or value <= 0
+    ]
+    if invalid:
+        raise ValueError("元数据抽取预算/并发配置必须大于 0: " + ", ".join(invalid))
+    if max_text_chars < min_text_chars:
+        raise ValueError(
+            "METADATA_LLM_EXTRACT_MAX_CHARS 不得小于最小抽取文本阈值"
+        )
+
+
+_validate_metadata_extraction_config(
+    min_text_chars=METADATA_LLM_EXTRACT_MIN_CHARS,
+    max_text_chars=METADATA_LLM_EXTRACT_MAX_CHARS,
+    max_output_tokens=METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS,
+    embed_concurrency=METADATA_EMBED_CONCURRENCY,
+    llm_concurrency=METADATA_LLM_CONCURRENCY,
+    db_concurrency=METADATA_DB_CONCURRENCY,
+    semaphore_wait_timeout=METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT,
+)
 # 表格描述等元数据缓存 TTL（通用，非级联专属——table_describe 消费）
 METADATA_CACHE_TTL_SECONDS = int(os.getenv("METADATA_CACHE_TTL_SECONDS", "604800"))
 # 规则活动快照的进程内缓存不能无限期保留：发布发生在另一个 worker
@@ -162,10 +290,26 @@ METADATA_RULE_LOCAL_CACHE_SECONDS = float(
     os.getenv("METADATA_RULE_LOCAL_CACHE_SECONDS", "5")
 )
 
+
+def _validate_rag_ingest_cache_config(
+    *, metadata_cache_ttl_seconds: int, embedding_cache_ttl_seconds: int,
+    rule_local_cache_seconds: float,
+) -> None:
+    """校验上传期缓存的保留时间，避免无效 TTL 被 Redis 软失败吞掉。"""
+    positive_ttls = {
+        "METADATA_CACHE_TTL_SECONDS": metadata_cache_ttl_seconds,
+        "RAG_EMBED_CACHE_TTL_SECONDS": embedding_cache_ttl_seconds,
+    }
+    invalid_ttls = [name for name, value in positive_ttls.items() if value <= 0]
+    if invalid_ttls:
+        raise ValueError("RAG 上传缓存 TTL 必须大于 0: " + ", ".join(invalid_ttls))
+    if not math.isfinite(rule_local_cache_seconds) or rule_local_cache_seconds < 0:
+        raise ValueError("METADATA_RULE_LOCAL_CACHE_SECONDS 必须是有限非负数")
+
+
 # ====================================
 # Chunk 配置
 # ====================================
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 
 # 文档类型感知分块
@@ -207,6 +351,11 @@ LEGAL_CLAUSES_PER_PARENT = int(os.getenv("LEGAL_CLAUSES_PER_PARENT", "5"))
 # 3.1 embedding 结果缓存（Redis）——重索引时未变化 chunk 免重复嵌入
 RAG_EMBED_CACHE_ENABLED = os.getenv("RAG_EMBED_CACHE_ENABLED", "true").lower() == "true"
 RAG_EMBED_CACHE_TTL_SECONDS = int(os.getenv("RAG_EMBED_CACHE_TTL_SECONDS", str(30 * 86400)))
+_validate_rag_ingest_cache_config(
+    metadata_cache_ttl_seconds=METADATA_CACHE_TTL_SECONDS,
+    embedding_cache_ttl_seconds=RAG_EMBED_CACHE_TTL_SECONDS,
+    rule_local_cache_seconds=METADATA_RULE_LOCAL_CACHE_SECONDS,
+)
 
 # 4.3c 表格行 LLM 描述——为行级 kv chunk 生成一句话语义描述拼入 embedding
 ENABLE_TABLE_DESCRIPTIONS = os.getenv("ENABLE_TABLE_DESCRIPTIONS", "true").lower() == "true"
@@ -228,7 +377,7 @@ EMBED_RETRY_BACKOFF_MAX = float(os.getenv("EMBED_RETRY_BACKOFF_MAX", "30"))
 # 批间并发（P1，2026-10-24）：5000-chunk 文档云端 10 条/批 = 500 次串行
 # HTTP（纯嵌入 1.5-2.5 分钟）；2 路批并发减半时延。限流敏感环境可设 1
 # 恢复纯串行；重试退避期间不占用并发位。
-EMBED_BATCH_CONCURRENCY = max(1, int(os.getenv("EMBED_BATCH_CONCURRENCY", "2")))
+EMBED_BATCH_CONCURRENCY = int(os.getenv("EMBED_BATCH_CONCURRENCY", "2"))
 # 全量离线重建允许较长模型响应；不能修改在线检索的短请求超时。
 EMBEDDING_REBUILD_REQUEST_TIMEOUT = float(
     os.getenv("EMBEDDING_REBUILD_REQUEST_TIMEOUT", "60")
@@ -237,6 +386,86 @@ EMBEDDING_REBUILD_BATCH_SIZE = int(os.getenv("EMBEDDING_REBUILD_BATCH_SIZE", "1"
 # 单文档 chunk 数量上限（生产防护）：异常超长/解析失控文档超限时截断 + 告警，
 # 防止无界产出撑爆 embedding/向量库；501 页有效文本 PDF 实测需约 5,395 个 chunk。
 MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "6000"))
+
+
+def _validate_rag_embedding_ingest_config(
+    *, batch_size: int, provider_request_limit: int, retry_max: int,
+    retry_backoff_base: float, retry_backoff_max: float,
+    batch_concurrency: int, rebuild_request_timeout: float,
+    rebuild_batch_size: int,
+) -> None:
+    """校验上传索引的 embedding 批次、重试和重建预算。"""
+    positive_values = {
+        "EMBED_BATCH_SIZE": batch_size,
+        "EMBED_REQUEST_LIMIT": provider_request_limit,
+        "EMBED_RETRY_MAX": retry_max,
+        "EMBED_BATCH_CONCURRENCY": batch_concurrency,
+        "EMBEDDING_REBUILD_BATCH_SIZE": rebuild_batch_size,
+        "EMBEDDING_REBUILD_REQUEST_TIMEOUT": rebuild_request_timeout,
+        "EMBED_RETRY_BACKOFF_BASE": retry_backoff_base,
+        "EMBED_RETRY_BACKOFF_MAX": retry_backoff_max,
+    }
+    invalid = [
+        name for name, value in positive_values.items()
+        if not math.isfinite(value) or value <= 0
+    ]
+    if invalid:
+        raise ValueError("Embedding 上传索引预算必须大于 0: " + ", ".join(invalid))
+    if retry_backoff_max < retry_backoff_base:
+        raise ValueError("EMBED_RETRY_BACKOFF_MAX 不得小于退避起始值")
+
+
+_validate_rag_embedding_ingest_config(
+    batch_size=EMBED_BATCH_SIZE,
+    provider_request_limit=EMBED_REQUEST_LIMIT,
+    retry_max=EMBED_RETRY_MAX,
+    retry_backoff_base=EMBED_RETRY_BACKOFF_BASE,
+    retry_backoff_max=EMBED_RETRY_BACKOFF_MAX,
+    batch_concurrency=EMBED_BATCH_CONCURRENCY,
+    rebuild_request_timeout=EMBEDDING_REBUILD_REQUEST_TIMEOUT,
+    rebuild_batch_size=EMBEDDING_REBUILD_BATCH_SIZE,
+)
+
+
+def _validate_rag_chunking_config(
+    *, leaf_tokens: int, parent_tokens: int, overlap_tokens: int,
+    structure_threshold: float, semantic_min_tokens: int,
+    semantic_similarity_threshold: float, semantic_embed_batch_size: int,
+    semantic_embed_retry: int, max_chunks_per_doc: int,
+) -> None:
+    """拦截会导致空分块、无效重叠或越界阈值的配置。"""
+    if leaf_tokens <= 0 or parent_tokens < leaf_tokens:
+        raise ValueError("Leaf/Parent 切分预算必须为正，且 Parent 不得小于 Leaf")
+    if overlap_tokens < 0 or overlap_tokens >= leaf_tokens:
+        raise ValueError("CHUNK_OVERLAP 必须在 0 到 Leaf 切分预算之间")
+    if not math.isfinite(structure_threshold) or not 0 <= structure_threshold <= 1:
+        raise ValueError("STRUCTURE_COMPLETE_THRESHOLD 必须在 0 到 1 之间")
+    if semantic_min_tokens <= 0:
+        raise ValueError("SEMANTIC_CHUNK_MIN_TOKENS 必须大于 0")
+    if semantic_embed_batch_size <= 0:
+        raise ValueError("SEMANTIC_EMBED_BATCH_SIZE 必须大于 0")
+    if semantic_embed_retry <= 0:
+        raise ValueError("SEMANTIC_EMBED_RETRY 必须大于 0")
+    if (
+        not math.isfinite(semantic_similarity_threshold)
+        or not -1 <= semantic_similarity_threshold <= 1
+    ):
+        raise ValueError("SEMANTIC_SIMILARITY_THRESHOLD 必须在 -1 到 1 之间")
+    if max_chunks_per_doc <= 0:
+        raise ValueError("MAX_CHUNKS_PER_DOC 必须大于 0")
+
+
+_validate_rag_chunking_config(
+    leaf_tokens=LEAF_CHUNK_TOKENS,
+    parent_tokens=PARENT_CHUNK_TOKENS,
+    overlap_tokens=CHUNK_OVERLAP,
+    structure_threshold=STRUCTURE_COMPLETE_THRESHOLD,
+    semantic_min_tokens=SEMANTIC_CHUNK_MIN_TOKENS,
+    semantic_similarity_threshold=SEMANTIC_SIMILARITY_THRESHOLD,
+    semantic_embed_batch_size=SEMANTIC_EMBED_BATCH_SIZE,
+    semantic_embed_retry=SEMANTIC_EMBED_RETRY,
+    max_chunks_per_doc=MAX_CHUNKS_PER_DOC,
+)
 
 # ====================================
 # Knowledge Base 隔离配置
@@ -497,6 +726,32 @@ RAG_TABLE_MAX_CELLS = int(os.getenv("RAG_TABLE_MAX_CELLS", "2000000"))
 FINANCIAL_TABLE_ROWS_PER_CHUNK = int(os.getenv("FINANCIAL_TABLE_ROWS_PER_CHUNK", "20"))
 # 财务文档 chunk 数量上限（覆盖 MAX_CHUNKS_PER_DOC，因行级切分会产更多 chunk）
 FINANCIAL_MAX_CHUNKS_PER_DOC = int(os.getenv("FINANCIAL_MAX_CHUNKS_PER_DOC", "10000"))
+
+
+def _validate_rag_table_ingest_config(
+    *, max_rows: int, max_cells: int, financial_rows_per_chunk: int,
+    financial_max_chunks_per_doc: int, legal_clauses_per_parent: int,
+) -> None:
+    """校验表格解析和类型切分的数量上限。"""
+    values = {
+        "RAG_TABLE_MAX_ROWS": max_rows,
+        "RAG_TABLE_MAX_CELLS": max_cells,
+        "FINANCIAL_TABLE_ROWS_PER_CHUNK": financial_rows_per_chunk,
+        "FINANCIAL_MAX_CHUNKS_PER_DOC": financial_max_chunks_per_doc,
+        "LEGAL_CLAUSES_PER_PARENT": legal_clauses_per_parent,
+    }
+    invalid = [name for name, value in values.items() if value <= 0]
+    if invalid:
+        raise ValueError("表格/类型切分数量配置必须大于 0: " + ", ".join(invalid))
+
+
+_validate_rag_table_ingest_config(
+    max_rows=RAG_TABLE_MAX_ROWS,
+    max_cells=RAG_TABLE_MAX_CELLS,
+    financial_rows_per_chunk=FINANCIAL_TABLE_ROWS_PER_CHUNK,
+    financial_max_chunks_per_doc=FINANCIAL_MAX_CHUNKS_PER_DOC,
+    legal_clauses_per_parent=LEGAL_CLAUSES_PER_PARENT,
+)
 # 财务文档强制 PII 脱敏（覆写全局 FILTER_ENABLE_PII_MASK）
 FINANCIAL_PII_MASK_FORCE = os.getenv("FINANCIAL_PII_MASK_FORCE", "true").lower() == "true"
 # 财务 SQL 旁路检索开关：查询含财务指标 + 数值条件时走 SQL 精确检索。
@@ -549,3 +804,37 @@ METADATA_SCHEMA_FINGERPRINT = compute_metadata_fingerprint()
 # 进程，进程内队列没有 Worker 事件，SSE 必须轮询 Redis）
 RAG_SSE_REDIS_POLL_SECONDS = float(os.getenv("RAG_SSE_REDIS_POLL_SECONDS", "0.5"))
 RAG_SSE_REDIS_POLL_MAX_SECONDS = float(os.getenv("RAG_SSE_REDIS_POLL_MAX_SECONDS", "1900"))
+# 轮询判定与心跳按时间配置，避免更改轮询频率时让宽限期跟着漂移。
+# 默认值沿用当前服务语义；上线后应结合 Redis 故障和索引时长观测校准。
+RAG_SSE_REDIS_EMPTY_GRACE_SECONDS = float(
+    os.getenv("RAG_SSE_REDIS_EMPTY_GRACE_SECONDS", "10")
+)
+RAG_SSE_REDIS_ERROR_GRACE_SECONDS = float(
+    os.getenv("RAG_SSE_REDIS_ERROR_GRACE_SECONDS", "120")
+)
+RAG_SSE_REDIS_KEEPALIVE_SECONDS = float(
+    os.getenv("RAG_SSE_REDIS_KEEPALIVE_SECONDS", "30")
+)
+# 浏览器检测进度流静默的上限，由 /rag/health 提供给管理端。
+RAG_UPLOAD_SSE_IDLE_TIMEOUT_SECONDS = float(
+    os.getenv("RAG_UPLOAD_SSE_IDLE_TIMEOUT_SECONDS", "120")
+)
+
+_sse_upload_timeouts = {
+    "RAG_SSE_REDIS_POLL_SECONDS": RAG_SSE_REDIS_POLL_SECONDS,
+    "RAG_SSE_REDIS_POLL_MAX_SECONDS": RAG_SSE_REDIS_POLL_MAX_SECONDS,
+    "RAG_SSE_REDIS_EMPTY_GRACE_SECONDS": RAG_SSE_REDIS_EMPTY_GRACE_SECONDS,
+    "RAG_SSE_REDIS_ERROR_GRACE_SECONDS": RAG_SSE_REDIS_ERROR_GRACE_SECONDS,
+    "RAG_SSE_REDIS_KEEPALIVE_SECONDS": RAG_SSE_REDIS_KEEPALIVE_SECONDS,
+    "RAG_UPLOAD_SSE_IDLE_TIMEOUT_SECONDS": RAG_UPLOAD_SSE_IDLE_TIMEOUT_SECONDS,
+}
+invalid_sse_timeouts = [
+    name for name, value in _sse_upload_timeouts.items()
+    if not math.isfinite(value) or value <= 0
+]
+if invalid_sse_timeouts:
+    raise ValueError("RAG 上传进度轮询、宽限期、心跳和超时配置必须大于 0")
+if RAG_UPLOAD_SSE_IDLE_TIMEOUT_SECONDS <= RAG_SSE_REDIS_KEEPALIVE_SECONDS:
+    raise ValueError(
+        "RAG_UPLOAD_SSE_IDLE_TIMEOUT_SECONDS 必须大于服务端 SSE 心跳间隔"
+    )

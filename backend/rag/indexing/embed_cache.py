@@ -22,7 +22,7 @@ class EmbeddingCache:
     """批量 get/put 的 embedding Redis 缓存读写器（无状态，可每实例新建）。"""
 
     def __init__(self, model_name: str, enabled: bool = True,
-                 ttl_seconds: int = 30 * 86400, *, provider: str = "",
+                 ttl_seconds: int | None = None, *, provider: str = "",
                  model_revision: str = "", config_signature: str = ""):
         from backend.config.rag import RAG_EMBED_CACHE_ENABLED, RAG_EMBED_CACHE_TTL_SECONDS
         self.model_name = (model_name or "").strip() or "unknown"
@@ -33,7 +33,11 @@ class EmbeddingCache:
         # 自然失效，防止脏向量在 TTL 内继续命中（对齐检索侧身份口径）。
         self.config_signature = (config_signature or "").strip() or "unknown"
         self.enabled = enabled and RAG_EMBED_CACHE_ENABLED
-        self.ttl = ttl_seconds or RAG_EMBED_CACHE_TTL_SECONDS
+        if ttl_seconds is not None and ttl_seconds <= 0:
+            raise ValueError("embedding cache TTL 必须大于 0 秒")
+        self.ttl = (
+            RAG_EMBED_CACHE_TTL_SECONDS if ttl_seconds is None else ttl_seconds
+        )
         identity = "|".join((
             self.provider, self.model_name, self.model_revision,
             self.config_signature,
