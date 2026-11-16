@@ -138,14 +138,14 @@ class TestPathTraversal:
         f = FakeUploadFile(".hidden.md", b"x", "text/markdown")
         result = run_impl(docs_dir, tmp_dir, f)
         assert result["ok"] is False
-        assert "invalid filename" in result["error"]
+        assert result["error"] == "文件名无效"
 
     def test_empty_filename_rejected(self, upload_env):
         docs_dir, tmp_dir = upload_env
         f = FakeUploadFile("", b"x", "text/markdown")
         result = run_impl(docs_dir, tmp_dir, f)
         assert result["ok"] is False
-        assert "invalid filename" in result["error"]
+        assert result["error"] == "文件名无效"
 
     def test_none_filename_rejected(self, upload_env):
         docs_dir, tmp_dir = upload_env
@@ -175,7 +175,7 @@ class TestSizeLimit:
         result = run_impl(docs_dir, tmp_dir, f, max_size=100, chunk_size=32)
 
         assert result["ok"] is False
-        assert "too large" in result["error"]
+        assert "超过" in result["error"]
         # 目标文件绝不能落盘
         assert not (docs_dir / "kb1" / "general" / "big.md").exists()
 
@@ -210,7 +210,7 @@ class TestEmptyFile:
         result = run_impl(docs_dir, tmp_dir, f)
 
         assert result["ok"] is False
-        assert "empty" in result["error"]
+        assert result["error"] == "文件内容为空"
         assert not (docs_dir / "kb1" / "general" / "empty.md").exists()
 
     def test_empty_file_cleans_tmp(self, upload_env):
@@ -232,7 +232,7 @@ class TestMagicNumber:
         result = run_impl(docs_dir, tmp_dir, f)
 
         assert result["ok"] is False
-        assert "magic" in result["error"] or "corrupted" in result["error"]
+        assert "格式不符" in result["error"]
         assert files_in(tmp_dir / "staging") == [], "魔数拒绝后临时文件必须清理"
 
     def test_fake_docx_rejected(self, upload_env):
@@ -269,6 +269,15 @@ class TestMagicNumber:
         assert result["ok"] is False, "含 NUL 字节的文本文件应被拒绝"
         assert files_in(tmp_dir / "staging") == [], "拒绝后暂存文件必须清理"
         assert not (docs_dir / "kb1" / "general" / "bin.md").exists()
+
+    def test_md_nul_byte_after_first_8k_is_rejected(self, upload_env):
+        """文本伪装检测应覆盖上传的全文件，而不是只看固定长度文件头。"""
+        docs_dir, tmp_dir = upload_env
+        f = FakeUploadFile("late-binary.md", b"a" * 9000 + b"\x00hidden")
+        result = run_impl(docs_dir, tmp_dir, f)
+        assert result["ok"] is False
+        assert "格式不符" in result["error"]
+        assert files_in(tmp_dir / "staging") == []
 
     def test_md_normal_utf8_content_passes(self, upload_env):
         """正常 UTF-8 中文内容不受二进制探测影响。"""
@@ -319,10 +328,32 @@ class TestSuccessFlow:
                     "batch_id", "upload_elapsed_ms", "was_overwrite"):
             assert key in result, f"返回结构缺字段: {key}"
         assert result["filename"] == "hello.md"
+        assert len(result["upload_id"]) == 32
+        assert len(result["generation"]) == 32
         assert result["size"] == len(b"# hello world")
         assert result["batch_id"] == "batch-42"
         assert result["was_overwrite"] is False
         assert "127.0.0.1" in result["source"]
+
+    def test_idempotency_upload_id_uses_full_digest(self, upload_env):
+        """幂等任务 ID 保留完整 SHA-256，避免截短后扩大主键碰撞概率。"""
+        docs_dir, tmp_dir = upload_env
+
+        def upload_once():
+            return asyncio.run(sync_upload_impl(
+                FakeUploadFile("same.md", b"same content"), FakeRequest(),
+                1024, str(tmp_dir), 64, 1024, 1000,
+                kb_id="kb1", department="general", tenant_id="tenant-1",
+                actor_id="user-1", idempotency_key="request-key-1",
+            ))
+
+        first = upload_once()
+        second = upload_once()
+
+        assert first["ok"] is True and second["ok"] is True
+        assert len(first["upload_id"]) == 64
+        assert first["upload_id"] == second["upload_id"]
+        assert first["generation"] != second["generation"]
 
     def test_staging_file_created_final_untouched(self, upload_env):
         """B 阶段契约：成功上传只产生不可变暂存文件，正式路径在发布前
@@ -475,6 +506,7 @@ class TestProgressQueueGC:
     """过期 SSE 进度队列必须被定期清理（F11），新鲜队列绝不误删。"""
 
     def test_cleanup_removes_expired_keeps_fresh(self, monkeypatch):
+        assert rag_upload.PROGRESS_QUEUE_TTL_SECONDS >= rag_upload._SSE_REDIS_POLL_MAX_SECONDS
         fake_queues: dict = {}
 
         def _mk(age: float):
@@ -551,6 +583,24 @@ def client(monkeypatch):
     monkeypatch.setattr(kb_cfg, "validate_kb_dept",
                         lambda kb, dept, tenant_id="", active_departments=None: True)
     monkeypatch.setattr(rag_cfg, "RAG_MAX_FILE_SIZE", 50)
+
+    class FakeRagAuthorization:
+        """隔离 HTTP 路由用例，不连接共享授权数据库。"""
+
+        is_admin = False
+
+        @classmethod
+        def build(cls, principal):
+            return cls()
+
+        def can_upload_to(self, kb_id, department):
+            allowed = kb_cfg.validate_kb_dept(
+                kb_id, department, tenant_id="test-tenant",
+            )
+            reason = "" if allowed else "知识库或部门不在测试授权范围"
+            return allowed, reason
+
+    monkeypatch.setattr(ru, "RagAuthorization", FakeRagAuthorization)
 
     captured = {}
 
@@ -651,7 +701,7 @@ class TestUploadEndpoint:
                        headers={"X-Batch-Id": "bad id!@#\"; drop"})
         body = resp.json()
         assert body["ok"] is False
-        assert body["error"] == "invalid X-Batch-Id header"
+        assert body["error"] == "批次标识格式不正确"
         assert "called" not in captured
 
     def test_oversize_batch_id_rejected_before_upload(self, client):
@@ -662,8 +712,17 @@ class TestUploadEndpoint:
                        headers={"X-Batch-Id": "b" * 65})
         body = resp.json()
         assert body["ok"] is False
-        assert body["error"] == "invalid X-Batch-Id header"
+        assert body["error"] == "批次标识格式不正确"
         assert "called" not in captured
+
+    def test_max_length_batch_id_passes_to_upload(self, client):
+        tc, captured = client
+        resp = tc.post("/upload",
+                       files={"file": ("ok.md", b"# hi", "text/markdown")},
+                       data={"kb_id": "policy_general", "department": "general"},
+                       headers={"X-Batch-Id": "b" * 64})
+        assert resp.json()["ok"] is True, resp.json()
+        assert captured.get("called") is True
 
     def test_valid_batch_id_passes_to_upload(self, client):
         """前端 randomId 产物（uuid 含连字符 / batch-<ts>-<rand>）必须放行。"""
@@ -685,37 +744,6 @@ class TestUploadEndpoint:
                        data={"kb_id": "policy_general", "department": "general"})
         assert resp.json()["ok"] is True, resp.json()
         assert captured.get("called") is True, "octet-stream 应进入上传流程"
-
-    def test_content_length_oversize_precheck(self, client, monkeypatch):
-        """Content-Length 超上限 → 端点预检直接拒(不进入流式)。"""
-        tc, captured = client
-        import backend.config.rag as rag_cfg
-        monkeypatch.setattr(rag_cfg, "RAG_MAX_FILE_SIZE", 0)  # max_size=0 → 任何长度都超
-        # F10: 预检带 multipart 余量；本测试要触发预检直拒，需把余量归零
-        monkeypatch.setattr(rag_upload, "_MULTIPART_OVERHEAD", 0)
-        resp = tc.post("/upload",
-                       files={"file": ("big.md", b"data", "text/markdown")},
-                       data={"kb_id": "policy_general", "department": "general"})
-        body = resp.json()
-        assert body["ok"] is False
-        assert "too large" in body["error"]
-        assert "called" not in captured
-
-    def test_content_length_margin_allows_boundary_file(self, client, monkeypatch):
-        """F10: 预检余量放行贴上限的小请求，不误拒 multipart 封装开销。
-
-        RAG_MAX_FILE_SIZE=0 但实际负载很小（cl < 16KB 余量）→ 预检放行，
-        进入流式实现（精确上限由流式字节计数强制，此处 fake 实现直接成功）。
-        """
-        tc, captured = client
-        import backend.config.rag as rag_cfg
-        monkeypatch.setattr(rag_cfg, "RAG_MAX_FILE_SIZE", 0)
-        # 保持默认 _MULTIPART_OVERHEAD（16KB），小文件 multipart cl 远低于余量
-        resp = tc.post("/upload",
-                       files={"file": ("ok.md", b"# hi", "text/markdown")},
-                       data={"kb_id": "policy_general", "department": "general"})
-        assert resp.json()["ok"] is True, resp.json()
-        assert captured.get("called") is True, "预检余量内应进入流式实现"
 
     def test_rag_not_ready_returns_503(self, client, monkeypatch):
         tc, _ = client
@@ -793,7 +821,7 @@ class TestUploadStreamEndpoint:
         import threading
         from backend.app.api.routes import rag_upload as ru
 
-        # 心跳间隔缩到毫秒级，避免测试等真实 15s
+        # 心跳间隔缩到毫秒级，避免测试等待生产配置的真实间隔
         monkeypatch.setattr(ru, "SSE_KEEPALIVE_TIMEOUT_SECONDS", 0.05)
 
         queue = asyncio.Queue()

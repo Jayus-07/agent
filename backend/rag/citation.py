@@ -104,9 +104,9 @@ def _display_version_id(meta: dict) -> str:
     index_generation = str(meta.get("index_generation") or "").strip()
     if version_id == index_generation:
         return ""
-    # 上传流程在未声明资料版本时以 uuid4().hex[:16] 作为追溯代次；兼容
-    # 缺少 index_generation 字段的旧向量时，不把该随机值展示成业务版本。
-    if re.fullmatch(r"[0-9a-f]{16}", version_id):
+    # 上传流程未声明资料版本时使用随机追溯代次；兼容旧 16 位及当前完整
+    # UUID 十六进制值，避免把随机索引标识展示成业务版本。
+    if re.fullmatch(r"(?:[0-9a-f]{16}|[0-9a-f]{32})", version_id):
         return ""
     return version_id
 

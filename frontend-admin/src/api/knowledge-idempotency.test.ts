@@ -69,13 +69,13 @@ describe("knowledgeService 上传幂等接线", () => {
     const file = new File(["pdf"], "long-scan.pdf", { type: "application/pdf" });
 
     await knowledgeService.uploadDocument(
-      file, undefined, undefined, "policy_general", "general", undefined, 200,
+      file, undefined, undefined, "policy_general", "general", undefined, 100,
     );
 
     const [, options] = apiMock.mutationFetchRaw.mock.calls[0];
     expect(options.body).toBeInstanceOf(FormData);
-    expect((options.body as FormData).get("ocr_page_budget")).toBe("200");
-    expect(options.dedupeKey).toContain("200");
+    expect((options.body as FormData).get("ocr_page_budget")).toBe("100");
+    expect(options.dedupeKey).toContain("100");
   });
 
   it("操作日志请求错误继续向调用方抛出", async () => {

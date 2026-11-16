@@ -8,11 +8,53 @@
   文本格式 NUL + UTF-16 BOM 探测）。旧实现显式拒绝 octet-stream,
   会误伤以 octet-stream 声明上传 docx 的浏览器/Windows 客户端。
 """
+import re
+from pathlib import Path
+
 import pytest
 
 from backend.app.api.routes.rag_upload import (
     _magic_matches, _validate_mime, _validate_ocr_page_budget,
-    ALLOWED_MIME_TYPES,
+    ALLOWED_MIME_TYPES, SSE_KEEPALIVE_TIMEOUT_SECONDS,
+)
+from backend.config.rag import (
+    RAG_OCR_MAX_PAGES,
+    RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT,
+    RAG_OCR_DASHSCOPE_TIMEOUT,
+    RAG_OCR_MIN_INTERVAL_MS,
+    RAG_OCR_DPI,
+    RAG_OCR_RETRY_DPI,
+    RAG_SSE_REDIS_KEEPALIVE_SECONDS,
+    RAG_UPLOAD_INGRESS_MAX_BODY_BYTES,
+    METADATA_LLM_CONCURRENCY,
+    METADATA_LLM_EXTRACT_MAX_CHARS,
+    METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS,
+    METADATA_LLM_EXTRACT_MIN_CHARS,
+    METADATA_EMBED_CONCURRENCY,
+    METADATA_DB_CONCURRENCY,
+    METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT,
+    EMBED_BATCH_SIZE,
+    EMBED_REQUEST_LIMIT,
+    EMBED_RETRY_MAX,
+    EMBED_RETRY_BACKOFF_BASE,
+    EMBED_RETRY_BACKOFF_MAX,
+    EMBED_BATCH_CONCURRENCY,
+    EMBEDDING_REBUILD_REQUEST_TIMEOUT,
+    EMBEDDING_REBUILD_BATCH_SIZE,
+    SEMANTIC_EMBED_BATCH_SIZE,
+    SEMANTIC_EMBED_RETRY,
+    RAG_TABLE_MAX_ROWS,
+    RAG_TABLE_MAX_CELLS,
+    FINANCIAL_TABLE_ROWS_PER_CHUNK,
+    FINANCIAL_MAX_CHUNKS_PER_DOC,
+    LEGAL_CLAUSES_PER_PARENT,
+    _validate_rag_upload_ingress_limit,
+    _validate_rag_chunking_config,
+    _validate_metadata_extraction_config,
+    _validate_cloud_ocr_runtime_config,
+    _validate_rag_ocr_dpi,
+    _validate_rag_embedding_ingest_config,
+    _validate_rag_table_ingest_config,
 )
 
 
@@ -32,6 +74,152 @@ class TestAllowedMimeStructure:
         """F6: ALLOWED_MIME_TYPES 必须与 PARSABLE_EXTS 一一对应（单一来源，防漂移）。"""
         from backend.rag.preprocessing.parser import PARSABLE_EXTS
         assert {f".{ext}" for ext in ALLOWED_MIME_TYPES} == set(PARSABLE_EXTS)
+
+    def test_upload_ocr_budget_uses_the_configured_ocr_cap(self):
+        assert RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT == RAG_OCR_MAX_PAGES
+
+    def test_file_limit_must_fit_the_configured_ingress_cap(self):
+        _validate_rag_upload_ingress_limit(63, RAG_UPLOAD_INGRESS_MAX_BODY_BYTES)
+        with pytest.raises(ValueError, match="APISIX"):
+            _validate_rag_upload_ingress_limit(
+                64,
+                RAG_UPLOAD_INGRESS_MAX_BODY_BYTES,
+            )
+
+    def test_file_ingress_limits_reject_invalid_values(self):
+        with pytest.raises(ValueError, match="RAG_MAX_FILE_SIZE"):
+            _validate_rag_upload_ingress_limit(
+                0, RAG_UPLOAD_INGRESS_MAX_BODY_BYTES,
+            )
+        with pytest.raises(ValueError, match="INGRESS_MAX_BODY_BYTES"):
+            _validate_rag_upload_ingress_limit(
+                50, 0,
+            )
+
+    def test_upload_request_limit_matches_apisix_and_admin_bff(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        gateway_config = (repo_root / "apisix" / "config.yaml").read_text(
+            encoding="utf-8"
+        )
+        gateway_match = re.search(
+            r"client_max_body_size:\s*(\d+)m", gateway_config
+        )
+        assert gateway_match is not None
+        assert int(gateway_match.group(1)) * 1024 * 1024 == (
+            RAG_UPLOAD_INGRESS_MAX_BODY_BYTES
+        )
+        for app_name in ("frontend", "frontend-admin", "frontend-cs"):
+            bff_source = (
+                repo_root / app_name / "src" / "app" / "api"
+                / "[...path]" / "route.ts"
+            ).read_text(encoding="utf-8")
+            bff_match = re.search(
+                r"APISIX_MAX_BODY_LIMIT_BYTES\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024",
+                bff_source,
+            )
+            assert bff_match is not None, app_name
+            assert int(bff_match.group(1)) * 1024 * 1024 == (
+                RAG_UPLOAD_INGRESS_MAX_BODY_BYTES
+            ), app_name
+
+    def test_local_and_redis_sse_heartbeat_share_one_setting(self):
+        assert SSE_KEEPALIVE_TIMEOUT_SECONDS == RAG_SSE_REDIS_KEEPALIVE_SECONDS
+
+    def test_chunk_parameters_reject_invalid_ranges(self):
+        valid = {
+            "leaf_tokens": 500,
+            "parent_tokens": 2000,
+            "overlap_tokens": 50,
+            "structure_threshold": 0.7,
+            "semantic_min_tokens": 500,
+            "semantic_similarity_threshold": 0.45,
+            "semantic_embed_batch_size": SEMANTIC_EMBED_BATCH_SIZE,
+            "semantic_embed_retry": SEMANTIC_EMBED_RETRY,
+            "max_chunks_per_doc": 6000,
+        }
+        _validate_rag_chunking_config(**valid)
+
+        with pytest.raises(ValueError, match="CHUNK_OVERLAP"):
+            _validate_rag_chunking_config(**{**valid, "overlap_tokens": 500})
+        with pytest.raises(ValueError, match="Parent"):
+            _validate_rag_chunking_config(**{**valid, "parent_tokens": 499})
+        with pytest.raises(ValueError, match="STRUCTURE_COMPLETE_THRESHOLD"):
+            _validate_rag_chunking_config(**{**valid, "structure_threshold": 1.1})
+        with pytest.raises(ValueError, match="SEMANTIC_EMBED_RETRY"):
+            _validate_rag_chunking_config(**{**valid, "semantic_embed_retry": 0})
+
+    def test_metadata_extraction_parameters_reject_invalid_ranges(self):
+        valid = {
+            "min_text_chars": METADATA_LLM_EXTRACT_MIN_CHARS,
+            "max_text_chars": METADATA_LLM_EXTRACT_MAX_CHARS,
+            "max_output_tokens": METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS,
+            "embed_concurrency": METADATA_EMBED_CONCURRENCY,
+            "llm_concurrency": METADATA_LLM_CONCURRENCY,
+            "db_concurrency": METADATA_DB_CONCURRENCY,
+            "semaphore_wait_timeout": METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT,
+        }
+        _validate_metadata_extraction_config(**valid)
+
+        with pytest.raises(ValueError, match="METADATA_LLM_CONCURRENCY"):
+            _validate_metadata_extraction_config(**{**valid, "llm_concurrency": 0})
+        with pytest.raises(ValueError, match="MAX_CHARS"):
+            _validate_metadata_extraction_config(
+                **{**valid, "max_text_chars": valid["min_text_chars"] - 1}
+            )
+
+    def test_cloud_ocr_parameters_reject_invalid_ranges(self):
+        _validate_cloud_ocr_runtime_config(
+            timeout_seconds=RAG_OCR_DASHSCOPE_TIMEOUT,
+            min_interval_ms=RAG_OCR_MIN_INTERVAL_MS,
+        )
+        with pytest.raises(ValueError, match="TIMEOUT"):
+            _validate_cloud_ocr_runtime_config(
+                timeout_seconds=0, min_interval_ms=300,
+            )
+        with pytest.raises(ValueError, match="MIN_INTERVAL"):
+            _validate_cloud_ocr_runtime_config(
+                timeout_seconds=60, min_interval_ms=-1,
+            )
+
+    def test_ocr_retry_dpi_is_higher_than_base(self):
+        _validate_rag_ocr_dpi(RAG_OCR_DPI, RAG_OCR_RETRY_DPI)
+        with pytest.raises(ValueError, match="RETRY_DPI"):
+            _validate_rag_ocr_dpi(200, 200)
+        with pytest.raises(ValueError, match="72 DPI"):
+            _validate_rag_ocr_dpi(71, 300)
+
+    def test_embedding_upload_budgets_reject_invalid_ranges(self):
+        valid = {
+            "batch_size": EMBED_BATCH_SIZE,
+            "provider_request_limit": EMBED_REQUEST_LIMIT,
+            "retry_max": EMBED_RETRY_MAX,
+            "retry_backoff_base": EMBED_RETRY_BACKOFF_BASE,
+            "retry_backoff_max": EMBED_RETRY_BACKOFF_MAX,
+            "batch_concurrency": EMBED_BATCH_CONCURRENCY,
+            "rebuild_request_timeout": EMBEDDING_REBUILD_REQUEST_TIMEOUT,
+            "rebuild_batch_size": EMBEDDING_REBUILD_BATCH_SIZE,
+        }
+        _validate_rag_embedding_ingest_config(**valid)
+        with pytest.raises(ValueError, match="EMBED_BATCH_CONCURRENCY"):
+            _validate_rag_embedding_ingest_config(
+                **{**valid, "batch_concurrency": 0}
+            )
+        with pytest.raises(ValueError, match="BACKOFF_MAX"):
+            _validate_rag_embedding_ingest_config(
+                **{**valid, "retry_backoff_max": 1.0}
+            )
+
+    def test_table_ingest_limits_reject_invalid_ranges(self):
+        valid = {
+            "max_rows": RAG_TABLE_MAX_ROWS,
+            "max_cells": RAG_TABLE_MAX_CELLS,
+            "financial_rows_per_chunk": FINANCIAL_TABLE_ROWS_PER_CHUNK,
+            "financial_max_chunks_per_doc": FINANCIAL_MAX_CHUNKS_PER_DOC,
+            "legal_clauses_per_parent": LEGAL_CLAUSES_PER_PARENT,
+        }
+        _validate_rag_table_ingest_config(**valid)
+        with pytest.raises(ValueError, match="RAG_TABLE_MAX_CELLS"):
+            _validate_rag_table_ingest_config(**{**valid, "max_cells": 0})
 
     def test_markdown_and_xlsx_have_proper_mime(self):
         # F6 新开放的两个扩展名必须登记正确的 MIME
@@ -140,7 +328,7 @@ class TestValidateMime:
         """不支持的扩展名(不在派生白名单中)应该被拒。"""
         ok, err = _validate_mime("exe", "application/octet-stream")
         assert ok is False
-        assert "unsupported ext" in err or "ext" in err.lower()
+        assert "文件格式" in err
 
     def test_empty_ext_returns_error(self):
         """扩展名为空(无后缀文件)拒。"""
@@ -157,6 +345,7 @@ class TestValidateMime:
         assert _magic_matches(ext, b"text content")
         assert not _magic_matches(ext, b"\x00binary")
         assert not _magic_matches(ext, b"\xff\xfeutf16")
+        assert not _magic_matches(ext, b"12345678", contains_nul=True)
 
 
 # ============ 与 sync_upload_impl 的集成点测试 ============
@@ -183,16 +372,27 @@ class TestValidateOcrPageBudget:
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc:
-            _validate_ocr_page_budget(is_admin=False, ext="pdf", budget=200)
+            _validate_ocr_page_budget(
+                is_admin=False,
+                ext="pdf",
+                budget=RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT,
+            )
         assert exc.value.status_code == 403
 
         with pytest.raises(HTTPException) as exc:
             _validate_ocr_page_budget(is_admin=True, ext="docx", budget=200)
         assert exc.value.status_code == 422
 
-        _validate_ocr_page_budget(is_admin=True, ext="pdf", budget=200)
+        _validate_ocr_page_budget(
+            is_admin=True,
+            ext="pdf",
+            budget=RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT,
+        )
 
-    @pytest.mark.parametrize("budget", [0, 501])
+    @pytest.mark.parametrize(
+        "budget",
+        [0, RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT + 1],
+    )
     def test_budget_override_has_a_hard_upper_and_lower_bound(self, budget):
         from fastapi import HTTPException
 

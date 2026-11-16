@@ -14,15 +14,14 @@ import re
 import asyncio
 import threading
 import weakref
-import os
 import time
 from contextvars import ContextVar
 from functools import partial
 
-# LLM 背压槽位等待超时（秒）：等待超过此值计一次可观测降级并直接执行，
-# 避免元数据抽取在并发洪峰下无限排队（P2 审查修复 2026-10-19）。
-METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT = float(
-    os.getenv("METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT", "10"))
+from backend.config.rag import (
+    METADATA_LLM_CONCURRENCY,
+    METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT,
+)
 
 # LLM 背压信号量按事件循环管理（P2 审查修复 2026-10-19）：
 # asyncio.Semaphore 绑定创建时的 loop，跨 loop 复用会抛
@@ -47,7 +46,7 @@ def _set_last_metadata_call_meta(**values) -> None:
 
 def _get_loop_llm_semaphore() -> "asyncio.Semaphore":
     loop = asyncio.get_running_loop()
-    width = max(int(os.getenv("METADATA_LLM_CONCURRENCY", "8")), 1)
+    width = METADATA_LLM_CONCURRENCY
     with _llm_semaphores_lock:
         entry = _llm_semaphores_by_loop.get(loop)
         if entry is None or entry[0] != width:
@@ -289,19 +288,62 @@ async def extract_metadata_llm_async(
         # P2 修复（审查 2026-10-19）：asyncio.Semaphore 绑定创建时的事件循环，
         # 模块级单例在同步入口多次 asyncio.run() 的场景下会跨循环复用并抛
         # "bound to a different event loop"（审查复现：第二轮降级规则抽取）。
-        # 改为按事件循环管理（模块级 weakref 注册表，循环销毁自动回收），
-        # 并保留槽位等待超时（超时计一次可观测降级，不经背压直接执行）。
+        # 改为按事件循环管理（模块级 weakref 注册表，循环销毁自动回收）。
+        # 槽位等待超时后跳过可选 LLM 增强并回退规则结果，不绕过并发上限。
         sem = _get_loop_llm_semaphore()
-        from backend.observability.metrics import metadata_llm_calls_total
+        from backend.observability.metrics import (
+            metadata_llm_calls_total,
+            metadata_queue_wait_seconds,
+            metadata_resource_wait_timeout_total,
+        )
         slot_acquired = False
+        slot_wait_started = time.monotonic()
         try:
             await asyncio.wait_for(sem.acquire(), METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT)
             slot_acquired = True
         except asyncio.TimeoutError:
+            slot_wait_seconds = time.monotonic() - slot_wait_started
+            metadata_queue_wait_seconds.labels(resource="llm").observe(
+                slot_wait_seconds
+            )
+            metadata_resource_wait_timeout_total.labels(resource="llm").inc()
             metadata_llm_calls_total.labels(result="llm_slot_wait_timeout").inc()
             logger.warning(
                 f"[MetaLLM] LLM 背压槽位等待超时 "
-                f"({METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT}s)，本次不经背压直接执行")
+                f"({METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT}s)，跳过可选增强并回退规则结果")
+            metadata_route_total.labels(level="L3", outcome="error").inc()
+            _set_last_metadata_call_meta(
+                provider_call_attempted=False,
+                provider_called=False,
+                provider_duration_ms=0,
+                llm_tokens={},
+                llm_usage_status="unavailable",
+                fallback_reason="llm_slot_wait_timeout",
+                error_message="LLM 并发槽位等待超时，已回退规则结果",
+                prompt_version=(
+                    f"v{prompt_version}"
+                    if isinstance(prompt_version, int)
+                    else "default"
+                ),
+                prompt_source=prompt_source,
+                prompt_hash=prompt_hash,
+            )
+            if span_id:
+                trace_collector.end_span(
+                    span_id,
+                    status="error",
+                    metrics={
+                        "provider_call": False,
+                        "provider_call_attempted": False,
+                        "queue_wait_timeout": True,
+                        "queue_wait_ms": round(slot_wait_seconds * 1000),
+                    },
+                )
+            return None
+        else:
+            metadata_queue_wait_seconds.labels(resource="llm").observe(
+                time.monotonic() - slot_wait_started
+            )
         provider_started = time.monotonic()
         provider_call_attempted = True
         try:

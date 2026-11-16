@@ -7,13 +7,16 @@ import { knowledgeService } from '@/api/knowledge'
 import { fetchRaw, randomId } from '@/api/client'
 import { useToast } from '@/components/shared/Toast'
 import { atLeast } from '@/lib/auth'
+import {
+  getAdminErrorLabel,
+  getDepartmentLabel,
+  getKnowledgeBaseLabel,
+  getProcessingStageLabel,
+} from '@/lib/knowledge-display'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
-/** 前端大小预检上限（MB）——降级默认值（/rag/health 不可达时使用）。
- *  正常路径从 health 响应 max_file_size_mb 动态跟随（#6 env 联动，
- *  2026-11-11 batch4b）；权威上限始终由后端流式字节计数强制执行。 */
-const MAX_UPLOAD_MB = 50
+const RAG_HEALTH_POLL_INTERVAL_MS = 2000
 
 // 阶段映射：后端 SSE stage → 显示文案 + UI 索引（10 阶段，覆盖后端 span 树）
 const STAGES = [
@@ -22,21 +25,20 @@ const STAGES = [
   { key: 'parsing',   label: '文本解析' },
   { key: 'cleaning',  label: '文本清洗' },
   { key: 'dedup',     label: '去重检查' },
-  { key: 'chunking',  label: 'Chunk 切分' },
+  { key: 'chunking',  label: '文本切分' },
   { key: 'metadata',  label: '元数据抽取' },
-  { key: 'embedding', label: 'Embedding' },
+  { key: 'embedding', label: '向量生成' },
   { key: 'writing',   label: '写入向量库' },
   { key: 'done',      label: '完成' },
 ] as const
 
 type StageKey = typeof STAGES[number]['key']
 
-/** 格式化耗时：<1ms 显示 "<1ms"，<1s 显示 ms，>=1s 显示 x.xs */
+/** 格式化耗时，面向管理端使用完整中文单位。 */
 function fmtMs(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return '<1ms'
-  if (ms < 1) return '<1ms'
-  if (ms < 1000) return `${ms.toFixed(0)}ms`
-  return `${(ms / 1000).toFixed(1)}s`
+  if (!Number.isFinite(ms) || ms < 1) return '少于 1 毫秒'
+  if (ms < 1000) return `${ms.toFixed(0)} 毫秒`
+  return `${(ms / 1000).toFixed(1)} 秒`
 }
 
 /** 单文件处理报告 */
@@ -66,8 +68,11 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   const [aggregatedExpanded, setAggregatedExpanded] = useState(true)
   const fileRef = useRef<HTMLInputElement>(null)
   const [ragReady, setRagReady] = useState<boolean | null>(null)
-  // #6：预检上限随服务端 env 联动（health 透传），health 不可达回退写死默认
-  const [maxUploadMb, setMaxUploadMb] = useState(MAX_UPLOAD_MB)
+  // 预检参数只在健康接口提供后端配置时启用；接口不可达时交由服务端校验。
+  const [maxUploadMb, setMaxUploadMb] = useState<number | null>(null)
+  const [ocrBudgetMaxPages, setOcrBudgetMaxPages] = useState<number | null>(null)
+  const [uploadSseMaxDurationSeconds, setUploadSseMaxDurationSeconds] = useState<number | null>(null)
+  const [uploadSseIdleTimeoutSeconds, setUploadSseIdleTimeoutSeconds] = useState<number | null>(null)
   const healthTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
   const backgroundUploadRef = useRef(false)
   const backgroundReceiptShownRef = useRef(false)
@@ -82,6 +87,10 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     if (!open) return
     setCanOverrideOcrBudget(atLeast('admin'))
     setOcrPageBudget('')
+    setMaxUploadMb(null)
+    setOcrBudgetMaxPages(null)
+    setUploadSseMaxDurationSeconds(null)
+    setUploadSseIdleTimeoutSeconds(null)
     setError('')
     fetchRaw('/api/rag/knowledge-bases')
       .then(async r => {
@@ -108,7 +117,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
         setKbList([])
         setSelectedKbId('')
         setSelectedDept('')
-        setError(loadError instanceof Error ? loadError.message : '知识库列表加载失败')
+        setError(getAdminErrorLabel(loadError instanceof Error ? loadError.message : '知识库列表加载失败'))
       })
   }, [open])
 
@@ -157,16 +166,34 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
         const data = await res.json()
         if (!cancelled) {
           setRagReady(data.ready === true)
-          // #6：上限随服务端 env 联动（health 透传 RAG_MAX_FILE_SIZE）
+          // 上限只从后端配置读取，不维护第二份前端默认值。
           if (Number.isFinite(data.max_file_size_mb) && data.max_file_size_mb > 0) {
             setMaxUploadMb(Number(data.max_file_size_mb))
+          }
+          if (
+            Number.isFinite(data.ocr_page_budget_max_pages)
+            && data.ocr_page_budget_max_pages > 0
+          ) {
+            setOcrBudgetMaxPages(Number(data.ocr_page_budget_max_pages))
+          }
+          if (
+            Number.isFinite(data.upload_sse_max_duration_seconds)
+            && data.upload_sse_max_duration_seconds > 0
+          ) {
+            setUploadSseMaxDurationSeconds(Number(data.upload_sse_max_duration_seconds))
+          }
+          if (
+            Number.isFinite(data.upload_sse_idle_timeout_seconds)
+            && data.upload_sse_idle_timeout_seconds > 0
+          ) {
+            setUploadSseIdleTimeoutSeconds(Number(data.upload_sse_idle_timeout_seconds))
           }
           if (data.ready) clearInterval(healthTimerRef.current)
         }
       } catch { /* 后端未启动，继续轮询 */ }
     }
     check()
-    healthTimerRef.current = setInterval(check, 2000)
+    healthTimerRef.current = setInterval(check, RAG_HEALTH_POLL_INTERVAL_MS)
     return () => {
       cancelled = true
       clearInterval(healthTimerRef.current)
@@ -205,6 +232,21 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
       setError('当前知识库没有可用部门，请刷新知识库列表或联系管理员')
       return
     }
+    if (ocrPageBudget) {
+      const requestedBudget = Number(ocrPageBudget)
+      if (
+        !Number.isInteger(requestedBudget)
+        || requestedBudget < 1
+        || (ocrBudgetMaxPages !== null && requestedBudget > ocrBudgetMaxPages)
+      ) {
+        setError(
+          ocrBudgetMaxPages === null
+            ? 'OCR 页数上限无效，请清空后使用服务端默认值'
+            : 'OCR 页数上限需为 1 到 ' + ocrBudgetMaxPages + ' 之间的整数',
+        )
+        return
+      }
+    }
     setUploading(true)
     setError('')
     setReports(files.map(f => ({ name: f.name, status: 'running', expanded: false })))
@@ -236,7 +278,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             backgroundReceiptShownRef.current = true
             toast.success(`后台任务已受理：${receipt.filename}（${receipt.upload_id}）`)
           }
-        }, ocrPageBudget ? Number(ocrPageBudget) : undefined)
+        }, ocrPageBudget ? Number(ocrPageBudget) : undefined, uploadSseMaxDurationSeconds ?? undefined, uploadSseIdleTimeoutSeconds ?? undefined)
 
         if (res.duplicate) {
           // 终态 stage_elapsed（后端传）优先；前端兜底仍按 SSE 间隔法
@@ -275,7 +317,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
           failedCount++
           updateReport(i, {
             status: 'failed',
-            error: res.error || '上传失败',
+            error: getAdminErrorLabel(res.error || '上传失败'),
             traceId: res.trace_id,
             currentStage: null,
             stageMessage: '',
@@ -283,7 +325,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
         }
       } catch (e) {
         failedCount++
-        updateReport(i, { status: 'failed', error: (e as Error).message || '网络错误', currentStage: null, stageMessage: '' })
+        updateReport(i, { status: 'failed', error: getAdminErrorLabel((e as Error).message || '网络错误'), currentStage: null, stageMessage: '' })
       }
     }
 
@@ -348,12 +390,12 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                     : nextKb?.depts[0]?.id || '')
                 }}
                 className="flex-1 px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none disabled:opacity-60">
-                {kbList.map(kb => <option key={kb.id} value={kb.id}>{kb.name}</option>)}
+                {kbList.map(kb => <option key={kb.id} value={kb.id}>{kb.name || getKnowledgeBaseLabel(kb.id, kbList)}</option>)}
               </select>
               <select value={selectedDept} disabled={!departmentOptions.length || uploading}
                 onChange={e => setSelectedDept(e.target.value)}
                 className="flex-1 px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none disabled:opacity-60">
-                {departmentOptions.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+                {departmentOptions.map(d => <option key={d.id} value={d.id}>{d.label || getDepartmentLabel(d.id, departmentOptions)}</option>)}
                 {!departmentOptions.length && <option value="">暂无可用部门</option>}
               </select>
             </div>
@@ -376,17 +418,18 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                   // 同一个 A」onChange 不触发（value 未变），列表静默不更新
                   e.target.value = ''
                   if (!fs.length) return
+                  if (maxUploadMb === null) {
+                    setFiles(fs)
+                    setError('尚未读取到服务端文件大小上限；文件将由服务端校验')
+                    return
+                  }
                   const limit = maxUploadMb * 1024 * 1024
                   const oversized = fs.filter(f => f.size > limit)
                   setFiles(fs.filter(f => f.size <= limit))
-                  let msg = oversized.length
-                    ? `以下文件超过 ${maxUploadMb}MB 上限，已忽略：${oversized.map(f => f.name).join('、')}`
-                    : ''
-                  // #7：批量文件数提示（不阻断，建议分批）
-                  if (fs.length > 20) {
-                    msg = `${msg ? msg + '；' : ''}一次选择了 ${fs.length} 个文件，建议分批上传以获得更稳定的进度体验`
-                  }
-                  setError(msg)
+                  setError(oversized.length
+                    ? '以下文件超过 ' + maxUploadMb + ' MB 上限，已忽略：'
+                      + oversized.map(f => f.name).join('、')
+                    : '')
                 }} />
               <div onClick={() => { if (ragReady !== false) fileRef.current?.click() }}>
                 <Upload size={28} className={`mx-auto mb-2 ${ragReady === false ? 'text-amber-300' : 'text-text-muted'}`} />
@@ -414,19 +457,21 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                 <label htmlFor="upload-ocr-page-budget" className="block text-xs font-medium text-text-primary">
                   PDF OCR 页数上限
                 </label>
-                <select
+                <input
+                  type="number"
                   id="upload-ocr-page-budget"
+                  min={1}
+                  max={ocrBudgetMaxPages ?? undefined}
+                  step={1}
                   value={ocrPageBudget}
+                  placeholder="留空则跟随服务端默认"
                   onChange={e => setOcrPageBudget(e.target.value)}
                   className="mt-2 w-full rounded-md border border-border-subtle bg-surface-base px-2.5 py-2 text-xs text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                >
-                  <option value="">跟随服务端默认</option>
-                  <option value="200">200 页</option>
-                  <option value="300">300 页</option>
-                  <option value="500">500 页（最高）</option>
-                </select>
+                />
                 <p className="mt-1.5 text-[10px] leading-4 text-text-muted">
-                  只对本次 PDF 生效。页数越多，处理耗时和云端 OCR 用量可能越高；未识别页面仍会被质量门禁拦截。
+                  {ocrBudgetMaxPages === null
+                    ? '只对本次 PDF 生效；服务器会校验允许的最大页数。提高页数可能增加处理耗时和云端 OCR 用量。未识别页面仍会被质量门禁拦截。'
+                    : '只对本次 PDF 生效，范围为 1–' + ocrBudgetMaxPages + ' 页。提高页数可能增加处理耗时和云端 OCR 用量；未识别页面仍会被质量门禁拦截。'}
                 </p>
               </div>
             )}
@@ -490,8 +535,8 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                               )}
                             </>
                           )
-                          : r.status === 'running' && r.currentStage ? <span className="text-[10px] text-accent shrink-0">{STAGES.find(x => x.key === r.currentStage)?.label ?? r.currentStage}…</span>
-                          : r.status === 'success' && <span className="text-text-muted text-[10px] tabular-nums shrink-0">{totalMs > 0 ? fmtMs(totalMs) : '<1ms'}</span>}
+                          : r.status === 'running' && r.currentStage ? <span className="text-[10px] text-accent shrink-0">{STAGES.find(x => x.key === r.currentStage)?.label ?? getProcessingStageLabel(r.currentStage)}…</span>
+                          : r.status === 'success' && <span className="text-text-muted text-[10px] tabular-nums shrink-0">{totalMs > 0 ? fmtMs(totalMs) : '少于 1 毫秒'}</span>}
                       </div>
                       {/* 运行中阶段明细 */}
                       {isRunning && (

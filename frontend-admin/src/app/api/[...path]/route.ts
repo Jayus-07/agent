@@ -31,6 +31,15 @@ const GATEWAY = (process.env.API_URL || "http://127.0.0.1:9080").replace(
   "",
 );
 const CLIENT_APP = "admin";
+// 与 APISIX client_max_body_size: 64m 对齐。RAG 上传配置即使被误调大，
+// BFF 也不能放过 APISIX 会拒绝的请求体。
+const APISIX_MAX_BODY_LIMIT_BYTES = 64 * 1024 * 1024;
+const DEFAULT_BFF_BODY_LIMIT_BYTES = APISIX_MAX_BODY_LIMIT_BYTES;
+
+function configuredByteLimit(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 /**
  * 登录限流/会话台账的客户端键（2026-11-09 审计修复）。
@@ -116,9 +125,9 @@ async function proxy(
 
   const method = req.method;
   // T6（2026-11-08 安全审计）：带 Content-Length 的请求在读取 body 前先做
-  // 上限检查。分路径规则（2026-11-10 冒烟修复，与 web 端同款）：
-  //   - /rag/upload → RAG_MAX_FILE_SIZE + multipart 余量（与后端 body_limit
-  //     三方同源）。超限在 BFF 直接人话拒绝：流式透传场景下游会读完整个
+  // 上限检查。RAG 上传使用 BFF/入口总请求体上限；文件本身的精确限制在后端
+  // 解析 multipart 后由上传流逐字节执行。请求体超限在 BFF 直接人话拒绝：
+  // 流式透传场景下游会读完整个
   //     body 才拒，且上游快速 413 断连会触发 undici「terminated」把错误
   //     变成连接重置（客户端收到 000 而非 413）。
   //   - 其余 → BFF_MAX_BODY_BYTES 默认 64MB。
@@ -130,16 +139,22 @@ async function proxy(
     Number.isFinite(declaredLength) &&
     declaredLength > 0
   ) {
-    // #6 env 联动（2026-11-11 batch4b）：部署侧设 BFF_RAG_UPLOAD_LIMIT_BYTES
-    // 与后端 RAG_MAX_FILE_SIZE 同步调整；未设时回退默认 50MiB+16KiB（对齐
-    // backend/config/rag.py 的 RAG_MAX_FILE_SIZE=50 + RAG_UPLOAD_MULTIPART_OVERHEAD）。
-    // 管理端 UI 的预检上限走 /rag/health 接口透传（deps.get_rag_status）。
-    const ragUploadLimit =
-      Number(process.env.BFF_RAG_UPLOAD_LIMIT_BYTES || 50 * 1024 * 1024 + 16 * 1024);
+    // BFF_RAG_UPLOAD_LIMIT_BYTES 可按部署入口上限下调；默认沿用 BFF 传输上限。
+    // 不在前端代理复制 RAG_MAX_FILE_SIZE；文件大小权威值由 /rag/health 提供。
+    // 后端 body_limit 执行入口总请求体上限，上传流执行单文件精确上限。
+    const bffMaxBodyBytes = configuredByteLimit(
+      process.env.BFF_MAX_BODY_BYTES,
+      DEFAULT_BFF_BODY_LIMIT_BYTES,
+    );
+    const ragUploadLimit = Math.min(
+      configuredByteLimit(process.env.BFF_RAG_UPLOAD_LIMIT_BYTES, bffMaxBodyBytes),
+      bffMaxBodyBytes,
+      APISIX_MAX_BODY_LIMIT_BYTES,
+    );
     const maxBodyBytes =
       path[0] === "rag" && path[1] === "upload"
         ? ragUploadLimit
-        : Number(process.env.BFF_MAX_BODY_BYTES || 64 * 1024 * 1024);
+        : bffMaxBodyBytes;
     if (declaredLength > maxBodyBytes) {
       return Response.json(
         {

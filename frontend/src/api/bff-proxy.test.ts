@@ -196,7 +196,7 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
     expect(text).toBe("hello-upload-body");
   });
 
-  it("RAG 上传超路径上限（50MiB+16KiB）在 BFF 直接 413 人话拒绝，不触达上游（2026-11-10 冒烟回归）", async () => {
+  it("RAG 上传超过 BFF/网关请求体上限时直接返回 413，不触达上游", async () => {
     // 背景：流式透传场景下，超限 body 全量转发后上游 413 断连会触发
     // undici「terminated」，客户端收到连接重置（000）而非 413。修复：与
     // 后端 body_limit 三方同源的上限在 BFF 预检拒绝。只声明超限
@@ -208,7 +208,7 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
         method: "POST",
         headers: {
           "Content-Type": "multipart/form-data; boundary=x",
-          "Content-Length": String(50 * 1024 * 1024 + 16 * 1024 + 1),
+          "Content-Length": String(64 * 1024 * 1024 + 1),
           Authorization: "Bearer t",
         },
         body: "x",

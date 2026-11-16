@@ -51,6 +51,27 @@ _HEADING_NUMBER_RE = re.compile(
 _HEADING_MAX_PLAIN_LEN = 40
 _BODY_CLAUSE_TAILS = ("；", "。", "，", ";", ",", "！", "！", "?", "？", ":", "：")
 
+# PDF 版式回退阈值。命名后集中审阅；现有测试覆盖合成/已知回归样本，
+# 尚未用企业真实 PDF 语料做统计标定，调整前需拿对应原件复验。
+_TABLE_BLOCK_OVERLAP_MIN_RATIO = 0.5
+_PAGE_PREVIEW_SCALE = 0.12
+_PAGE_PREVIEW_MAX_SAMPLES = 50_000
+_PAGE_CONTENT_MIN_CONTRAST = 5
+_PAGE_CONTENT_MIN_PIXELS = 4
+_PAGE_CONTENT_MIN_RATIO = 0.0005
+_PAGE_DARK_BACKGROUND_THRESHOLD = 200
+_VECTOR_DRAWING_COUNT_THRESHOLD = 80
+_VECTOR_DRAWN_AREA_MIN_RATIO = 0.2
+_COLUMN_CENTER_MARGIN_POINTS = 6.0
+_COLUMN_MIN_EVENTS_PER_SIDE = 2
+_COLUMN_MIN_VERTICAL_OVERLAP_RATIO = 0.35
+_COLUMN_FULL_WIDTH_MIN_RATIO = 0.68
+_COLUMN_EVENT_PADDING_POINTS = 1.0
+_TEXT_AUDIT_WINDOW_CHARS = 24
+_TEXT_AUDIT_WINDOW_STRIDE = 20
+_IMAGE_REGION_OCR_TRIGGER_AREA_RATIO = 0.05
+_SOURCE_TEXT_COVERAGE_ERROR_THRESHOLD = 0.95
+
 
 def _body_font_size(sizes: list[float]) -> float:
     """计算正文字号（众数，正文占多数，标题字号是少数）。"""
@@ -74,7 +95,7 @@ def _overlaps_table(bbox: tuple, table_bboxes: list[tuple]) -> bool:
         ix0, iy0 = max(x0, tx0), max(y0, ty0)
         ix1, iy1 = min(x1, tx1), min(y1, ty1)
         inter = max(ix1 - ix0, 0) * max(iy1 - iy0, 0)
-        if inter / block_area > 0.5:
+        if inter / block_area > _TABLE_BLOCK_OVERLAP_MIN_RATIO:
             return True
     return False
 
@@ -82,24 +103,32 @@ def _overlaps_table(bbox: tuple, table_bboxes: list[tuple]) -> bool:
 def _page_has_rendered_content(page) -> bool:
     """用低分辨率缩略图区分真空白页与无文字层的可见内容页。"""
     pix = page.get_pixmap(
-        matrix=fitz.Matrix(0.12, 0.12),
+        matrix=fitz.Matrix(_PAGE_PREVIEW_SCALE, _PAGE_PREVIEW_SCALE),
         colorspace=fitz.csGRAY,
         alpha=False,
     )
     samples = pix.samples
     if not samples:
         return False
-    stride = max(1, len(samples) // 50_000)
+    stride = max(1, len(samples) // _PAGE_PREVIEW_MAX_SAMPLES)
     values = samples[::stride]
     if not values:
         return False
     # 相对主背景检测像素变化，浅灰纸张仍按背景处理，淡色字迹相对纸张的
     # 对比也能触发。缩略图最多采样约 5 万像素，避免大页额外占用过高。
     background = Counter(values).most_common(1)[0][0]
-    content_pixels = sum(abs(value - background) >= 5 for value in values)
+    content_pixels = sum(
+        abs(value - background) >= _PAGE_CONTENT_MIN_CONTRAST for value in values
+    )
     # 不用单个暗像素触发，避免渲染噪点将白纸判成内容页；显著偏暗的整页
     # 背景仍视为可见内容，浅色纸张则依靠相对背景的像素差识别字迹。
-    return background < 200 or content_pixels >= max(4, int(len(values) * 0.0005))
+    return (
+        background < _PAGE_DARK_BACKGROUND_THRESHOLD
+        or content_pixels >= max(
+            _PAGE_CONTENT_MIN_PIXELS,
+            int(len(values) * _PAGE_CONTENT_MIN_RATIO),
+        )
+    )
 
 
 def _page_has_dense_vector_content(page) -> bool:
@@ -108,7 +137,7 @@ def _page_has_dense_vector_content(page) -> bool:
         drawings = page.get_drawings()
     except Exception:
         return False
-    if len(drawings) >= 80:
+    if len(drawings) >= _VECTOR_DRAWING_COUNT_THRESHOLD:
         return True
     page_area = max(float(page.rect.width * page.rect.height), 1.0)
     drawn_area = 0.0
@@ -116,7 +145,7 @@ def _page_has_dense_vector_content(page) -> bool:
         rect = drawing.get("rect")
         if rect is not None:
             drawn_area += max(float(rect.width), 0.0) * max(float(rect.height), 0.0)
-    return drawn_area / page_area >= 0.2
+    return drawn_area / page_area >= _VECTOR_DRAWN_AREA_MIN_RATIO
 
 
 def _text_bbox(event: tuple) -> tuple[float, float, float, float]:
@@ -235,22 +264,25 @@ def _order_page_events(events: list[tuple], page_width: float) -> tuple[list[tup
 
     def column_of(event: tuple) -> int:
         bbox = _text_bbox(event)
-        if bbox[2] < midpoint - 6:
+        if bbox[2] < midpoint - _COLUMN_CENTER_MARGIN_POINTS:
             return 0
-        if bbox[0] > midpoint + 6:
+        if bbox[0] > midpoint + _COLUMN_CENTER_MARGIN_POINTS:
             return 1
         return -1
 
     left = [event for event in text_events if column_of(event) == 0]
     right = [event for event in text_events if column_of(event) == 1]
-    if len(left) < 2 or len(right) < 2:
+    if (
+        len(left) < _COLUMN_MIN_EVENTS_PER_SIDE
+        or len(right) < _COLUMN_MIN_EVENTS_PER_SIDE
+    ):
         return ordered, False
 
     left_top, left_bottom = min(e[0] for e in left), max(e[0] for e in left)
     right_top, right_bottom = min(e[0] for e in right), max(e[0] for e in right)
     overlap = max(0.0, min(left_bottom, right_bottom) - max(left_top, right_top))
     shorter_height = max(1.0, min(left_bottom - left_top, right_bottom - right_top))
-    if overlap / shorter_height < 0.35:
+    if overlap / shorter_height < _COLUMN_MIN_VERTICAL_OVERLAP_RATIO:
         return ordered, False
 
     column_top = min(left_top, right_top)
@@ -264,12 +296,13 @@ def _order_page_events(events: list[tuple], page_width: float) -> tuple[list[tup
     full_width = [
         event for event in in_columns
         if (
-            _text_bbox(event)[2] - _text_bbox(event)[0] >= page_width * 0.68
+            _text_bbox(event)[2] - _text_bbox(event)[0]
+            >= page_width * _COLUMN_FULL_WIDTH_MIN_RATIO
             or column_of(event) < 0
         )
     ]
     output = sorted(before, key=lambda event: event[0])
-    cursor = column_top - 1.0
+    cursor = column_top - _COLUMN_EVENT_PADDING_POINTS
 
     def append_band(end_y: float) -> None:
         band = [
@@ -291,7 +324,7 @@ def _order_page_events(events: list[tuple], page_width: float) -> tuple[list[tup
         append_band(separator[0])
         output.append(separator)
         cursor = separator[0]
-    append_band(column_bottom + 1.0)
+    append_band(column_bottom + _COLUMN_EVENT_PADDING_POINTS)
     output.extend(sorted(after, key=lambda event: event[0]))
     return output, True
 
@@ -310,10 +343,10 @@ def _audit_native_text_page(source_text: str, ast_text: str) -> tuple[int, int]:
             continue
         windows = (
             [normalized_line]
-            if len(normalized_line) <= 24
+            if len(normalized_line) <= _TEXT_AUDIT_WINDOW_CHARS
             else [
-                normalized_line[start:start + 24]
-                for start in range(0, len(normalized_line), 20)
+                normalized_line[start:start + _TEXT_AUDIT_WINDOW_CHARS]
+                for start in range(0, len(normalized_line), _TEXT_AUDIT_WINDOW_STRIDE)
             ]
         )
         for window in windows:
@@ -480,7 +513,10 @@ class PdfParser(BaseDocumentParser):
                                     0.0,
                                     float(bbox[2] - bbox[0]) * float(bbox[3] - bbox[1]),
                                 )
-                                if image_area / page_area >= 0.05:
+                                if (
+                                    image_area / page_area
+                                    >= _IMAGE_REGION_OCR_TRIGGER_AREA_RATIO
+                                ):
                                     unparsed_visual_pages.add(page_number)
                                     large_image_regions_by_page.setdefault(
                                         page_number, [],
@@ -945,7 +981,11 @@ class PdfParser(BaseDocumentParser):
             coverage_rate = source_text_audit["coverage_rate"]
             parse_issues.append({
                 "code": "pdf_source_text_audit_gap",
-                "severity": "error" if coverage_rate < 0.95 else "warn",
+                "severity": (
+                    "error"
+                    if coverage_rate < _SOURCE_TEXT_COVERAGE_ERROR_THRESHOLD
+                    else "warn"
+                ),
                 "page_numbers": source_audit_missing_pages,
                 "detail": (
                     "独立原生文字层→AST 对账发现缺失片段；"
@@ -998,7 +1038,7 @@ class PdfParser(BaseDocumentParser):
         except Exception:
             ocr_provider = None
         base_dpi = max(int(rag_cfg.RAG_OCR_DPI), 72)
-        retry_dpi = min(max(base_dpi + 100, 300), 400)
+        retry_dpi = max(int(rag_cfg.RAG_OCR_RETRY_DPI), 72)
         render_dpis = [base_dpi]
         # 只为本地 OCR 的失败/空结果做一次高分辨率重试，避免云 OCR 的
         # 不确定计费请求被自动重复发送。页数上限在外层统一控制，重试不增加页数。

@@ -122,12 +122,12 @@ describe("BFF 代理转发契约", () => {
     expect(upstreamHeaders.get("x-batch-id")).toBe("batch-cs-1");
   });
 
-  it("RAG 上传超路径上限（50MiB+16KiB）在 BFF 直接 413 人话拒绝，不触达上游（2026-11-10 冒烟修复同步）", async () => {
+  it("RAG 上传超过 BFF/网关请求体上限时直接返回 413，不触达上游", async () => {
     const req = makeReq(
       "/api/rag/upload",
       {
         "content-type": "multipart/form-data; boundary=x",
-        "content-length": String(50 * 1024 * 1024 + 16 * 1024 + 1),
+        "content-length": String(64 * 1024 * 1024 + 1),
         authorization: "Bearer test-token",
       },
     );
@@ -139,6 +139,39 @@ describe("BFF 代理转发契约", () => {
     const body = (await res.json()) as { error?: string; detail?: string };
     expect(body.error).toBe("PayloadTooLarge");
     expect(body.detail).toContain("请求体超过上限");
+  });
+
+  it("RAG 上传可收紧请求体上限，但不能高于 APISIX", async () => {
+    const previousBffMaxBody = process.env.BFF_MAX_BODY_BYTES;
+    const previousRagLimit = process.env.BFF_RAG_UPLOAD_LIMIT_BYTES;
+    process.env.BFF_MAX_BODY_BYTES = String(128 * 1024 * 1024);
+    process.env.BFF_RAG_UPLOAD_LIMIT_BYTES = String(96 * 1024 * 1024);
+    try {
+      const req = makeReq(
+        "/api/rag/upload",
+        {
+          "content-type": "multipart/form-data; boundary=x",
+          "content-length": String(64 * 1024 * 1024 + 1),
+          authorization: "Bearer test-token",
+        },
+      );
+      const ctx = { params: { path: ["rag", "upload"] } };
+      const res = await GET(req as never, ctx as never);
+
+      expect(res.status).toBe(413);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousBffMaxBody === undefined) {
+        delete process.env.BFF_MAX_BODY_BYTES;
+      } else {
+        process.env.BFF_MAX_BODY_BYTES = previousBffMaxBody;
+      }
+      if (previousRagLimit === undefined) {
+        delete process.env.BFF_RAG_UPLOAD_LIMIT_BYTES;
+      } else {
+        process.env.BFF_RAG_UPLOAD_LIMIT_BYTES = previousRagLimit;
+      }
+    }
   });
 
   it("响应侧逐条透传 set-cookie（refresh_token Cookie 生命周期依赖）", async () => {

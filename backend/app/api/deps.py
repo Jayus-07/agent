@@ -103,12 +103,24 @@ def get_rag_status() -> dict:
             "status": "initializing",
             "message": state.get("message", "模型加载中，请稍后重试"),
         }
-    # 上传预检上限透传（#6，2026-11-11）：前端 fail-fast 预检的权威值来源，
-    # 改 RAG_MAX_FILE_SIZE env 后前端跟随，不再写死 50；multipart 余量
-    # 同源透传（与 body_limit / 路由层 F10 预检同一常量）。
-    from backend.config.rag import RAG_MAX_FILE_SIZE, RAG_UPLOAD_MULTIPART_OVERHEAD
+    # 上传预检上限透传：单文件大小用于管理端文件预检；请求体总上限来自
+    # APISIX。multipart 可用容量是两者差值，后端仍按上传流精确限制文件字节。
+    from backend.config.rag import (
+        RAG_MAX_FILE_SIZE,
+        RAG_UPLOAD_INGRESS_MAX_BODY_BYTES,
+        RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT,
+        RAG_SSE_REDIS_POLL_MAX_SECONDS,
+        RAG_UPLOAD_SSE_IDLE_TIMEOUT_SECONDS,
+    )
     status["max_file_size_mb"] = RAG_MAX_FILE_SIZE
-    status["multipart_overhead_bytes"] = RAG_UPLOAD_MULTIPART_OVERHEAD
+    status["ocr_page_budget_max_pages"] = RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT
+    status["upload_sse_max_duration_seconds"] = RAG_SSE_REDIS_POLL_MAX_SECONDS
+    status["upload_sse_idle_timeout_seconds"] = RAG_UPLOAD_SSE_IDLE_TIMEOUT_SECONDS
+    status["upload_request_body_limit_bytes"] = RAG_UPLOAD_INGRESS_MAX_BODY_BYTES
+    status["multipart_overhead_bytes"] = max(
+        0,
+        RAG_UPLOAD_INGRESS_MAX_BODY_BYTES - RAG_MAX_FILE_SIZE * 1024 * 1024,
+    )
     return status
 
 

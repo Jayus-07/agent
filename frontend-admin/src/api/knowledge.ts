@@ -147,6 +147,16 @@ const BASE = '/api/rag'
 
 import { createIdempotencyKey, fetchRaw, mutationFetchRaw, randomId, request } from '@/api/client'
 
+const UPLOAD_SSE_RECONNECT_DELAY_MS = 1000
+
+function retryAfterMs(value: string | null): number | null {
+  if (!value) return null
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000
+  const dateMs = Date.parse(value)
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null
+}
+
 /** 构建查询字符串，自动过滤 undefined/null/空字符串，避免 URLSearchParams 将其转为字面字符串 "undefined" */
 const qs = (params: Record<string, any>) => {
   const clean: Record<string, string> = {}
@@ -226,6 +236,8 @@ export const knowledgeService: any = {
     department?: string,
     onAccepted?: (receipt: { upload_id: string; filename: string }) => void,
     ocrPageBudget?: number,
+    maxSseDurationSeconds?: number,
+    maxSseIdleTimeoutSeconds?: number,
   ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string; stage_elapsed?: Record<string, number>; total_ms?: number }> => {
     const fd = new FormData()
     fd.append('file', file)
@@ -255,18 +267,21 @@ export const knowledgeService: any = {
         body: fd,
         headers,
       })
-      for (let attempt = 1; attempt <= 2 && res.status === 503; attempt++) {
+      if (res.status === 503) {
         const text = await res.clone().text().catch(() => '')
-        if (!text.includes('ServerBusy')) break
-        await new Promise(r => setTimeout(r, 1500 * attempt))
-        res = await mutationFetchRaw(`${BASE}/upload`, {
-          operation: 'rag.upload',
-          idempotencyKey,
-          dedupeKey,
-          method: 'POST',
-          body: fd,
-          headers,
-        })
+        const waitMs = retryAfterMs(res.headers.get('Retry-After'))
+        if (text.includes('ServerBusy') && waitMs !== null) {
+          // 仅在服务端明确给出 Retry-After 时重试一次，避免自行猜等待时长。
+          await new Promise(r => setTimeout(r, waitMs))
+          res = await mutationFetchRaw(`${BASE}/upload`, {
+            operation: 'rag.upload',
+            idempotencyKey,
+            dedupeKey,
+            method: 'POST',
+            body: fd,
+            headers,
+          })
+        }
       }
       return res
     }
@@ -275,12 +290,25 @@ export const knowledgeService: any = {
       .then(async (res) => {
         // 503: 管道初始化中 → 友好提示
         if (res.status === 503) {
-          let retryAfter = 15
+          let payload: { error?: unknown; detail?: unknown } = {}
           try {
-            const errDetail = JSON.parse(await res.text())
-            if (errDetail?.detail?.retry_after) retryAfter = errDetail.detail.retry_after
+            payload = await res.clone().json() as typeof payload
           } catch { /* ignore */ }
-          throw new Error(`知识库服务正在初始化，预计 ${retryAfter}s 后可用，请稍后重试`)
+          if (payload.error === 'ServerBusy') {
+            const waitMs = retryAfterMs(res.headers.get('Retry-After'))
+            const waitHint = waitMs === null
+              ? '请稍后重试'
+              : `请在 ${Math.ceil(waitMs / 1000)} 秒后重试`
+            throw new Error(`上传服务繁忙，${waitHint}`)
+          }
+          const detail = payload.detail && typeof payload.detail === 'object'
+            ? payload.detail as { retry_after?: unknown }
+            : undefined
+          const retryAfter = Number(detail?.retry_after)
+          const waitHint = Number.isFinite(retryAfter) && retryAfter > 0
+            ? `预计 ${Math.ceil(retryAfter)} 秒后可用，请稍后重试`
+            : '请稍后重试'
+          throw new Error(`知识库服务正在初始化，${waitHint}`)
         }
         if (!res.ok) {
           // 2026-11-10 评审（与 web 端同步修复）：面向用户的原因在 JSON body
@@ -319,20 +347,20 @@ export const knowledgeService: any = {
         // 后端认证中间件 401 拒绝），改用 fetchRaw + ReadableStream 手动解析 SSE。
         return new Promise((resolve) => {
           let resolved = false
-          // batch3 复审 P2-1/P2-2 + #8（2026-11-11）：看门狗从「10 分钟绝对
-          // 超时」改为「活跃性驱动」——以最后收到字节（含 SSE keepalive 注释
-          // 帧）计 idle 上限，远大于服务端心跳周期（队列模式 15s / Redis 轮询
-          // 30s keepalive），长任务（如 500 页 PDF OCR）只要连接活着不再被
-          // 误判失败；保留绝对兜底对齐后端 RAG_SSE_REDIS_POLL_MAX_SECONDS
-          // （1900s，后端会先发 error 事件，这里只兜极简场景）。
+          // 看门狗按最后收到的 SSE 字节刷新空闲时限；绝对兜底上限来自
+          // /rag/health 返回的后端配置，前端不保留另一份时长常量。
           // 连接层失败 / idle 超时先重订阅一次（后端支持 Redis 镜像重订阅，
           // 已终态则立即重放终态）再终判，降低瞬时抖动误报；终态事件
           // （error）是任务失败语义，不走重连。
-          const IDLE_TIMEOUT_MS = 120 * 1000
-          const MAX_TOTAL_MS = 1900 * 1000
-          const RETRY_DELAY_MS = 1000
+          const MAX_TOTAL_MS = Number.isFinite(maxSseDurationSeconds)
+            && Number(maxSseDurationSeconds) > 0
+            ? Number(maxSseDurationSeconds) * 1000
+            : null
+          const IDLE_TIMEOUT_MS = Number.isFinite(maxSseIdleTimeoutSeconds)
+            && Number(maxSseIdleTimeoutSeconds) > 0
+            ? Number(maxSseIdleTimeoutSeconds) * 1000
+            : MAX_TOTAL_MS
           let retried = false
-          let idleDeadline = 0
           // 重连前必须 cancel 旧 reader：队列模式下旧 SSE 连接若还挂着，
           // 与新连接竞争消费同一个进程内进度队列会分流事件（终态可能被
           // 旧连接拿走后新连接空等）。cancel 会触发服务端断连清理，重连
@@ -342,12 +370,12 @@ export const knowledgeService: any = {
           // 连接失败，用标志区分，避免重连路径被自己的 cancel 二次触发
           let cancellingForRetry = false
           const startedAt = Date.now()
-          let idleTimer: ReturnType<typeof setInterval> | undefined
+          let idleTimer: ReturnType<typeof setTimeout> | undefined
           let totalTimer: ReturnType<typeof setTimeout> | undefined
 
           const cleanup = () => {
             resolved = true
-            if (idleTimer) clearInterval(idleTimer)
+            if (idleTimer) clearTimeout(idleTimer)
             if (totalTimer) clearTimeout(totalTimer)
           }
 
@@ -360,11 +388,19 @@ export const knowledgeService: any = {
 
           const fail = () => {
             if (resolved) return
-            if (!retried && Date.now() - startedAt + RETRY_DELAY_MS < MAX_TOTAL_MS) {
+            if (idleTimer) {
+              clearTimeout(idleTimer)
+              idleTimer = undefined
+            }
+            if (
+              !retried
+              && (MAX_TOTAL_MS === null
+                || Date.now() - startedAt + UPLOAD_SSE_RECONNECT_DELAY_MS < MAX_TOTAL_MS)
+            ) {
               retried = true
               cancellingForRetry = true
               try { void activeReader?.cancel() } catch { /* 旧流可能已结束 */ }
-              setTimeout(() => { if (!resolved) consumeStream() }, RETRY_DELAY_MS)
+              setTimeout(() => { if (!resolved) consumeStream() }, UPLOAD_SSE_RECONNECT_DELAY_MS)
               return
             }
             finishFail('进度连接中断')
@@ -397,21 +433,26 @@ export const knowledgeService: any = {
             }
           }
 
-          // 活跃性看门狗：任何字节（含 keepalive）都刷新 idleDeadline，
-          // 只有持续无更新超上限才判连接失效
-          idleTimer = setInterval(() => {
-            if (resolved) return
-            if (idleDeadline && Date.now() > idleDeadline) fail()
-          }, 5000)
+          // 服务端配置的空闲时限由一次性定时器执行；收到任意字节（含 keepalive）后重置。
+          const armIdleTimeout = () => {
+            if (idleTimer) clearTimeout(idleTimer)
+            if (IDLE_TIMEOUT_MS === null) return
+            idleTimer = setTimeout(() => {
+              idleTimer = undefined
+              fail()
+            }, IDLE_TIMEOUT_MS)
+          }
 
           // 绝对兜底：对齐后端轮询上限（防御重连风暴等极端场景）
-          totalTimer = setTimeout(() => {
-            if (!resolved) finishFail('索引耗时过长，请在文档列表确认状态或稍后重试')
-          }, MAX_TOTAL_MS)
+          if (MAX_TOTAL_MS !== null) {
+            totalTimer = setTimeout(() => {
+              if (!resolved) finishFail('索引耗时过长，请在文档列表确认状态或稍后重试')
+            }, MAX_TOTAL_MS)
+          }
 
           // fetch 流式解析 SSE：按空行分隔事件，取 data: 行；可重入（重连复用）
           async function consumeStream() {
-            idleDeadline = Date.now() + IDLE_TIMEOUT_MS
+            armIdleTimeout()
             try {
               const res = await fetchRaw(`${BASE}/upload/${data.upload_id}/stream`)
               if (!res.ok || !res.body) {
@@ -431,7 +472,7 @@ export const knowledgeService: any = {
                   fail()
                   return
                 }
-                idleDeadline = Date.now() + IDLE_TIMEOUT_MS
+                armIdleTimeout()
                 buf += decoder.decode(value, { stream: true }).replace(/\r/g, '')
                 let sep: number
                 while ((sep = buf.indexOf('\n\n')) !== -1) {

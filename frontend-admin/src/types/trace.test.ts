@@ -204,12 +204,12 @@ describe("durationBg", () => {
 
 describe("statusBadge", () => {
   it.each([
-    ["success", "SUCCESS"],
-    ["error", "ERROR"],
-    ["timeout", "TIMEOUT"],
-    ["cancelled", "CANCELLED"],
-    ["skipped", "SKIPPED"],
-    ["unknown", "UNKNOWN"],
+    ["success", "成功"],
+    ["error", "失败"],
+    ["timeout", "超时"],
+    ["cancelled", "已取消"],
+    ["skipped", "已跳过"],
+    ["unknown", "未知状态"],
   ] as const)("状态 %s → 标签 %s", (status, expected) => {
     expect(statusBadge(status).label).toBe(expected);
   });
@@ -248,17 +248,17 @@ describe("stepColor", () => {
 });
 
 describe("severityStyle", () => {
-  it("critical → CRITICAL 红", () => {
-    expect(severityStyle("critical").label).toBe("CRITICAL");
+  it("critical → 严重红", () => {
+    expect(severityStyle("critical").label).toBe("严重");
     expect(severityStyle("critical").bg).toContain("red");
   });
 
-  it("error → ERROR 橙", () => {
-    expect(severityStyle("error").label).toBe("ERROR");
+  it("error → 错误橙", () => {
+    expect(severityStyle("error").label).toBe("错误");
   });
 
-  it("warning → WARNING 琥珀", () => {
-    expect(severityStyle("warning").label).toBe("WARNING");
+  it("warning → 警告琥珀", () => {
+    expect(severityStyle("warning").label).toBe("警告");
   });
 });
 
