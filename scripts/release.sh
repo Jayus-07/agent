@@ -13,9 +13,27 @@ if [ "${1:-}" = "--skip-build" ]; then
   SKIP_BUILD=true
 fi
 
-GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-if [ "$GIT_COMMIT" = "unknown" ]; then
+HEAD_COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+if [ "$HEAD_COMMIT" = "unknown" ]; then
   echo "[release][FATAL] 无法确定构建 commit（非 git 仓库？）"; exit 1
+fi
+if [ -z "${GIT_COMMIT:-}" ] || [ "$GIT_COMMIT" = "unknown" ]; then
+  GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+else
+  case "$GIT_COMMIT" in
+    *[!0-9a-fA-F]*|"")
+      echo "[release][FATAL] 注入的 GIT_COMMIT 不是有效十六进制提交号"; exit 1
+      ;;
+  esac
+  if [ "${#GIT_COMMIT}" -lt 7 ] || [ "${#GIT_COMMIT}" -gt "${#HEAD_COMMIT}" ]; then
+    echo "[release][FATAL] 注入的 GIT_COMMIT 长度无效"; exit 1
+  fi
+  case "$HEAD_COMMIT" in
+    "$GIT_COMMIT"*) ;;
+    *)
+      echo "[release][FATAL] 注入的 GIT_COMMIT 与当前工作树 HEAD 不一致"; exit 1
+      ;;
+  esac
 fi
 if ! GIT_STATUS="$(git status --porcelain --untracked-files=normal 2>/dev/null)"; then
   echo "[release][FATAL] 无法读取 Git 工作树状态，拒绝发布"; exit 1
