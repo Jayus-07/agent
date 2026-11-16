@@ -8,6 +8,7 @@ venv/
 # IDE
 .idea/
 .vscode/
+.playwright-mcp/
 
 # Git
 .git/

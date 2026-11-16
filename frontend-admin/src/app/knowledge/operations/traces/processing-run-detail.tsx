@@ -1,4 +1,4 @@
-import type { ProcessingRunDetail } from "@/api/knowledge";
+import type { KnowledgeDoc, ProcessingRunDetail } from "@/api/knowledge";
 
 const STAGE_LABELS: Record<string, string> = {
   load: "文件加载",
@@ -51,18 +51,52 @@ function showRecordedNumber(value?: number): string {
 export default function ProcessingRunDetailView({
   detail,
   documentName,
+  expectedDocId = "",
+  expectedFileHash = "",
+  registryDocument,
+  registryIdentityError = "",
+  runIdentityError = "",
   historyFallback = false,
   onBack,
   backLabel = "文档",
 }: {
   detail: ProcessingRunDetail;
   documentName: string;
+  expectedDocId?: string;
+  expectedFileHash?: string;
+  registryDocument?: KnowledgeDoc | null;
+  registryIdentityError?: string;
+  runIdentityError?: string;
   historyFallback?: boolean;
   onBack?: () => void;
   backLabel?: string;
 }) {
   const steps = detail.steps ?? [];
   const usage = detail.usage ?? [];
+  const registryDocId = String(registryDocument?.doc_id || registryDocument?.id || "");
+  const registryName = String(registryDocument?.file_name || registryDocument?.name || "");
+  const registryFileHash = String(
+    registryDocument?.file_hash || registryDocument?.hash || registryDocument?.sha256 || "",
+  );
+  const runIdentityVerified = Boolean(
+    expectedDocId
+    && detail.doc_id === expectedDocId
+    && registryDocId === expectedDocId
+    && registryName
+    && expectedFileHash
+    && String(detail.file_hash || "").toLowerCase() === expectedFileHash.toLowerCase()
+    && registryFileHash.toLowerCase() === expectedFileHash.toLowerCase()
+    && !registryIdentityError
+    && !runIdentityError,
+  );
+  const identityWarnings = [
+    registryIdentityError,
+    runIdentityError,
+    !expectedDocId ? "入口未提供文档 ID" : "",
+    !expectedFileHash ? "入口未提供文件 SHA-256，无法核对版本" : "",
+    !registryName ? "文档登记未提供可核对的文件名" : "",
+    !registryFileHash ? "文档登记未记录文件 SHA-256" : "",
+  ].filter(Boolean);
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -86,9 +120,45 @@ export default function ProcessingRunDetailView({
         )}
 
         <div>
-          <h1 className="text-base font-semibold text-slate-800">{documentName || "未记录文件名"}</h1>
+          <h1 className="text-base font-semibold text-slate-800">{registryName || documentName || "未记录文件名"}</h1>
           <p className="mt-1 break-all font-mono text-[10px] text-slate-400">运行 ID：{detail.run_id}</p>
         </div>
+
+        <section className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="text-xs font-medium text-slate-600">文件与处理运行身份</h2>
+            <span
+              role="status"
+              className={`rounded px-2 py-1 text-[10px] font-semibold ${runIdentityVerified
+                ? "bg-emerald-50 text-emerald-700"
+                : "bg-amber-50 text-amber-800"}`}
+            >
+              {runIdentityVerified ? "文件与运行身份核验通过" : "文件身份未核验"}
+            </span>
+          </div>
+          <dl className="grid grid-cols-1 gap-x-5 gap-y-3 sm:grid-cols-2">
+            {[
+              ["文档登记文件名", registryName || "未核验"],
+              ["入口文件名", documentName || "未记录"],
+              ["入口文档 ID", expectedDocId || "未记录"],
+              ["登记文档 ID", registryDocId || "未核验"],
+              ["运行文档 ID", detail.doc_id || "未记录"],
+              ["入口文件 SHA-256", expectedFileHash || "未记录"],
+              ["登记文件 SHA-256", registryFileHash || "未核验"],
+              ["运行文件 SHA-256", detail.file_hash || "未记录"],
+            ].map(([label, value]) => (
+              <div key={label} className="min-w-0">
+                <dt className="text-[10px] text-slate-400">{label}</dt>
+                <dd className="mt-0.5 break-all font-mono text-xs text-slate-700">{value}</dd>
+              </div>
+            ))}
+          </dl>
+          {identityWarnings.length > 0 && (
+            <p role="alert" className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+              未核验原因：{identityWarnings.join("；")}
+            </p>
+          )}
+        </section>
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {[

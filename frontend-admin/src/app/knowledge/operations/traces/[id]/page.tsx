@@ -6,7 +6,7 @@ import { getTraceById } from "@/lib/observability/source";
 import type { TraceRecord, Span } from "@/types/trace";
 import { statusBadge, formatTime, formatRelative } from "@/types/trace";
 import { knowledgeService } from "@/api/knowledge";
-import type { ProcessingRunDetail } from "@/api/knowledge";
+import type { KnowledgeDoc, ProcessingRunDetail } from "@/api/knowledge";
 import { X, Loader2 } from "lucide-react";
 import {
   getLogicalStageSpans, getMetadataPerformanceWarning, getMetadataStageDuration,
@@ -16,6 +16,7 @@ import {
   getTraceDocumentTitle,
   getTraceDocumentId,
   getTraceDocumentIdentityError,
+  getRegistryDocumentIdentityError,
   getProcessingRunDetailError,
 } from "../trace-metrics";
 import ProcessingRunDetailView from "../processing-run-detail";
@@ -97,6 +98,8 @@ export default function DocTracePage() {
   const runIdParam = searchParams.get("runId") || "";
   const viewParam = searchParams.get("view") || "";
   const [trace, setTrace] = useState<TraceRecord | null>(null);
+  const [registryDocument, setRegistryDocument] = useState<KnowledgeDoc | null>(null);
+  const [documentIdentityError, setDocumentIdentityError] = useState("");
   const [processingRun, setProcessingRun] = useState<ProcessingRunDetail | null>(null);
   const [processingRunHistoryFallback, setProcessingRunHistoryFallback] = useState(false);
   const [processingRunError, setProcessingRunError] = useState("");
@@ -112,21 +115,52 @@ export default function DocTracePage() {
     let cancelled = false;
     setLoading(true);
     setTrace(null);
+    setRegistryDocument(null);
+    setDocumentIdentityError("");
     setProcessingRun(null);
     setProcessingRunHistoryFallback(false);
     setProcessingRunError("");
 
-    const loadRunDetail = async () => {
+    const loadDocumentIdentity = async () => {
+      if (!documentIdParam) {
+        if (!cancelled) setDocumentIdentityError("入口未提供文件 ID，无法核对文档登记");
+        return;
+      }
+      try {
+        const response = await knowledgeService.getDocument(documentIdParam);
+        const detail = response?.doc as KnowledgeDoc | undefined;
+        const identityError = response?.ok
+          ? getRegistryDocumentIdentityError(
+            detail, documentIdParam, documentName || undefined, fileHashParam || undefined,
+          )
+          : String(response?.error || "文档登记详情读取失败");
+        if (cancelled) return;
+        if (!detail) {
+          setRegistryDocument(null);
+          setDocumentIdentityError(identityError || "文档登记详情未返回");
+          return;
+        }
+        setRegistryDocument(detail);
+        setDocumentIdentityError(identityError || "");
+      } catch {
+        if (!cancelled) setDocumentIdentityError("文档登记详情读取失败");
+      }
+    };
+
+    const loadRunDetail = async (
+      options: { expectedTraceId?: string; allowHistoryFallback?: boolean } = {},
+    ) => {
       if (!documentIdParam) {
         if (!cancelled) setProcessingRunError("缺少文件 ID，无法核对历史处理记录");
         return;
       }
+      const allowHistoryFallback = options.allowHistoryFallback ?? true;
       let firstError = "";
       if (runIdParam) {
         try {
           const detail = await knowledgeService.getProcessingRun(documentIdParam, runIdParam);
           const identityError = getProcessingRunDetailError(
-            detail, documentIdParam, runIdParam, fileHashParam,
+            detail, documentIdParam, runIdParam, fileHashParam, options.expectedTraceId,
           );
           const hasSteps = Array.isArray(detail?.steps) && detail.steps.length > 0;
           if (!identityError && hasSteps) {
@@ -140,8 +174,14 @@ export default function DocTracePage() {
         } catch {
           firstError = "最近一次处理运行读取失败";
         }
+      } else {
+        firstError = "入口未提供处理运行 ID，无法核对 Trace 与运行记录";
       }
 
+      if (!allowHistoryFallback) {
+        if (!cancelled) setProcessingRunError(firstError || "处理运行与 Trace 未通过身份核验");
+        return;
+      }
       if (!fileHashParam) {
         if (!cancelled) {
           setProcessingRunError(firstError || "文件未提供 SHA-256，无法核对历史处理版本");
@@ -200,12 +240,18 @@ export default function DocTracePage() {
 
     void (async () => {
       if (viewParam === "unavailable") {
-        await loadRunDetail();
+        await Promise.all([
+          loadDocumentIdentity(),
+          loadRunDetail({ allowHistoryFallback: true }),
+        ]);
         if (!cancelled) setLoading(false);
         return;
       }
       if (viewParam === "processing-run") {
-        await loadRunDetail();
+        await Promise.all([
+          loadDocumentIdentity(),
+          loadRunDetail({ allowHistoryFallback: true }),
+        ]);
         if (!cancelled) setLoading(false);
         return;
       }
@@ -213,18 +259,29 @@ export default function DocTracePage() {
       const foundTrace = await getTraceById(id);
       if (cancelled) return;
       if (foundTrace) {
-        const identityError = documentIdParam
+        const traceIdError = foundTrace.id === id
+          ? null
+          : "Trace API 返回的 ID 与页面请求不匹配";
+        const documentIdError = documentIdParam
           ? getTraceDocumentIdentityError(getTraceDocumentId(foundTrace), documentIdParam)
           : null;
+        const identityError = traceIdError || documentIdError;
         if (!identityError) {
           setTrace(foundTrace);
-          setLoading(false);
+          await Promise.all([
+            loadDocumentIdentity(),
+            loadRunDetail({ expectedTraceId: foundTrace.id, allowHistoryFallback: false }),
+          ]);
+          if (!cancelled) setLoading(false);
           return;
         }
         setProcessingRunError(identityError);
       }
       if (documentIdParam) {
-        await loadRunDetail();
+        await Promise.all([
+          loadDocumentIdentity(),
+          loadRunDetail({ allowHistoryFallback: true }),
+        ]);
         if (!cancelled && foundTrace && documentIdParam
           && getTraceDocumentIdentityError(getTraceDocumentId(foundTrace), documentIdParam)) {
           setProcessingRunError((current) => current ? `Trace 已拒绝展示（文档 ID 不匹配）；运行记录读取失败：${current}` : "Trace 文档 ID 不匹配");
@@ -236,7 +293,7 @@ export default function DocTracePage() {
     })();
 
     return () => { cancelled = true; };
-  }, [id, documentIdParam, fileHashParam, runIdParam, viewParam]);
+  }, [id, documentIdParam, documentName, fileHashParam, runIdParam, viewParam]);
   useEffect(() => { if (!chunkPanelOpen) return; const onKey=(e:KeyboardEvent)=>{if(e.key==="Escape")setChunkPanelOpen(false)}; window.addEventListener("keydown",onKey); return ()=>window.removeEventListener("keydown",onKey); }, [chunkPanelOpen]);
 
   const childSpans = useMemo(() => { if(!trace)return[]; return (trace.spans||[]).filter(s=>s.parent_id!==null).sort((a,b)=>spanOrder(a)-spanOrder(b)); }, [trace]);
@@ -289,6 +346,67 @@ export default function DocTracePage() {
   const docIdFromTags = trace?.tags?.doc_id||"";
   const docIdFromSpans = useMemo(() => { if(docIdFromTags)return""; for(const s of trace?.spans||[]){const m=s.metrics as Record<string,unknown>|undefined; if(m?.doc_id)return String(m.doc_id);} return""; }, [trace, docIdFromTags]);
   const docId = docIdFromTags||docIdFromSpans;
+  const traceDocumentId = trace ? getTraceDocumentId(trace) : null;
+  const traceKnowledgeBaseId = trace?.tags?.kb_id || "";
+  const traceSla = trace?.sla;
+  const registryKnowledgeBaseId = registryDocument?.kb_id || "";
+  const knowledgeBaseIdentityError = !traceKnowledgeBaseId && !registryKnowledgeBaseId
+    ? "Trace 与文档登记均未记录知识库 ID，无法确认所属知识库"
+    : !traceKnowledgeBaseId
+      ? "Trace 未记录知识库 ID，无法与文档登记核对"
+      : !registryKnowledgeBaseId
+        ? "文档登记未记录知识库 ID，无法与 Trace 核对"
+        : traceKnowledgeBaseId !== registryKnowledgeBaseId
+          ? "Trace 知识库 ID 与文档登记不一致"
+          : "";
+  const registryFileHash = String(
+    registryDocument?.file_hash || registryDocument?.hash || registryDocument?.sha256 || "",
+  );
+  const identityVerified = Boolean(
+    registryDocument
+    && !documentIdentityError
+    && processingRun
+    && runIdParam
+    && processingRun.run_id === runIdParam
+    && !processingRunError
+    && fileHashParam
+    && registryFileHash
+    && registryFileHash.toLowerCase() === fileHashParam.toLowerCase()
+    && processingRun.file_hash
+    && String(processingRun.file_hash).toLowerCase() === fileHashParam.toLowerCase()
+    && documentIdParam
+    && traceDocumentId === documentIdParam
+    && trace?.id === id
+    && !knowledgeBaseIdentityError,
+  );
+  const registryDocumentName = registryDocument?.file_name || registryDocument?.name || "";
+  const traceDocumentTitle = registryDocumentName
+    || documentName
+    || getTraceDocumentTitle(trace?.question || "");
+  const identityRows = [
+    { label: "文件名", value: traceDocumentTitle, source: registryDocumentName ? "项目文档登记" : documentName ? "入口参数，未核验" : "未记录" },
+    { label: "doc_id", value: traceDocumentId || "Trace 未记录" },
+    { label: "文档登记 ID", value: registryDocument?.doc_id || registryDocument?.id || "未核验" },
+    { label: "知识库 ID", value: traceKnowledgeBaseId || "Trace 未记录" },
+    { label: "文档登记知识库 ID", value: registryKnowledgeBaseId || "未核验" },
+    { label: "Trace ID", value: trace?.id || "Trace 未记录" },
+    { label: "run_id", value: processingRun?.run_id || (runIdParam ? "未核验" : "未记录") },
+    { label: "文件 SHA-256", value: processingRun?.file_hash || (fileHashParam ? "未核验" : "未记录") },
+    { label: "文档登记 SHA-256", value: registryFileHash || "未核验" },
+    { label: "处理操作", value: processingRun?.operation || "未记录" },
+    { label: "处理状态", value: processingRun?.status || (runIdParam ? "未核验" : "未记录") },
+    { label: "处理开始", value: processingRun?.started_at ? formatTime(processingRun.started_at) : "未记录" },
+    { label: "处理结束", value: processingRun?.finished_at ? formatTime(processingRun.finished_at) : "未记录" },
+    { label: "SLA 阈值", value: traceSla ? `${traceSla.threshold_ms} ms` : "未记录" },
+    { label: "SLA 结果", value: traceSla ? (traceSla.breached ? "已超限" : "未超限") : "未记录" },
+  ];
+  const identityWarnings = [
+    documentIdentityError,
+    processingRunError,
+    knowledgeBaseIdentityError,
+    !fileHashParam ? "入口未提供文件 SHA-256，无法核对文件版本" : "",
+  ]
+    .filter(Boolean);
   const handleOpenChunkDetail = async () => { if(!docId)return; setChunkPanelOpen(true);setChunkDetailLoading(true);setChunkDetailError(""); try{const res=await knowledgeService.getChunkDetail(docId); setChunkDetailData((res as any)?.chunks??(res as any)?.data?.chunks??[]);}catch(e){setChunkDetailError((e as Error).message);}finally{setChunkDetailLoading(false);} };
 
   if(loading) return <div className="flex-1 flex items-center justify-center"><p className="text-sm text-slate-400">加载中…</p></div>;
@@ -296,6 +414,11 @@ export default function DocTracePage() {
     return <ProcessingRunDetailView
       detail={processingRun}
       documentName={documentName}
+      expectedDocId={documentIdParam}
+      expectedFileHash={fileHashParam}
+      registryDocument={registryDocument}
+      registryIdentityError={documentIdentityError}
+      runIdentityError={processingRunError}
       historyFallback={processingRunHistoryFallback}
       onBack={() => router.push(returnHref)}
       backLabel={returnTab === "documents" ? "文档" : "操作日志"}
@@ -352,7 +475,29 @@ export default function DocTracePage() {
 
       {/* Overview */}
       <div>
-        <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-3"><h1 className="text-base font-semibold text-slate-800">{getTraceDocumentTitle(trace.question, searchParams.get("documentName"))}</h1><span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span></div><span className="text-xs text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span></div>
+        <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-3"><h1 className="text-base font-semibold text-slate-800">{traceDocumentTitle}</h1><span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span></div><span className="text-xs text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span></div>
+        <section aria-labelledby="trace-identity-heading" className="mb-3 rounded-xl border border-slate-200 bg-white p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 id="trace-identity-heading" className="text-xs font-medium text-slate-600">文件与处理身份</h2>
+            <span role="status" className={`rounded px-2 py-1 text-[10px] font-semibold ${identityVerified ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
+              {identityVerified ? "身份核验通过" : "身份未核验"}
+            </span>
+          </div>
+          <dl className="grid grid-cols-1 gap-x-5 gap-y-3 sm:grid-cols-2">
+            {identityRows.map((item) => (
+              <div key={item.label} className="min-w-0">
+                <dt className="text-[10px] text-slate-400">{item.label}</dt>
+                <dd className="mt-0.5 break-all font-mono text-xs text-slate-700">{item.value}</dd>
+                {"source" in item && <dd className="mt-0.5 text-[9px] text-slate-400">来源：{item.source}</dd>}
+              </div>
+            ))}
+          </dl>
+          {identityWarnings.length > 0 && (
+            <p role="alert" className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+              未核验原因：{identityWarnings.join("；")}
+            </p>
+          )}
+        </section>
         <div className="grid grid-cols-4 gap-2 mb-2">
           {[{label:'文件大小',value:overview.fileSize>0?`${(overview.fileSize/1024).toFixed(1)}KB`:'-',sub:`${overview.fileSize} bytes`},{label:'Chunks',value:overview.chunkCount>0?String(overview.chunkCount):'-',sub:'文本分块数'},{label:'Tokens',value:overview.totalTokens>0?overview.totalTokens.toLocaleString():'-',sub:'prompt+completion'},{label:'成本',value:traceCost.value,sub:traceCost.detail}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 font-mono">{c.value}</div><div className="text-[9px] text-slate-400">{c.sub}</div></div>))}
         </div>

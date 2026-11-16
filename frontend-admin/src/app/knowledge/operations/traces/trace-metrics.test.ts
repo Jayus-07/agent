@@ -3,7 +3,8 @@ import type { Span } from "@/types/trace";
 import {
   formatTracePageCount, getEmbeddingCounts, getEmbeddingCountsFromSpans,
   getLogicalStageSpans, getMetadataPerformanceWarning,
-  getTraceDocumentTitle, getProcessingRunDetailError, getTraceDocumentId, getTraceDocumentIdentityError,
+  getTraceDocumentTitle, getProcessingRunDetailError, getTraceDocumentId,
+  getTraceDocumentIdentityError, getRegistryDocumentIdentityError,
   getMetadataStageDuration,
   getQualityScore, getQualityScoreBreakdown, getQualityWarning, getTraceCostDisplay,
   groupSpansByType,
@@ -73,6 +74,50 @@ describe("Trace duration and quality metrics", () => {
       { doc_id: "doc-1", run_id: "run-1", file_hash: "current-hash" },
       "doc-1", "run-1", "current-hash",
     )).toBeNull();
+    expect(getProcessingRunDetailError(
+      { doc_id: "doc-1", run_id: "run-1", file_hash: "current-hash", trace_id: "trace-1" },
+      "doc-1", "run-1", "current-hash", "trace-1",
+    )).toBeNull();
+    expect(getProcessingRunDetailError(
+      { doc_id: "doc-1", run_id: "run-1", file_hash: "current-hash", trace_id: "trace-other" },
+      "doc-1", "run-1", "current-hash", "trace-1",
+    )).toBe("处理运行关联的 Trace ID 与当前详情不匹配");
+    expect(getProcessingRunDetailError(
+      { doc_id: "doc-1", run_id: "run-1", file_hash: "current-hash" },
+      "doc-1", "run-1", "current-hash", "trace-1",
+    )).toBe("处理运行未记录 Trace ID，无法与当前详情核对");
+  });
+
+  it("文件名和文档 ID 必须来自匹配的 Registry 记录", () => {
+    expect(getRegistryDocumentIdentityError(
+      { doc_id: "doc-1", file_name: "source.md" }, "doc-1", "source.md",
+    )).toBeNull();
+    expect(getRegistryDocumentIdentityError(
+      { id: "doc-1", name: "source.md" }, "doc-1", "source.md",
+    )).toBeNull();
+    expect(getRegistryDocumentIdentityError(
+      { doc_id: "doc-other", file_name: "source.md" }, "doc-1", "source.md",
+    )).toBe("文档登记 ID 与当前文件不匹配");
+    expect(getRegistryDocumentIdentityError(
+      { id: "doc-1", name: "renamed.md" }, "doc-1", "source.md",
+    )).toBe("文档登记文件名与入口记录不匹配");
+    expect(getRegistryDocumentIdentityError(
+      { doc_id: "doc-1", file_name: "renamed.md" }, "doc-1", "source.md",
+    )).toBe("文档登记文件名与入口记录不匹配");
+  });
+
+  it("Registry 文件 SHA 必须与入口记录一致", () => {
+    expect(getRegistryDocumentIdentityError(
+      { id: "doc-1", name: "source.md", hash: "AbC123" },
+      "doc-1", "source.md", "abc123",
+    )).toBeNull();
+    expect(getRegistryDocumentIdentityError(
+      { id: "doc-1", name: "source.md" }, "doc-1", "source.md", "abc123",
+    )).toBe("文档登记未记录文件 SHA-256");
+    expect(getRegistryDocumentIdentityError(
+      { doc_id: "doc-1", file_name: "source.md", file_hash: "old-hash" },
+      "doc-1", "source.md", "current-hash",
+    )).toBe("文档登记文件 SHA-256 与当前文件不匹配");
   });
 
   it("Trace 有文档身份时必须与文件列表记录一致", () => {

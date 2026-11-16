@@ -2,7 +2,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { ProcessingRunDetail } from "@/api/knowledge";
+import type { KnowledgeDoc, ProcessingRunDetail } from "@/api/knowledge";
 import ProcessingRunDetailView from "./processing-run-detail";
 
 describe("ProcessingRunDetailView", () => {
@@ -57,6 +57,7 @@ describe("ProcessingRunDetailView", () => {
     }));
 
     expect(html).toContain("处理运行记录（非 Trace）");
+    expect(html).toContain("文件身份未核验");
     expect(html).toContain("厦门-城市-厦门.md");
     expect(html).toContain("运行 ID：run-1");
     expect(html).toContain("Trace ID");
@@ -66,6 +67,42 @@ describe("ProcessingRunDetailView", () => {
     expect(html).toContain("已采用");
     expect(html).toContain("输入/输出：145 / 131");
     expect(html).toContain("规则版本：未记录");
+  });
+
+  it("只有文档登记、运行 ID 和 SHA 全部匹配时才通过文件身份核验", () => {
+    const detail: ProcessingRunDetail = {
+      doc_id: "doc-1",
+      run_id: "run-1",
+      file_hash: "same-hash",
+      status: "success",
+      steps: [],
+    };
+    const registryDocument = {
+      doc_id: "doc-1",
+      file_name: "source.md",
+      kb_id: "kb-1",
+      hash: "SAME-HASH",
+    } as KnowledgeDoc;
+
+    const verified = renderToStaticMarkup(createElement(ProcessingRunDetailView, {
+      detail,
+      documentName: "source.md",
+      expectedDocId: "doc-1",
+      expectedFileHash: "same-hash",
+      registryDocument,
+    }));
+    const mismatched = renderToStaticMarkup(createElement(ProcessingRunDetailView, {
+      detail,
+      documentName: "source.md",
+      expectedDocId: "doc-1",
+      expectedFileHash: "different-hash",
+      registryDocument,
+      runIdentityError: "处理运行文件 SHA-256 与当前文件不匹配",
+    }));
+
+    expect(verified).toContain("文件与运行身份核验通过");
+    expect(mismatched).toContain("文件身份未核验");
+    expect(mismatched).toContain("处理运行文件 SHA-256 与当前文件不匹配");
   });
 
   it("提供返回文件列表的入口", () => {

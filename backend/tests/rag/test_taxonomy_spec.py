@@ -106,3 +106,18 @@ def test_gulangyu_history_document_is_classified_as_travel():
 
     assert classify_doc_type(source_text, filename=filename) == "travel_guide"
     assert detect_business_domain(source_text)[0] == "travel"
+
+
+def test_travel_expense_reimbursement_is_classified_as_financial():
+    """差旅财务规则应压过样本里的订单号和拆单词。"""
+    from backend.rag.preprocessing.metadata import detect_business_domain
+
+    source_text = (
+        "虚构差旅与费用报销规则。报销记录须包含测试订单号和费用类型，"
+        "不能通过拆单绕过财务限额。"
+    )
+
+    domain, _, detail = detect_business_domain(source_text, return_detail=True)
+
+    assert domain == "financial"
+    assert detail["scores"]["financial"] > detail["scores"]["order"]
