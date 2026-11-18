@@ -59,6 +59,16 @@ class PostgresProcessingLineageRepository:
         prefix = os.getenv("RAG_STORES_PG_TABLE_PREFIX", RAG_STORES_PG_TABLE_PREFIX)
         self._runs_table = f"{prefix}rag_processing_runs"
         self._steps_table = f"{prefix}rag_processing_steps"
+        explicit_index_table = os.getenv("RAG_INDEX_RUNS_TABLE", "").strip()
+        registry_table = os.getenv("DOC_REGISTRY_PG_TABLE", "").strip()
+        if explicit_index_table:
+            self._index_runs_table = explicit_index_table
+        elif registry_table.endswith("doc_registry"):
+            self._index_runs_table = (
+                registry_table[:-len("doc_registry")] + "rag_index_runs"
+            )
+        else:
+            self._index_runs_table = f"{prefix}rag_index_runs"
         self._pool: ThreadedConnectionPool | None = None
         self._pool_lock = threading.Lock()
         self._pool_min_conn = max(int(DB_POOL_MIN_CONN), 1)
@@ -187,6 +197,15 @@ class PostgresProcessingLineageRepository:
         """按运行、阶段和尝试号幂等写入阶段快照。"""
 
         with self._conn() as conn:
+            parent = self._exec(
+                conn,
+                f"""SELECT run_id FROM {self._runs_table}
+                     WHERE run_id = %s AND status = 'running'
+                     FOR SHARE""",
+                (snapshot.run_id,),
+            ).fetchone()
+            if parent is None:
+                return
             self._exec(
                 conn,
                 f"""
@@ -302,6 +321,7 @@ class PostgresProcessingLineageRepository:
                        error_message = %s,
                        model_summary = %s
                  WHERE run_id = %s
+                   AND status = 'running'
                 """,
                 (
                     status,
@@ -311,6 +331,48 @@ class PostgresProcessingLineageRepository:
                     run_id,
                 ),
             )
+
+    def fail_stale_running_runs(self, *, stale_after_seconds: int,
+                                limit: int = 100) -> dict[str, int]:
+        """失败收口过期的 lineage 运行及其未完成阶段。"""
+        stale_after = max(int(stale_after_seconds), 1)
+        batch_size = max(1, min(int(limit), 500))
+        message = "运行超过配置的处理时限，系统已将未完成阶段收口为失败。"
+        with self._conn() as conn:
+            row = self._exec(
+                conn,
+                f"""WITH candidates AS (
+                        SELECT run_id FROM {self._runs_table}
+                         WHERE status = 'running' AND started_at IS NOT NULL
+                           AND started_at <= now() - (%s || ' seconds')::interval
+                         ORDER BY started_at, run_id
+                         LIMIT %s FOR UPDATE SKIP LOCKED
+                    ), finished_runs AS (
+                        UPDATE {self._runs_table} AS run
+                           SET status = 'failed', finished_at = now(),
+                               error_message = %s
+                          FROM candidates
+                         WHERE run.run_id = candidates.run_id
+                           AND run.status = 'running'
+                        RETURNING run.run_id
+                    ), finished_steps AS (
+                        UPDATE {self._steps_table} AS step
+                           SET status = 'failed', finished_at = now(),
+                               error_message = %s
+                          FROM finished_runs
+                         WHERE step.run_id = finished_runs.run_id
+                           AND step.status = 'running'
+                        RETURNING step.step_id
+                    )
+                    SELECT (SELECT COUNT(*) FROM finished_runs) AS run_count,
+                           (SELECT COUNT(*) FROM finished_steps) AS step_count""",
+                (str(stale_after), batch_size, message, message),
+            ).fetchone()
+        result = row or {}
+        return {
+            "run_count": int(result.get("run_count", 0) or 0),
+            "step_count": int(result.get("step_count", 0) or 0),
+        }
 
     def get_latest_for_doc(self, doc_id: str) -> dict[str, Any] | None:
         with self._conn() as conn:
@@ -356,6 +418,80 @@ class PostgresProcessingLineageRepository:
             "page": page,
             "page_size": page_size,
         }
+
+    def _candidate_run_select(self) -> str:
+        """取未发布运行时使用的授权范围字段。"""
+        return f"""
+            SELECT pr.run_id, pr.doc_id, pr.file_hash, pr.operation, pr.status,
+                   pr.pipeline_version, pr.config_snapshot_hash, pr.task_id,
+                   pr.batch_id, pr.trace_id, pr.started_at, pr.finished_at,
+                   pr.error_message, pr.model_summary, ir.kb_id, ir.department,
+                   ir.tenant_id, COALESCE(scope.permission_scope, 'general') AS permission_scope
+              FROM {self._runs_table} AS pr
+              JOIN {self._index_runs_table} AS ir
+                ON ir.upload_id = pr.task_id
+               AND ir.file_hash = pr.file_hash
+              LEFT JOIN LATERAL (
+                    SELECT NULLIF(step.metadata->>'permission_scope', '') AS permission_scope
+                      FROM {self._steps_table} AS step
+                     WHERE step.run_id = pr.run_id
+                       AND step.metadata ? 'permission_scope'
+                     ORDER BY step.ordinal, step.attempt_no
+                     LIMIT 1
+              ) AS scope ON TRUE
+        """
+
+    def list_candidate_runs_by_upload_ids(
+        self,
+        upload_ids: list[str],
+        *,
+        tenant_id: str,
+        kb_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """按上传任务 ID 读取最近运行身份，调用方仍需执行文档级授权。"""
+        if not upload_ids or not tenant_id or not kb_ids:
+            return []
+        with self._conn() as conn:
+            rows = self._exec(
+                conn,
+                self._candidate_run_select() + """
+                 WHERE pr.task_id = ANY(%s)
+                   AND ir.tenant_id = %s
+                   AND ir.kb_id = ANY(%s)
+                 ORDER BY pr.task_id, pr.started_at DESC
+                """,
+                (upload_ids, tenant_id, kb_ids),
+            ).fetchall()
+        latest: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            item = dict(row)
+            latest.setdefault(str(item.get("task_id") or ""), item)
+        return list(latest.values())
+
+    def get_candidate_run_scope(
+        self,
+        doc_id: str,
+        run_id: str,
+        *,
+        tenant_id: str,
+        kb_ids: list[str],
+    ) -> dict[str, Any] | None:
+        """在读取未发布运行详情前，核对租户、知识库和处理运行关联。"""
+        if not doc_id or not run_id or not tenant_id or not kb_ids:
+            return None
+        with self._conn() as conn:
+            row = self._exec(
+                conn,
+                self._candidate_run_select() + """
+                 WHERE pr.doc_id = %s
+                   AND pr.run_id = %s
+                   AND ir.tenant_id = %s
+                   AND ir.kb_id = ANY(%s)
+                 LIMIT 1
+                """,
+                (doc_id, run_id, tenant_id, kb_ids),
+            ).fetchone()
+        return dict(row) if row else None
 
     def chunking_fallback_stats(
         self,

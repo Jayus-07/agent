@@ -19,6 +19,10 @@ CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:63
 # hard limit = soft + 30s 兜底杀进程
 CELERY_TASK_TIMEOUT = int(os.getenv("CELERY_TASK_TIMEOUT", "1800"))
 CELERY_HARD_TASK_TIMEOUT = CELERY_TASK_TIMEOUT + 30
+# 索引运行看门狗阈值：超过两倍 Celery 硬超时才收口，给队列和调度留余量。
+# 可按环境覆盖，避免固定写死在运行逻辑里。
+RAG_INDEX_RUN_STALE_SECONDS = int(os.getenv(
+    "RAG_INDEX_RUN_STALE_SECONDS", str(CELERY_HARD_TASK_TIMEOUT * 2)))
 
 # 失败自动重试次数（任务级，从最近 checkpoint 续跑）
 CELERY_MAX_RETRIES = int(os.getenv("CELERY_MAX_RETRIES", "3"))

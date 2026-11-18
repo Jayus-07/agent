@@ -68,6 +68,7 @@ const PROCESSING_STAGE_LABELS: LabelMap = {
   semantic_chunk: '语义切分',
   chunking_llm_fallback: '大模型切分边界兜底',
   embedding: '向量生成',
+  document_summary_embedding: '文档摘要向量',
   vector_write: '写入向量库',
   bm25_write: '写入关键词索引',
   publish: '发布索引',
@@ -366,6 +367,7 @@ export function getAdminErrorLabel(value?: string | null): string {
   if (normalized.includes('ocr') && normalized.includes('page')) return '文字识别页数超出限制或识别不完整'
   if (normalized.includes('timeout')) return '处理超时'
   if (normalized.includes('network') || normalized.includes('fetch')) return '网络连接失败，请检查服务状态后重试'
+  if (/^name ['"].+['"] is not defined$/i.test(value)) return '系统程序错误：缺少必要的内部状态变量，任务未完成'
   return '处理失败，系统已记录错误详情，请查看运行记录'
 }
 

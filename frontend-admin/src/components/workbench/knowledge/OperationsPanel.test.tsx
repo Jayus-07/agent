@@ -107,9 +107,47 @@ describe('OperationsPanel 活动上传', () => {
     expect(container.textContent).toContain('faq_only.docx')
     expect(container.textContent).toContain('upload-42')
     expect(container.textContent).toContain('celery-42')
-    expect(container.textContent).toContain('处理中 · metadata')
+    expect(container.textContent).toContain('处理中 · 元数据处理')
 
     await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(operationApi.getOperations).toHaveBeenCalledTimes(2)
+
+    act(() => root.unmount())
+  })
+
+  it('将超过处理时限的记录显示为待核对并降低轮询频率', async () => {
+    vi.useFakeTimers()
+    operationApi.getOperations.mockResolvedValue({
+      items: [],
+      total: 0,
+      active_uploads: [{
+        upload_id: 'upload-stale',
+        celery_task_id: 'celery-stale',
+        doc_name: 'stale.pdf',
+        doc_id: 'doc-stale',
+        kb_id: 'policy_general',
+        department: 'general',
+        status: 'indexing',
+        stage: 'embedding',
+        error: '',
+        created_at: '2026-10-19 01:00:00',
+        updated_at: '2026-10-19 01:00:00',
+        stale: true,
+        inactive_seconds: 7200,
+        stale_after_seconds: 3660,
+      }],
+    })
+
+    const { root, container } = mount()
+    await act(async () => { await Promise.resolve() })
+
+    expect(container.textContent).toContain('状态待核对 · 1 个长时间未更新任务')
+    expect(container.textContent).toContain('页面每 30 秒复核')
+    expect(container.textContent).toContain('stale.pdf')
+    expect(container.textContent).toContain('状态待核对 · 已 2 小时未更新（提醒阈值 1 小时）')
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(operationApi.getOperations).toHaveBeenCalledTimes(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(27000) })
     expect(operationApi.getOperations).toHaveBeenCalledTimes(2)
 
     act(() => root.unmount())

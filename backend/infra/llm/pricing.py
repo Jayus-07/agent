@@ -473,6 +473,7 @@ USAGE_SOURCE_UNAVAILABLE = "unavailable"
 PRICING_SOURCE_APPROVED_TABLE = "approved_price_table"
 PRICING_SOURCE_REGISTRY_FALLBACK = "registry_fallback"
 PRICING_SOURCE_UNPRICED = "unpriced"
+PRICING_SOURCE_SUBSCRIPTION_PLAN = "subscription_plan"
 
 
 # =====================================================
@@ -628,18 +629,31 @@ def price_usage(
     from backend.shared.logger import logger
     from backend.infra.llm.models import get_model_billing, lookup_model_entry
 
-    if lookup_model_entry(model_name) is not None and get_model_billing(model_name) == "local":
-        # 只说明没有云端按量费用，硬件/电费不在这份调用账单内。
+    model_entry = lookup_model_entry(model_name)
+    billing_mode = get_model_billing(model_name) if model_entry is not None else "metered"
+    if model_entry is not None and billing_mode in {"local", "subscription"}:
+        # 两类非按量模式都不能套用 Token 单价；只有本地模式可以明确说
+        # 没有云端 Token 账单，订阅套餐需另取套餐点数/账单才能折成人民币。
+        is_subscription = billing_mode == "subscription"
         return BillingResult(
             model_name=model_name, component=component,
             input_tokens=usage.input_tokens,
             billable_input_tokens=usage.billable_input_tokens,
             cached_input_tokens=usage.cached_input_tokens,
             output_tokens=usage.output_tokens,
-            native_currency="CNY", pricing_source="local_inference",
+            native_currency="CNY",
+            pricing_source=(
+                PRICING_SOURCE_SUBSCRIPTION_PLAN
+                if is_subscription else "local_inference"
+            ),
             usage_source=usage_source,
-            cost_status=(COST_STATUS_ESTIMATED
-                         if usage_source == USAGE_SOURCE_ESTIMATED else COST_STATUS_EXACT),
+            cost_status=(
+                COST_STATUS_UNPRICED
+                if is_subscription
+                else COST_STATUS_ESTIMATED
+                if usage_source == USAGE_SOURCE_ESTIMATED
+                else COST_STATUS_EXACT
+            ),
         )
 
     rows: dict[str, PriceLine] | None
@@ -853,6 +867,7 @@ __all__ = [
     "PRICE_DIMENSIONS",
     "PRICING_SOURCE_APPROVED_TABLE",
     "PRICING_SOURCE_REGISTRY_FALLBACK",
+    "PRICING_SOURCE_SUBSCRIPTION_PLAN",
     "PRICING_SOURCE_UNPRICED",
     "PriceConflict",
     "PriceLine",

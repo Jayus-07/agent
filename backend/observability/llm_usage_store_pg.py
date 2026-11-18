@@ -83,6 +83,192 @@ def cost_cny_sql_expr() -> str:
     )
 
 
+def token_dashboard_verified_cost_predicate(alias: str = "u") -> str:
+    """只接受 Billing V2 明确记录、来源受信任的精确价或估算价。"""
+    return (
+        f"COALESCE({alias}.billing_schema_version, 0) >= 2 "
+        f"AND COALESCE({alias}.cost_status, '') IN ('exact', 'estimated') "
+        f"AND COALESCE({alias}.pricing_source, '') IN "
+        "('approved_price_table', 'approved_table', 'local_inference')"
+    )
+
+
+def token_dashboard_local_billing_predicate(alias: str = "u") -> str:
+    """按调用发生时的供应商配置历史识别本地推理，不把陈旧单价当云账单。"""
+    event_time = f"({alias}.ts)::timestamptz"
+    return f"""(
+        {alias}.component IN ('embedding', 'rerank')
+        AND EXISTS (
+            SELECT 1
+            FROM llm_config_history AS local_config
+            WHERE local_config.object_type = 'provider'
+              AND local_config.object_key = {alias}.provider
+              AND local_config.changed_at <= {event_time}
+              AND (NULLIF(local_config.new_value, '')::jsonb ->> 'billing') = 'local'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM llm_config_history AS later_config
+                  WHERE later_config.object_type = 'provider'
+                    AND later_config.object_key = {alias}.provider
+                    AND later_config.changed_at > local_config.changed_at
+                    AND later_config.changed_at <= {event_time}
+                    AND (NULLIF(later_config.new_value, '')::jsonb ->> 'billing')
+                        IS DISTINCT FROM 'local'
+              )
+        )
+    )"""
+
+
+def token_dashboard_subscription_billing_predicate(alias: str = "u") -> str:
+    """识别套餐计费调用；按调用时供应商配置与已记录的套餐来源判定。"""
+    event_time = f"({alias}.ts)::timestamptz"
+    plan_config = """(
+        (NULLIF({config}.new_value, '')::jsonb ->> 'billing') = 'subscription'
+        OR COALESCE(
+            NULLIF({config}.new_value, '')::jsonb ->> 'baseUrl',
+            NULLIF({config}.new_value, '')::jsonb ->> 'base_url',
+            ''
+        ) ILIKE '%%/api/plan%%'
+    )"""
+    current_plan = plan_config.format(config="plan_config")
+    later_plan = plan_config.format(config="later_config")
+    return f"""(
+        (
+            COALESCE({alias}.pricing_source, '') = 'subscription_plan'
+            OR EXISTS (
+                SELECT 1
+                FROM llm_config_history AS plan_config
+                WHERE plan_config.object_type = 'provider'
+                  AND plan_config.object_key = {alias}.provider
+                  AND plan_config.changed_at <= {event_time}
+                  AND {current_plan}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM llm_config_history AS later_config
+                      WHERE later_config.object_type = 'provider'
+                        AND later_config.object_key = {alias}.provider
+                        AND later_config.changed_at > plan_config.changed_at
+                        AND later_config.changed_at <= {event_time}
+                        AND NOT {later_plan}
+                  )
+            )
+        )
+        AND COALESCE({alias}.total_tokens, 0) > 0
+    )"""
+
+
+def _official_observed_price_sql(alias: str, dimension: str) -> str:
+    return f"""(
+        SELECT observed.price_per_unit
+        FROM model_price_source_observations AS observed
+        WHERE observed.source_id = 'volcengine_ark_doubao_seed_2_0_mini'
+          AND observed.model_name = {alias}.model
+          AND observed.component = 'llm'
+          AND observed.dimension = '{dimension}'
+          AND observed.currency = 'CNY'
+          AND observed.unit = 'per_1m_tokens'
+          AND observed.observed_on = ({alias}.ts::timestamptz AT TIME ZONE 'UTC')::date
+          AND observed.observed_at <= {alias}.ts::timestamptz
+        ORDER BY observed.observed_at DESC
+        LIMIT 1
+    )"""
+
+
+def _official_ocr_price_sql(alias: str, dimension: str) -> str:
+    return f"""(
+        SELECT price.price_per_unit
+        FROM model_price AS price
+        WHERE price.model_name = {alias}.model
+          AND price.component = 'llm'
+          AND price.dimension = '{dimension}'
+          AND price.currency = 'CNY'
+          AND price.unit = 'per_1m_tokens'
+          AND price.source = 'provider-page'
+          AND price.approval_status = 'approved'
+          AND price.effective_from <= {alias}.ts::timestamptz
+          AND (price.effective_to IS NULL OR price.effective_to > {alias}.ts::timestamptz)
+        ORDER BY price.effective_from DESC, price.id DESC
+        LIMIT 1
+    )"""
+
+
+def token_dashboard_historical_estimate_sql_expr(alias: str = "u") -> str:
+    """用可追溯的供应商公开价估算历史记录；缺来源、缺用量时返回 NULL。"""
+    doubao_input = _official_observed_price_sql(alias, "input")
+    doubao_output = _official_observed_price_sql(alias, "output")
+    doubao_cache = _official_observed_price_sql(alias, "cache_read")
+    ocr_input = _official_ocr_price_sql(alias, "input")
+    ocr_output = _official_ocr_price_sql(alias, "output")
+    billable_input = (
+        f"CASE WHEN COALESCE({alias}.billing_schema_version, 0) >= 2 "
+        f"THEN COALESCE({alias}.billable_input_tokens, "
+        f"GREATEST({alias}.prompt_tokens - {alias}.cached_tokens, 0)) "
+        f"ELSE GREATEST({alias}.prompt_tokens - {alias}.cached_tokens, 0) END"
+    )
+    return f"""CASE
+        WHEN {token_dashboard_subscription_billing_predicate(alias)} THEN NULL
+        WHEN {alias}.provider = 'custom-doubao-seed-2-0-mini'
+         AND {alias}.model = 'doubao-seed-2.0-mini'
+         AND {alias}.component = 'llm'
+         AND {alias}.prompt_tokens > 0
+         AND {alias}.prompt_tokens <= 32000
+         AND COALESCE({alias}.pricing_source, '') = 'registry_fallback'
+         AND {doubao_input} IS NOT NULL
+         AND {doubao_output} IS NOT NULL
+         AND ({alias}.cached_tokens = 0 OR {doubao_cache} IS NOT NULL)
+        THEN (
+            ({billable_input} * {doubao_input}
+             + {alias}.cached_tokens * COALESCE({doubao_cache}, 0)
+             + {alias}.completion_tokens * {doubao_output}) / 1000000.0
+        )
+        WHEN {alias}.provider = 'custom-api'
+         AND {alias}.model = 'qwen-vl-ocr'
+         AND {alias}.component = 'ocr'
+         AND {alias}.prompt_tokens > 0
+         AND COALESCE({alias}.billing_schema_version, 0) < 2
+         AND COALESCE(BTRIM({alias}.cost_status), '') = ''
+         AND {ocr_input} IS NOT NULL
+         AND {ocr_output} IS NOT NULL
+        THEN (
+            ({billable_input} * {ocr_input}
+             + {alias}.completion_tokens * {ocr_output}) / 1000000.0
+        )
+        ELSE NULL
+    END"""
+
+
+def token_dashboard_classified_call_predicate(alias: str = "u") -> str:
+    """已归入按量、估算、本地或套餐的调用；不代表都有人民币金额。"""
+    verified = token_dashboard_verified_cost_predicate(alias)
+    historical = token_dashboard_historical_estimate_sql_expr(alias)
+    local = token_dashboard_local_billing_predicate(alias)
+    subscription = token_dashboard_subscription_billing_predicate(alias)
+    return (
+        f"(({verified}) OR ({historical}) IS NOT NULL OR ({local}) "
+        f"OR ({subscription}))"
+    )
+
+
+def token_dashboard_cost_sql_expr(alias: str = "u") -> str:
+    """精确费用 + 可信运行估算 + 有来源的历史重算；未知不伪装成 ¥0。"""
+    subscription = token_dashboard_subscription_billing_predicate(alias)
+    verified = token_dashboard_verified_cost_predicate(alias)
+    historical = token_dashboard_historical_estimate_sql_expr(alias)
+    local = token_dashboard_local_billing_predicate(alias)
+    local_zero = f"(({local}) AND {alias}.pricing_source = 'local_inference')"
+    return (
+        f"CASE WHEN ({subscription}) THEN NULL "
+        f"WHEN ({verified}) THEN ({cost_cny_sql_expr()}) "
+        f"WHEN ({historical}) IS NOT NULL THEN ({historical}) "
+        f"WHEN ({local_zero}) THEN 0 ELSE 0 END"
+    )
+
+
+def token_dashboard_unknown_call_predicate(alias: str = "u") -> str:
+    """未能归入可信分类的调用；套餐金额未同步单独计数。"""
+    return f"NOT ({token_dashboard_classified_call_predicate(alias)})"
+
+
 class PostgresLLMUsageStore(LLMUsageStore):
     """llm_usage 明细存储的 PostgreSQL 实现（LLMUsageStore 子类）。"""
 
@@ -488,12 +674,43 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 ).fetchone()[0]
                 rows = self._exec(
                     conn,
-                    f"""SELECT {_COLS}
-                       FROM {self._table} WHERE {where_sql}
+                    f"""SELECT {_COLS},
+                              CASE
+                                   WHEN {token_dashboard_subscription_billing_predicate('u')}
+                                   THEN NULL
+                                   WHEN {token_dashboard_classified_call_predicate('u')}
+                                   THEN {token_dashboard_cost_sql_expr('u')}
+                                   ELSE NULL END AS cost_cny,
+                              CASE
+                                WHEN {token_dashboard_subscription_billing_predicate('u')}
+                                     THEN 'subscription'
+                                WHEN {token_dashboard_local_billing_predicate('u')} THEN 'local'
+                                WHEN {token_dashboard_verified_cost_predicate('u')}
+                                     AND u.cost_status = 'exact' THEN 'exact'
+                                WHEN {token_dashboard_verified_cost_predicate('u')}
+                                     AND u.cost_status = 'estimated' THEN 'estimated'
+                                WHEN ({token_dashboard_historical_estimate_sql_expr('u')}) IS NOT NULL
+                                     THEN 'estimated'
+                                WHEN COALESCE(BTRIM(u.cost_status), '') = '' THEN 'missing'
+                                ELSE u.cost_status
+                              END AS cost_display_status,
+                              CASE
+                                WHEN {token_dashboard_subscription_billing_predicate('u')}
+                                     THEN 'subscription_plan'
+                                WHEN {token_dashboard_local_billing_predicate('u')} THEN 'local_billing_history'
+                                WHEN ({token_dashboard_historical_estimate_sql_expr('u')}) IS NOT NULL
+                                     THEN 'official_historical_price'
+                                ELSE u.pricing_source
+                              END AS cost_display_source
+                       FROM {self._table} AS u WHERE {where_sql}
                        ORDER BY id DESC LIMIT %s OFFSET %s""",
                     (*params, int(limit), int(offset)),
                 ).fetchall()
-            return {"calls": [dict(r) for r in rows], "total": total}
+            calls = [dict(r) for r in rows]
+            for call in calls:
+                if call.get("cost_cny") is not None:
+                    call["cost_cny"] = float(call["cost_cny"])
+            return {"calls": calls, "total": total}
         except Exception as e:
             logger.warning(f"[LLMUsageStore-PG] list_calls 失败: {e}")
             return {"calls": [], "total": 0}
@@ -541,14 +758,50 @@ class PostgresLLMUsageStore(LLMUsageStore):
         bucket_expr = "substr(ts, 1, 7)" if period == "month" else "substr(ts, 1, 10)"
         # Billing V2 感知折算（唯一口径见 cost_cny_sql_expr）：V2 行取
         # billed_cost_cny 不再二次换汇；legacy 行按旧 currency 逻辑兜底。
+        alias = "u"
+        verified_cost = token_dashboard_verified_cost_predicate(alias)
+        history_estimate = token_dashboard_historical_estimate_sql_expr(alias)
+        local_billing = token_dashboard_local_billing_predicate(alias)
+        subscription_billing = token_dashboard_subscription_billing_predicate(alias)
+        unknown_call = token_dashboard_unknown_call_predicate(alias)
+        exact_call = (
+            f"({verified_cost}) AND u.cost_status = 'exact' "
+            f"AND NOT ({local_billing}) AND NOT ({subscription_billing})"
+        )
+        estimated_call = (
+            f"(({verified_cost}) AND u.cost_status = 'estimated' "
+            f"AND NOT ({local_billing}) AND NOT ({subscription_billing})) "
+            f"OR ({history_estimate}) IS NOT NULL"
+        )
         cost_cny_expr = (
-            f"COALESCE(SUM({cost_cny_sql_expr()}), 0) AS cost_cny"
+            f"COALESCE(SUM({token_dashboard_cost_sql_expr(alias)}), 0) AS cost_cny"
+        )
+        exact_cost_expr = (
+            f"COALESCE(SUM(CASE WHEN ({verified_cost}) AND u.cost_status = 'exact' "
+            f"AND NOT ({local_billing}) AND NOT ({subscription_billing}) "
+            f"THEN ({cost_cny_sql_expr()}) ELSE 0 END), 0) AS exact_cost_cny"
+        )
+        estimated_cost_expr = (
+            f"COALESCE(SUM(CASE WHEN ({verified_cost}) AND u.cost_status = 'estimated' "
+            f"AND NOT ({local_billing}) AND NOT ({subscription_billing}) "
+            f"THEN ({cost_cny_sql_expr()}) ELSE 0 END), 0) "
+            f"+ COALESCE(SUM(COALESCE(({history_estimate}), 0)), 0) "
+            f"AS estimated_cost_cny"
         )
         empty = {
             "totals": {
+                "cost_classification_version": 2,
                 "requests": 0, "calls": 0,
                 "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
                 "cached_tokens": 0, "reasoning_tokens": 0,
+                "exact_calls": 0,
+                "unpriced_calls": 0, "missing_cost_status_calls": 0,
+                "price_unknown_calls": 0, "unverified_price_calls": 0,
+                "unknown_cost_calls": 0, "estimated_calls": 0,
+                "historically_estimated_calls": 0, "registry_fallback_calls": 0,
+                "local_cost_calls": 0, "local_usage_missing_calls": 0,
+                "subscription_cost_calls": 0,
+                "exact_cost_cny": 0.0, "estimated_cost_cny": 0.0,
                 "cost_usd": 0.0, "cost_cny": 0.0,
             },
             "daily": [],
@@ -557,10 +810,10 @@ class PostgresLLMUsageStore(LLMUsageStore):
         }
         try:
             cutoff = self._cutoff_iso(days)
-            where_base = ["ts >= %s"]
+            where_base = ["u.ts >= %s"]
             params_base = [cutoff]
             if component and component != "all":
-                where_base.append("component = %s")
+                where_base.append("u.component = %s")
                 params_base.append(component)
             where_sql = " AND ".join(where_base)
 
@@ -579,9 +832,33 @@ class PostgresLLMUsageStore(LLMUsageStore):
                            COALESCE(SUM(total_tokens), 0)      AS total_tokens,
                            COALESCE(SUM(cached_tokens), 0)     AS cached_tokens,
                            COALESCE(SUM(reasoning_tokens), 0)  AS reasoning_tokens,
+                           COUNT(*) FILTER (WHERE {exact_call}) AS exact_calls,
+                           COUNT(*) FILTER (WHERE u.cost_status = 'unpriced')
+                               AS unpriced_calls,
+                           COUNT(*) FILTER (WHERE COALESCE(BTRIM(u.cost_status), '') = '')
+                               AS missing_cost_status_calls,
+                           COUNT(*) FILTER (WHERE u.cost_status = 'price_unknown')
+                                AS price_unknown_calls,
+                           COUNT(*) FILTER (WHERE u.pricing_source = 'registry_fallback')
+                                AS unverified_price_calls,
+                           COUNT(*) FILTER (WHERE u.pricing_source = 'registry_fallback')
+                                AS registry_fallback_calls,
+                           COUNT(*) FILTER (WHERE {unknown_call})
+                                AS unknown_cost_calls,
+                           COUNT(*) FILTER (WHERE {estimated_call}) AS estimated_calls,
+                           COUNT(*) FILTER (WHERE ({history_estimate}) IS NOT NULL)
+                                AS historically_estimated_calls,
+                           COUNT(*) FILTER (WHERE {local_billing}) AS local_cost_calls,
+                           COUNT(*) FILTER (WHERE {local_billing}
+                               AND COALESCE(u.total_tokens, 0) = 0)
+                                AS local_usage_missing_calls,
+                           COUNT(*) FILTER (WHERE {subscription_billing})
+                                AS subscription_cost_calls,
                            COALESCE(SUM(cost_usd), 0)          AS cost_usd,
+                           {exact_cost_expr},
+                           {estimated_cost_expr},
                            {cost_cny_expr}
-                    FROM {self._table} WHERE {where_sql}
+                    FROM {self._table} AS u WHERE {where_sql}
                 """, tuple(params_base)).fetchone())
 
                 # ② 趋势（日/月 × 输入/输出/成本；period=month 时 monthly 有值）
@@ -592,8 +869,15 @@ class PostgresLLMUsageStore(LLMUsageStore):
                            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
                            COALESCE(SUM(total_tokens), 0)      AS total_tokens,
                            COALESCE(SUM(cost_usd), 0)          AS cost_usd,
-                           {cost_cny_expr}
-                    FROM {self._table} WHERE {where_sql}
+                           {cost_cny_expr},
+                            COUNT(*) FILTER (WHERE {unknown_call}) AS unknown_cost_calls,
+                            COUNT(*) FILTER (WHERE {exact_call}) AS exact_calls,
+                            COUNT(*) FILTER (WHERE {estimated_call}) AS estimated_calls,
+                            COUNT(*) FILTER (WHERE ({history_estimate}) IS NOT NULL) AS historically_estimated_calls,
+                            COUNT(*) FILTER (WHERE {local_billing}) AS local_cost_calls,
+                            COUNT(*) FILTER (WHERE {subscription_billing}) AS subscription_cost_calls,
+                            {estimated_cost_expr}
+                    FROM {self._table} AS u WHERE {where_sql}
                     GROUP BY {bucket_expr}
                     ORDER BY {bucket_key} ASC
                 """
@@ -614,9 +898,33 @@ class PostgresLLMUsageStore(LLMUsageStore):
                            COALESCE(SUM(total_tokens), 0)      AS total_tokens,
                            COALESCE(SUM(cached_tokens), 0)     AS cached_tokens,
                            COALESCE(SUM(reasoning_tokens), 0)  AS reasoning_tokens,
+                           COUNT(*) FILTER (WHERE {exact_call}) AS exact_calls,
+                           COUNT(*) FILTER (WHERE u.cost_status = 'unpriced')
+                               AS unpriced_calls,
+                           COUNT(*) FILTER (WHERE COALESCE(BTRIM(u.cost_status), '') = '')
+                               AS missing_cost_status_calls,
+                           COUNT(*) FILTER (WHERE u.cost_status = 'price_unknown')
+                                AS price_unknown_calls,
+                           COUNT(*) FILTER (WHERE u.pricing_source = 'registry_fallback')
+                                AS unverified_price_calls,
+                           COUNT(*) FILTER (WHERE u.pricing_source = 'registry_fallback')
+                                AS registry_fallback_calls,
+                           COUNT(*) FILTER (WHERE {unknown_call})
+                                AS unknown_cost_calls,
+                           COUNT(*) FILTER (WHERE {estimated_call}) AS estimated_calls,
+                           COUNT(*) FILTER (WHERE ({history_estimate}) IS NOT NULL)
+                                AS historically_estimated_calls,
+                           COUNT(*) FILTER (WHERE {local_billing}) AS local_cost_calls,
+                           COUNT(*) FILTER (WHERE {local_billing}
+                               AND COALESCE(u.total_tokens, 0) = 0)
+                                AS local_usage_missing_calls,
+                           COUNT(*) FILTER (WHERE {subscription_billing})
+                                AS subscription_cost_calls,
                            COALESCE(SUM(cost_usd), 0)          AS cost_usd,
+                           {exact_cost_expr},
+                           {estimated_cost_expr},
                            {cost_cny_expr}
-                    FROM {self._table} WHERE {where_sql}
+                    FROM {self._table} AS u WHERE {where_sql}
                     GROUP BY provider, model
                     ORDER BY total_tokens DESC
                 """, tuple(params_base)).fetchall()]
@@ -624,26 +932,33 @@ class PostgresLLMUsageStore(LLMUsageStore):
                 # M11（台账 D11）：成本按币种分组（currency 混算口径修正——
                 # CNY 价格行与 USD 行此前混进同一个 cost_usd 总数）
                 by_currency = [dict(r) for r in self._exec(conn, f"""
-                    SELECT COALESCE(NULLIF(currency, ''), 'USD') AS currency,
+                    SELECT COALESCE(NULLIF(u.currency, ''), 'USD') AS currency,
                            COUNT(*) AS calls,
-                           COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                           COALESCE(SUM(total_cost), 0)   AS cost
-                    FROM {self._table} WHERE {where_sql}
-                    GROUP BY COALESCE(NULLIF(currency, ''), 'USD')
+                           COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+                           COALESCE(SUM(u.total_cost), 0)   AS cost
+                    FROM {self._table} AS u WHERE {where_sql}
+                    GROUP BY COALESCE(NULLIF(u.currency, ''), 'USD')
                     ORDER BY cost DESC
                 """, tuple(params_base)).fetchall()]
 
+            totals["cost_classification_version"] = 2
             totals["cost_usd"] = round(totals.get("cost_usd", 0) or 0, 6)
-            totals["cost_cny"] = round(float(totals.get("cost_cny") or 0), 6)
+            totals["cost_cny"] = round(float(totals.get("cost_cny") or 0), 8)
+            totals["exact_cost_cny"] = round(float(totals.get("exact_cost_cny") or 0), 8)
+            totals["estimated_cost_cny"] = round(float(totals.get("estimated_cost_cny") or 0), 8)
             for d in daily:
                 d["cost_usd"] = round(d.get("cost_usd", 0) or 0, 6)
-                d["cost_cny"] = round(float(d.get("cost_cny") or 0), 6)
+                d["cost_cny"] = round(float(d.get("cost_cny") or 0), 8)
+                d["estimated_cost_cny"] = round(float(d.get("estimated_cost_cny") or 0), 8)
             for m in monthly:
                 m["cost_usd"] = round(m.get("cost_usd", 0) or 0, 6)
-                m["cost_cny"] = round(float(m.get("cost_cny") or 0), 6)
+                m["cost_cny"] = round(float(m.get("cost_cny") or 0), 8)
+                m["estimated_cost_cny"] = round(float(m.get("estimated_cost_cny") or 0), 8)
             for m in models:
                 m["cost_usd"] = round(m.get("cost_usd", 0) or 0, 6)
-                m["cost_cny"] = round(float(m.get("cost_cny") or 0), 6)
+                m["cost_cny"] = round(float(m.get("cost_cny") or 0), 8)
+                m["exact_cost_cny"] = round(float(m.get("exact_cost_cny") or 0), 8)
+                m["estimated_cost_cny"] = round(float(m.get("estimated_cost_cny") or 0), 8)
             result = {"totals": totals, "daily": daily, "monthly": monthly,
                       "models": models,
                       "period": period}

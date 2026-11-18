@@ -381,10 +381,23 @@ def _reindex_redis_emit_fn(doc_id: str):
     return emit
 
 
+def _get_reindex_actor_id(db_task_id: str | None) -> str:
+    """从持久化任务记录读取发起人，供成功和失败审计共用。"""
+    if not db_task_id:
+        return ""
+    try:
+        from backend.services.task_service import get_task
+
+        record = get_task(db_task_id)
+        return str(getattr(record, "user_id", "") or "") if record else ""
+    except Exception:  # noqa: BLE001 — 身份读取失败不应阻断任务收口
+        return ""
+
+
 def _reindex_failure_exit(exc: BaseException, *, emit_fn, doc_id: str,
                           source: str, batch_id: str | None,
                           db_task_id: str | None, retries: int,
-                          elapsed_ms: int) -> None:
+                          elapsed_ms: int, user_id: str = "") -> None:
     """重索引统一失败出口（对齐 _index_failure_exit 口径）。
 
     - retryable 且 budget 未耗尽：只发进行中进度（不发终态），抛
@@ -411,7 +424,7 @@ def _reindex_failure_exit(exc: BaseException, *, emit_fn, doc_id: str,
 
     reindex_service.log_reindex_failed(
         doc_id, source, batch_id=batch_id, error=str(exc),
-        duration_ms=elapsed_ms)
+        duration_ms=elapsed_ms, user_id=user_id)
     emit_fn("error", f"重索引失败: {exc}"[:300], doc_id=doc_id,
             error_type=decision.error_type)
     if db_task_id:
@@ -452,6 +465,7 @@ def reindex_document_task_impl(doc_id: str, *, batch_id: str | None = None,
 
     emit_fn = _reindex_redis_emit_fn(doc_id)
     t0 = _time.monotonic()
+    actor_id = _get_reindex_actor_id(db_task_id)
     if retries:
         emit_fn("reindexing",
                 f"重索引重试（第 {retries}/{CELERY_MAX_RETRIES} 次）...")
@@ -459,18 +473,10 @@ def reindex_document_task_impl(doc_id: str, *, batch_id: str | None = None,
     def run_node() -> dict:
         # S10（2026-10-06）：reindex 审计 actor 透传——tasks 行快照的 user_id
         # （create_reindex_task_record 写入）随执行体进操作日志，杜绝 anonymous
-        actor = ""
-        if db_task_id:
-            try:
-                from backend.services.task_service import get_task
-                rec = get_task(db_task_id)
-                actor = (getattr(rec, "user_id", "") or "") if rec else ""
-            except Exception:  # noqa: BLE001 — 身份补查失败不阻断重索引
-                pass
         try:
             result = reindex_service.run_reindex(
                 doc_id, batch_id=batch_id, source=source or "worker",
-                emit=emit_fn, user_id=actor)
+                emit=emit_fn, user_id=actor_id)
         except ReindexInProgressError as busy:
             # advisory 争用是瞬时互斥信号而非故障：规整为 ValueError 使
             # runtime 层与失败出口按同一 validation_error 口径落库
@@ -493,7 +499,8 @@ def reindex_document_task_impl(doc_id: str, *, batch_id: str | None = None,
         _reindex_failure_exit(
             e, emit_fn=emit_fn, doc_id=doc_id, source=source,
             batch_id=batch_id, db_task_id=db_task_id, retries=retries,
-            elapsed_ms=int((_time.monotonic() - t0) * 1000))
+            elapsed_ms=int((_time.monotonic() - t0) * 1000),
+            user_id=actor_id)
         raise  # 仅终态路径可达：re-raise 原始异常
 
     return {"status": "done", "doc_id": doc_id,

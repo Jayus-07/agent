@@ -103,9 +103,27 @@ RAG_UPLOAD_LOCK_STALE_SECONDS = float(
 RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS = float(
     os.getenv("RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS", "60")
 )
+# 活动索引运行若超过该时长没有状态更新，管理端显示“状态待核对”，
+# 不再把它当作仍在推进的任务。默认复用现有锁失效窗口，部署环境可单独覆盖。
+RAG_INDEX_RUN_STALE_SECONDS = float(
+    os.getenv("RAG_INDEX_RUN_STALE_SECONDS", str(RAG_UPLOAD_LOCK_STALE_SECONDS))
+)
 RAG_UPLOAD_PROGRESS_GC_INTERVAL_SECONDS = float(
     os.getenv("RAG_UPLOAD_PROGRESS_GC_INTERVAL_SECONDS", "300")
 )
+
+# Trace 上的知识索引时限是内部处理 SLO，不代表对外合同承诺，也不含排队时间。
+# 本机近 30 天 84 次成功上传的 P95 为 38.4 秒、15 次成功重索引的 P95 为 31.8 秒；
+# 60 秒为两者留有余量的统一初始值。本机和生产共用代码默认值，需调整时用环境变量覆盖。
+_RAG_INDEX_SLO_OVERRIDE = os.getenv("RAG_INDEX_SLO_THRESHOLD_MS", "").strip()
+RAG_INDEX_SLO_THRESHOLD_MS = int(_RAG_INDEX_SLO_OVERRIDE or "60000")
+RAG_INDEX_SLO_THRESHOLD_SOURCE = (
+    "部署环境配置" if _RAG_INDEX_SLO_OVERRIDE else "平台默认配置"
+)
+if RAG_INDEX_SLO_THRESHOLD_MS <= 0:
+    raise ValueError("RAG_INDEX_SLO_THRESHOLD_MS 必须大于 0 毫秒")
+if RAG_INDEX_RUN_STALE_SECONDS <= 0:
+    raise ValueError("RAG_INDEX_RUN_STALE_SECONDS 必须大于 0 秒")
 
 
 def _validate_rag_upload_ingress_limit(

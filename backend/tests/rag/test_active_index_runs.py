@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from types import SimpleNamespace
 
@@ -78,6 +79,60 @@ def test_active_upload_projection_checks_manage_scope_and_hides_file_path():
     assert item["celery_task_id"] == "celery-1"
     assert "file_path" not in item
     assert _active_upload_public_item({**run, "kb_id": "kb-2"}, authz) is None
+
+
+def test_active_upload_projection_marks_old_and_unverifiable_runs_as_stale(monkeypatch):
+    monkeypatch.setattr("backend.config.tasks.RAG_INDEX_RUN_STALE_SECONDS", 60)
+    authz = SimpleNamespace(can_manage_row=lambda _row: (True, ""))
+    updated_at = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()
+    run = {
+        "upload_id": "upload-old",
+        "file_path": "/srv/docs/old.pdf",
+        "kb_id": "kb-1",
+        "updated_at": updated_at,
+    }
+
+    item = _active_upload_public_item(run, authz)
+    missing_timestamp = _active_upload_public_item(
+        {**run, "updated_at": ""}, authz)
+
+    assert item["stale"] is True
+    assert item["inactive_seconds"] >= 120
+    assert item["stale_after_seconds"] == 60
+    assert missing_timestamp["stale"] is True
+    assert missing_timestamp["inactive_seconds"] is None
+
+
+def test_reconcile_stale_active_index_runs_is_bounded_and_cas(monkeypatch):
+    cursor = _Cursor([("upload-old",)])
+    connection = _Connection(cursor)
+    store = object.__new__(IndexRunStore)
+    store._table = "test_rag_index_runs"
+    store._lock = Lock()
+
+    @contextmanager
+    def fake_conn():
+        yield connection
+
+    monkeypatch.setattr(store, "_conn", fake_conn)
+
+    expired = store.reconcile_stale_active_runs(
+        stale_after_seconds=3660,
+        unpublished_after_seconds=86400,
+        limit=999,
+    )
+
+    assert expired == ["upload-old"]
+    assert "FOR UPDATE SKIP LOCKED" in cursor.query
+    assert "status IN ('indexing', 'publishing')" in cursor.query
+    assert "status = 'claimed'" in cursor.query
+    assert "COALESCE(celery_task_id, '') = ''" in cursor.query
+    assert "SET status = 'failed'" in cursor.query
+    assert "stage = 'stale_reconciled'" in cursor.query
+    assert cursor.params == (
+        "3660", "86400", 500,
+        "索引运行超过配置的处理时限，维护任务已收口；请检查文档后重新提交。",
+    )
 
 
 def test_list_operations_scopes_admin_active_runs_to_own_tenant(monkeypatch):

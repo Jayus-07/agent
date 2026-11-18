@@ -310,6 +310,38 @@ def test_price_conflict_rejects_call(monkeypatch):
     assert "price_conflict" in exc_info.value.reason
 
 
+def test_subscription_plan_skips_token_price_preflight_and_cost_reservation(monkeypatch):
+    from backend.config import budget as config_budget
+    from backend.infra.llm import models, pricing
+    from backend.infra.llm.budget import RequestBudget
+
+    monkeypatch.setattr(models, "lookup_model_entry", lambda name: {"name": name})
+    monkeypatch.setattr(models, "get_model_billing", lambda name: "subscription")
+    monkeypatch.setattr(config_budget, "BUDGET_DOMAIN_UNATTRIBUTED_BLOCK", False)
+    monkeypatch.setattr(
+        pricing,
+        "get_current_price_table",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("订阅制调用不应执行 Token 价格预检")
+        ),
+    )
+
+    class _QuotaStore:
+        def reserve(self, **kwargs):
+            raise AssertionError("订阅套餐不应预占按 Token 估算的人民币费用")
+
+    budget = RequestBudget(
+        _limits(),
+        mode="enforce",
+        user_id="user-a",
+        tenant_id="tenant-a",
+        quota_store=_QuotaStore(),
+    )
+    budget.reserve("primary", model_name="plan-model")
+
+    assert budget.snapshot().calls == 1
+
+
 def test_priced_model_call_count_is_metered_not_capped(monkeypatch):
     """2026-10-26 语义：max_calls 只记账不拒绝（多 Agent/工具过程不被固定
     次数截断）；"放行 ≠ 无限"由 token/费用门禁承接，二者都必须成立。"""

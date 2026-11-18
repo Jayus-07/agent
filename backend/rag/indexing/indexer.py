@@ -373,6 +373,64 @@ def _embedding_model_identity(embedding: Any) -> ModelIdentity:
     )
 
 
+def _add_doc_level_vector_with_lineage(
+    doc_db: Any,
+    text: str,
+    metadata: dict,
+    *,
+    lineage_recorder: Any = None,
+    embedding: Any = None,
+) -> list[str]:
+    """写入文档级向量，并把真实嵌入调用绑定到当前处理运行。"""
+    if not text:
+        return []
+
+    lineage = None
+    if lineage_recorder is not None:
+        lineage = lineage_recorder.begin_stage(
+            "document_summary_embedding",
+            role="embedding",
+            engine_type="embedding",
+            model=_embedding_model_identity(embedding),
+            metadata={
+                "index_scope": "document_summary",
+                "text_chars": len(text),
+            },
+        )
+
+    step_id, started_at = lineage if lineage else (None, 0.0)
+    try:
+        with (
+            lineage_recorder.bind_stage(step_id)
+            if lineage_recorder is not None and step_id
+            else nullcontext()
+        ):
+            ids = doc_db.add_texts(texts=[text], metadatas=[metadata])
+    except Exception as exc:
+        if lineage_recorder is not None and step_id:
+            lineage_recorder.finish_stage(
+                step_id,
+                status="failed",
+                started_at=started_at,
+                input_count=1,
+                error_message=(
+                    f"{type(exc).__name__}: document_summary_embedding_failed"
+                ),
+            )
+        raise
+
+    if lineage_recorder is not None and step_id:
+        lineage_recorder.finish_stage(
+            step_id,
+            status="success" if ids else "skipped",
+            started_at=started_at,
+            input_count=1,
+            output_count=len(ids),
+            skip_reason=None if ids else "no_document_summary_vector",
+        )
+    return ids
+
+
 def apply_index_chunk_identity(chunks: list, doc_id: str) -> None:
     """索引期 chunk 身份协议：覆盖 chunk_id 并同步 parent_chunk_id（P0-03）。
 
@@ -1420,8 +1478,6 @@ class IncrementalIndexer:
             source_priority = int(doc_row.get("source_priority") or 0)
         except (TypeError, ValueError):
             source_priority = 0
-        quality_status = str(doc_row.get("quality_status") or "unknown")
-
         # ── ① load（文件读取/元数据收集）──
         load_span = trace_collector.start_span(
             "index_load",
@@ -1869,7 +1925,7 @@ class IncrementalIndexer:
             "effective_to": effective_to,
             "supersedes_version_id": supersedes_version_id,
             "source_priority": source_priority,
-            "quality_status": quality_status,
+            "quality_status": str(doc_row.get("quality_status") or "unknown"),
             "doc_type": "general",
             "person_names": [],
             "title": document_title,
@@ -2397,7 +2453,11 @@ class IncrementalIndexer:
             ch.metadata["effective_to"] = effective_to
             ch.metadata["supersedes_version_id"] = supersedes_version_id
             ch.metadata["source_priority"] = source_priority
-            ch.metadata["quality_status"] = quality_status
+            # reindex 的 doc_row 含旧质量状态；质量门禁已经在 doc_meta 中写入
+            # 本轮裁决，Chunk 必须跟随本轮结果，不能沿用旧登记值。
+            ch.metadata["quality_status"] = str(
+                doc_meta.get("quality_status") or "unknown"
+            )
             # 以 indexer 派生的 doc_id 为权威，覆盖 loader 注入的值，
             # 保证 chroma chunk.doc_id 与 doc_registry/chunk_store 完全一致
             # （避免 loader 与 indexer 两路派生分歧导致评测 doc_id 失配）。
@@ -2546,11 +2606,12 @@ class IncrementalIndexer:
                 },
             )
             try:
-                ids = (
-                    self.doc_db.add_texts(
-                        texts=[doc_level_text], metadatas=[doc_db_meta],
-                    )
-                    if doc_level_text else []
+                ids = _add_doc_level_vector_with_lineage(
+                    self.doc_db,
+                    doc_level_text,
+                    doc_db_meta,
+                    lineage_recorder=lineage_recorder,
+                    embedding=self.embedding,
                 )
             except Exception as exc:
                 trace_collector.end_span(
@@ -3044,24 +3105,45 @@ class IncrementalIndexer:
         #    旧向量保留到新索引成功后再清理，消除删旧→写新之间的检索空窗
         #    （文档越大空窗越长，期间该文档完全查不到）；索引失败时旧数据
         #    原样保留，不再出现"失败即丢旧版本"。
-        if old_doc_id and self._should_use_version_snapshot(old_doc_type, file_path):
+        financial_snapshot = bool(
+            old_doc_id and self._should_use_version_snapshot(old_doc_type, file_path)
+        )
+        if financial_snapshot and not old_chunk_ids:
+            raise ValueError(
+                "财务文档缺少当前分块 ID，无法安全重解析；原索引保持不变"
+            )
+
+        snapshot_ids_hidden = False
+        if financial_snapshot:
             # 版本快照：旧 chunk 标记 is_latest=False，保留历史版本向量
             try:
-                updated = self.vectordb.update_metadata_where(
-                    where={"doc_id": old_doc_id},
+                updated = self.vectordb.update_metadata_by_ids(
+                    old_chunk_ids,
                     metadata_update={"is_latest": False},
                 )
+                snapshot_ids_hidden = True
                 logger.info(
                     f"[REINDEX] 版本快照: doc_id={old_doc_id}, "
-                    f"标记 {updated} 个旧版 chunk is_latest=False"
+                    f"按旧 chunk ID 标记 {updated} 个当前 chunk is_latest=False"
                 )
             except Exception as e:
-                # 快照失败 → 兜底删除旧数据，不影响新索引
-                logger.warning(
-                    f"[REINDEX] 版本快照失败，兜底删除旧数据: {e}"
-                )
-                self._remove_document(old_doc_id, file_path=file_path)
-                self.registry.mark_deleted_by_doc_id(old_doc_id)
+                # 快照标记失败时必须保留旧向量和 Registry；删除旧数据会让
+                # 财务文档在新索引失败时不可检索，因此在任何解析前安全退出。
+                try:
+                    self.vectordb.update_metadata_by_ids(
+                        old_chunk_ids, {"is_latest": True},
+                    )
+                except Exception as restore_error:  # noqa: BLE001
+                    logger.critical(
+                        "[REINDEX] 财务快照标记失败，恢复旧 latest 标记也失败 "
+                        "(doc_id=%s): %s",
+                        old_doc_id,
+                        restore_error,
+                        exc_info=True,
+                    )
+                raise RuntimeError(
+                    f"财务旧索引快照未能安全标记，已停止重解析: {e}"
+                ) from e
         elif old_doc_id:
             logger.info(
                 f"[REINDEX] 先写后删模式: 保留旧数据 doc_id={old_doc_id} "
@@ -3091,6 +3173,21 @@ class IncrementalIndexer:
             # 版本整体隐藏，file_hash 也会指向未成功索引的内容。这里恢复
             # 更新前快照，兑现"失败的索引不能动旧 active 记录"契约
             # （test_indexer_recovery_and_reindex::test_failure_preserves_old_data）。
+            if snapshot_ids_hidden and old_chunk_ids:
+                try:
+                    # 只恢复原登记行指向的当前向量，不能用 doc_id 条件更新，
+                    # 否则会把更早的财务历史版本也错误地标成最新。
+                    self.vectordb.update_metadata_by_ids(
+                        old_chunk_ids, {"is_latest": True},
+                    )
+                except Exception as restore_error:  # noqa: BLE001
+                    logger.critical(
+                        "[REINDEX] 失败后恢复财务旧向量 latest 标记失败 "
+                        "(doc_id=%s): %s",
+                        old_doc_id,
+                        restore_error,
+                        exc_info=True,
+                    )
             if old_doc_id and previous_status == "active" and old_chunk_ids:
                 try:
                     self.registry.update_status(file_path, "active")

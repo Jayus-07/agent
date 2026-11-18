@@ -346,6 +346,18 @@ class TraceCollector:
             workflow_kind=workflow_kind,
             parent_id=actual_parent_id,
         )
+        if workflow_kind == WorkflowKind.KNOWLEDGE_INDEX.value:
+            from backend.config.rag import (
+                RAG_INDEX_SLO_THRESHOLD_MS,
+                RAG_INDEX_SLO_THRESHOLD_SOURCE,
+            )
+
+            seconds = RAG_INDEX_SLO_THRESHOLD_MS / 1000
+            trace.sla_threshold_ms = RAG_INDEX_SLO_THRESHOLD_MS
+            trace.sla_threshold_source = (
+                f"{RAG_INDEX_SLO_THRESHOLD_SOURCE}：知识索引内部处理时限"
+                f"（{seconds:g} 秒，不含排队）"
+            )
         # 反馈/评测闭环需要服务端可验证的 Trace 归属；从权威请求上下文
         # 注入租户与操作者标签，绝不消费请求体中客户端自报的身份字段。
         try:

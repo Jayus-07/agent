@@ -150,3 +150,10 @@ class KnowledgeStore(ABC):
         Returns: 更新的记录数（部分实现可能返回 0 表示成功但无计数）。
         """
         ...
+
+    @abstractmethod
+    def update_metadata_by_ids(
+        self, ids: list[str], metadata_update: dict,
+    ) -> int:
+        """只更新指定向量 ID 的 metadata，避免影响同文档的历史版本。"""
+        ...

@@ -455,12 +455,154 @@ def test_upload_failure_list_recovers_trace_by_upload_and_tenant(monkeypatch):
         "backend.observability.trace_store.get_trace_store",
         lambda: StubTraceStore(),
     )
+    monkeypatch.setattr(
+        "backend.rag.indexing.processing_lineage_pg.get_processing_lineage_repository",
+        lambda: SimpleNamespace(list_candidate_runs_by_upload_ids=lambda *_args, **_kwargs: []),
+    )
 
     response = asyncio.run(rag_upload.list_upload_failures(SimpleNamespace(), limit=25))
 
     assert response["total"] == 1
     assert response["items"][0]["trace_id"] == "trace-1"
     assert response["items"][0]["trace_status"] == "available"
+
+
+def test_upload_failure_list_includes_authorized_unpublished_run_identity(monkeypatch):
+    from backend.app.api import identity
+
+    principal = SimpleNamespace(tenant_id="tenant-a", user_id="user-a")
+    authz = SimpleNamespace(
+        is_admin=True,
+        kb_scope=frozenset({"kb-test"}),
+        can_upload_to=lambda *_: (True, ""),
+        can_manage_row=lambda _row: (True, ""),
+        can_read_row=lambda row: row.get("kb_id") == "kb-test",
+    )
+    monkeypatch.setattr(identity, "require_principal", lambda _request: principal)
+    monkeypatch.setattr(rag_upload.RagAuthorization, "build", lambda _principal: authz)
+
+    class StubStore:
+        def list_pending_failures(self, **_kwargs):
+            return [{
+                "upload_id": "upload-1",
+                "file_path": "/app/data/docs/report.csv",
+                "kb_id": "kb-test",
+                "department": "general",
+                "error": "embedding_budget_exceeded",
+                "created_at": "2026-11-18 10:00:00",
+            }]
+
+        def count_pending_failures(self, **_kwargs):
+            return 1
+
+    class StubRegistry:
+        def list_by_statuses(self, _statuses):
+            return []
+
+    class StubLineageRepository:
+        def list_candidate_runs_by_upload_ids(self, upload_ids, **kwargs):
+            assert upload_ids == ["upload-1"]
+            assert kwargs == {"tenant_id": "tenant-a", "kb_ids": ["kb-test"]}
+            return [{
+                "task_id": "upload-1",
+                "run_id": "run-1",
+                "doc_id": "doc-1",
+                "file_hash": "a" * 64,
+                "trace_id": "trace-1",
+                "operation": "upload",
+                "kb_id": "kb-test",
+                "tenant_id": "tenant-a",
+                "department": "general",
+                "permission_scope": "general",
+            }]
+
+    monkeypatch.setattr(
+        "backend.rag.indexing.index_run_store_pg.get_index_run_store",
+        lambda: StubStore(),
+    )
+    monkeypatch.setattr(rag_upload, "_get_registry", lambda: StubRegistry())
+    monkeypatch.setattr(
+        "backend.rag.indexing.processing_lineage_pg.get_processing_lineage_repository",
+        lambda: StubLineageRepository(),
+    )
+    monkeypatch.setattr(
+        "backend.observability.llm_usage_store.get_llm_usage_store",
+        lambda: SimpleNamespace(by_processing_run=lambda _run_id: []),
+    )
+
+    response = asyncio.run(rag_upload.list_upload_failures(SimpleNamespace(), limit=25))
+
+    item = response["items"][0]
+    assert response["counts"] == {"async_queue": 1, "quality_gate": 0}
+    assert item["record_kind"] == "async_queue"
+    assert item["doc_id"] == "doc-1"
+    assert item["file_hash"] == "a" * 64
+    assert item["processing_run_id"] == "run-1"
+    assert item["trace_id"] == "trace-1"
+    assert item["publication_status"] == "unpublished"
+    assert item["document_registered"] is False
+
+
+def test_upload_failure_list_does_not_enrich_unreadable_candidate(monkeypatch):
+    from backend.app.api import identity
+
+    principal = SimpleNamespace(
+        tenant_id="tenant-a", user_id="user-a", department="hr",
+    )
+    authz = SimpleNamespace(
+        is_admin=False,
+        kb_scope=frozenset({"kb-test"}),
+        can_upload_to=lambda *_: (True, ""),
+        can_manage_row=lambda _row: (True, ""),
+        can_read_row=lambda _row: False,
+    )
+    monkeypatch.setattr(identity, "require_principal", lambda _request: principal)
+    monkeypatch.setattr(rag_upload.RagAuthorization, "build", lambda _principal: authz)
+
+    class StubStore:
+        def list_pending_failures(self, **_kwargs):
+            return [{"upload_id": "upload-1", "kb_id": "kb-test", "error": "failed"}]
+
+        def count_pending_failures(self, **_kwargs):
+            return 1
+
+    class StubRegistry:
+        def list_by_statuses(self, _statuses):
+            return []
+
+    class StubLineageRepository:
+        def list_candidate_runs_by_upload_ids(self, *_args, **_kwargs):
+            return [{
+                "task_id": "upload-1",
+                "run_id": "run-hidden",
+                "doc_id": "doc-hidden",
+                "file_hash": "b" * 64,
+                "trace_id": "trace-hidden",
+                "kb_id": "kb-test",
+                "tenant_id": "tenant-a",
+            }]
+
+    monkeypatch.setattr(
+        "backend.rag.indexing.index_run_store_pg.get_index_run_store",
+        lambda: StubStore(),
+    )
+    monkeypatch.setattr(rag_upload, "_get_registry", lambda: StubRegistry())
+    monkeypatch.setattr(
+        "backend.rag.indexing.processing_lineage_pg.get_processing_lineage_repository",
+        lambda: StubLineageRepository(),
+    )
+    monkeypatch.setattr(
+        "backend.observability.trace_store.get_trace_store",
+        lambda: SimpleNamespace(latest_trace_ids_by_upload=lambda *_args, **_kwargs: {}),
+    )
+
+    response = asyncio.run(rag_upload.list_upload_failures(SimpleNamespace(), limit=25))
+
+    item = response["items"][0]
+    assert "doc_id" not in item
+    assert "file_hash" not in item
+    assert "processing_run_id" not in item
+    assert "trace-hidden" not in item.values()
 
 
 def test_prepaid_quality_failure_emits_clear_error_and_trace(monkeypatch, tmp_path):
@@ -743,6 +885,13 @@ def test_ask_response_carries_answer_meta(monkeypatch):
             user_id="1", user_name="tester", tenant_id="default", department="",
             roles=("super_admin",), permissions=None, subject_type="employee",
             authenticated=True, auth_type="jwt", source="header"),
+    )
+    monkeypatch.setattr(
+        rag_search.RagAuthorization,
+        "build",
+        lambda _principal: SimpleNamespace(
+            can_search_kb=lambda _kb_id: True,
+        ),
     )
     app = FastAPI()
     app.include_router(rag_search.router)

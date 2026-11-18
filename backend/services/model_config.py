@@ -213,17 +213,21 @@ async def _apply_model_pricing(
         output_price=output_price,
         cached_input_price=cached_input_price,
     )
+    from backend.infra.llm.pricing import current_price_eligibility_sql
+
     if input_price is None and output_price is None:
         # 校验已保证 metered 双空必然抛错；走到这里的双空只可能是
         # 非 metered 未填价，无事可做。
         return
     if component == "llm":
-        dimensions = ("input", "output")
+        dimensions = ("input", "output", "cache_read")
     else:
         dimensions = ("input",)
     prices = {"input": input_price, "output": output_price}
     if component == "llm" and cached_input_price is not None:
         prices["cache_read"] = cached_input_price
+    elif component == "llm":
+        prices["cache_read"] = None
 
     # ① 目录展示价
     pricing_json = _json_value(
@@ -248,16 +252,53 @@ async def _apply_model_pricing(
     version = f"provider-page-{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
     for dimension in dimensions:
         price = prices[dimension]
-        if price is None:  # 防御：非 llm 组件没有 output 维度
+        if price is None:
+            if dimension == "cache_read":
+                current_cache_price = (
+                    await session.execute(
+                        text(
+                            "SELECT p.price_per_unit, p.currency, p.price_table_version, p.source "
+                            "FROM model_price AS p "
+                            "LEFT JOIN model_price_versions AS v "
+                            "ON v.version = p.price_table_version AND v.source = p.source "
+                            "WHERE p.model_name = :model_name AND p.component = :component "
+                            "AND p.dimension = :dimension AND p.approval_status = 'approved' "
+                            "AND p.effective_from <= now() "
+                            "AND (p.effective_to IS NULL OR p.effective_to > now()) "
+                            f"AND {current_price_eligibility_sql('model_price', 'model_price_versions')} "
+                            "ORDER BY p.effective_from DESC, p.id DESC LIMIT 1"
+                        ),
+                        {
+                            "model_name": model_name,
+                            "component": component,
+                            "dimension": dimension,
+                        },
+                    )
+                ).mappings().first()
+                if current_cache_price is not None:
+                    await session.execute(
+                        text(
+                            "UPDATE model_price SET effective_to = now() "
+                            "WHERE model_name = :model_name AND component = :component "
+                            "AND dimension = 'cache_read' AND effective_to IS NULL"
+                        ),
+                        {"model_name": model_name, "component": component},
+                    )
+            # 缓存价可选；非 LLM 组件也没有 output 维度。
             continue
         current = (
             await session.execute(
                 text(
-                    "SELECT price_per_unit FROM model_price "
-                    "WHERE model_name = :model_name AND component = :component "
-                    "AND dimension = :dimension AND effective_to IS NULL "
-                    "AND approval_status = 'approved' "
-                    "ORDER BY effective_from DESC LIMIT 1"
+                    "SELECT p.price_per_unit, p.currency, p.price_table_version, p.source "
+                    "FROM model_price AS p "
+                    "LEFT JOIN model_price_versions AS v "
+                    "ON v.version = p.price_table_version AND v.source = p.source "
+                    "WHERE p.model_name = :model_name AND p.component = :component "
+                    "AND p.dimension = :dimension AND p.approval_status = 'approved' "
+                    "AND p.effective_from <= now() "
+                    "AND (p.effective_to IS NULL OR p.effective_to > now()) "
+                    f"AND {current_price_eligibility_sql('model_price', 'model_price_versions')} "
+                    "ORDER BY p.effective_from DESC, p.id DESC LIMIT 1"
                 ),
                 {
                     "model_name": model_name,
@@ -266,7 +307,11 @@ async def _apply_model_pricing(
                 },
             )
         ).mappings().first()
-        if current is not None and Decimal(str(current["price_per_unit"])) == price:
+        if (
+            current is not None
+            and Decimal(str(current["price_per_unit"])) == price
+            and str(current.get("currency") or "").upper() == price_currency
+        ):
             continue
         await session.execute(
             text(

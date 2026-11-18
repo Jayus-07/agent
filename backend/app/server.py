@@ -235,9 +235,32 @@ async def warm_main_llm():
         # 等注册表/凭据装载完成（validate_settings 在同一 startup 阶段 await）
         _time.sleep(5)
         try:
-            from backend.infra.llm import llm
+            from contextvars import Context
+            from uuid import uuid4
 
-            resp = llm.invoke([("human", "预热：请回复 OK")])
+            from backend.core.request_context import RequestContext
+            from backend.infra.llm import llm
+            from backend.infra.llm.budget import (
+                bind_request_budget,
+                clear_request_budget,
+            )
+
+            # 启动探测使用独立系统会话和全局预算，不占用用户个人配额。
+            request_id = f"startup-warmup:{uuid4().hex}"
+
+            def _invoke():
+                RequestContext(
+                    session_id=request_id,
+                    user_id="",
+                    tenant_id="",
+                ).bind()
+                bind_request_budget(request_id)
+                try:
+                    return llm.invoke([("human", "预热：请回复 OK")])
+                finally:
+                    clear_request_budget()
+
+            resp = Context().run(_invoke)
             text = getattr(resp, "content", "") or ""
             logger.info("[Startup] 主模型预热完成（%d 字符）", len(text))
         except Exception as exc:

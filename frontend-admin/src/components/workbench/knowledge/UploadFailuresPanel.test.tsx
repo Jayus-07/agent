@@ -52,11 +52,11 @@ describe('UploadFailuresPanel', () => {
     act(() => root.render(<UploadFailuresPanel />))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
-    expect(container.textContent).toContain('待处理任务 4 项')
-    expect(container.textContent).toContain('质量门禁失败 1 份')
+    expect(container.textContent).toContain('异步任务 4 项')
+    expect(container.textContent).toContain('质量门禁拦截 1 份')
     expect(container.textContent).toContain('report.pdf')
     expect(container.textContent).toContain('切分缺 3 处，表格少 4 行、2 个单元格')
-    expect(container.textContent).toContain('查看 Trace')
+    expect(container.textContent).toContain('查看处理追踪')
     expect(container.querySelector('a[href="/knowledge/operations/traces/trace-1"]')).not.toBeNull()
   })
 
@@ -115,7 +115,7 @@ describe('UploadFailuresPanel', () => {
     act(() => root.render(<UploadFailuresPanel />))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
-    expect(container.textContent).toContain('查看处理运行（非 Trace）')
+    expect(container.textContent).toContain('查看处理运行')
     expect(container.querySelector(
       `a[href="/knowledge/operations/traces/${runId}?documentName=progit_en_501p.pdf&docId=UF-14-01&fileHash=${fileHash}&runId=${runId}&view=processing-run"]`,
     )).not.toBeNull()
@@ -149,7 +149,7 @@ describe('UploadFailuresPanel', () => {
     act(() => root.render(<UploadFailuresPanel />))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
-    expect(container.textContent).toContain('查看 Trace / 运行记录')
+    expect(container.textContent).toContain('查看追踪 / 运行记录')
     expect(container.querySelector(
       `a[href="/knowledge/operations/traces/${traceId}?documentName=progit_en_501p.pdf&docId=UF-14-01&fileHash=${fileHash}&runId=${runId}"]`,
     )).not.toBeNull()
@@ -185,9 +185,9 @@ describe('UploadFailuresPanel', () => {
     act(() => root.render(<UploadFailuresPanel />))
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
-    expect(container.textContent).toContain('异常 72 项')
-    expect(container.textContent).toContain('待处理任务 68 项')
-    expect(container.textContent).toContain('质量门禁失败 4 份')
+    expect(container.textContent).toContain('失败记录 72 项')
+    expect(container.textContent).toContain('异步任务 68 项')
+    expect(container.textContent).toContain('质量门禁拦截 4 份')
     expect(container.querySelectorAll('tbody tr')).toHaveLength(72)
     expect(container.querySelector('a[href="/knowledge/operations/traces/90c00499af23"]'))
       .not.toBeNull()
@@ -221,5 +221,31 @@ describe('UploadFailuresPanel', () => {
     expect(container.textContent).toContain('原文有内容未进入切分结果')
     expect(container.textContent).toContain('提取文本过短或为空')
     expect(container.textContent).not.toContain('解析出 0 个分块')
+  })
+
+  it('把历史解析错误翻译成中文，不将内部错误码直接暴露为正文', async () => {
+    vi.spyOn(knowledgeService, 'listUploadFailures').mockResolvedValueOnce({
+      ok: true,
+      total: 3,
+      counts: { async_queue: 3, quality_gate: 0 },
+      items: [
+        { upload_id: 'encoding', file_path: '/docs/gbk.txt', record_kind: 'async_queue', error: "parse failed: 'utf-8' codec can't decode byte 0xd1" },
+        { upload_id: 'connection', file_path: '/docs/rag.md', record_kind: 'async_queue', error: 'Connection error.' },
+        { upload_id: 'fixture', file_path: '/docs/tmp.txt', record_kind: 'async_queue', error: 'test_artifact_rejected' },
+      ],
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    mounted = { root, container }
+
+    act(() => root.render(<UploadFailuresPanel />))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    expect(container.textContent).toContain('文件编码或内容解析失败')
+    expect(container.textContent).toContain('处理服务连接失败')
+    expect(container.textContent).toContain('测试临时文件被上传安全规则拦截')
+    expect(container.textContent).not.toContain('parse failed')
+    expect(container.textContent).not.toContain('Connection error')
   })
 })

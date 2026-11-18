@@ -15,6 +15,7 @@ import asyncio
 import os
 import re
 import time
+from datetime import datetime, timezone
 
 from backend.config import EMBEDDING_MODEL, EMBEDDING_MODEL_PATH, ENV_MODE
 
@@ -269,9 +270,24 @@ async def list_documents(
 
 def _active_upload_public_item(run: dict, authz) -> dict | None:
     """将活动索引运行映射为操作日志可展示的安全字段。"""
+    from backend.config.tasks import RAG_INDEX_RUN_STALE_SECONDS
+
     allowed, _ = authz.can_manage_row(run)
     if not allowed:
         return None
+    updated_at = str(run.get("updated_at") or "")
+    inactive_seconds: int | None = None
+    if updated_at:
+        try:
+            parsed = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            inactive_seconds = max(
+                int((datetime.now(timezone.utc) - parsed).total_seconds()), 0)
+        except ValueError:
+            inactive_seconds = None
+    stale = (inactive_seconds is None
+             or inactive_seconds >= RAG_INDEX_RUN_STALE_SECONDS)
     return {
         "upload_id": str(run.get("upload_id") or ""),
         "celery_task_id": str(run.get("celery_task_id") or ""),
@@ -283,7 +299,10 @@ def _active_upload_public_item(run: dict, authz) -> dict | None:
         "stage": str(run.get("stage") or ""),
         "error": str(run.get("error") or ""),
         "created_at": str(run.get("created_at") or ""),
-        "updated_at": str(run.get("updated_at") or ""),
+        "updated_at": updated_at,
+        "stale": stale,
+        "inactive_seconds": inactive_seconds,
+        "stale_after_seconds": RAG_INDEX_RUN_STALE_SECONDS,
     }
 
 
@@ -715,8 +734,21 @@ async def get_processing_run_detail(doc_id: str, run_id: str, request: Request):
     try:
         authz = await _require_authz(request)
         doc = _get_registry().get_by_doc_id(doc_id)
-        if not doc or not authz.can_read_row(doc):
-            return {"doc_id": doc_id, "run_id": run_id, "error": "文档不存在"}
+        candidate_scope = None
+        if doc:
+            if not authz.can_read_row(doc):
+                return {"doc_id": doc_id, "run_id": run_id, "error": "文档不存在"}
+        else:
+            repository = get_processing_lineage_repository()
+            candidate_scope = await asyncio.to_thread(
+                repository.get_candidate_run_scope,
+                doc_id,
+                run_id,
+                tenant_id=str(authz.principal.tenant_id or ""),
+                kb_ids=sorted(authz.kb_scope),
+            )
+            if not candidate_scope or not authz.can_read_row(candidate_scope):
+                return {"doc_id": doc_id, "run_id": run_id, "error": "文档不存在"}
         detail = await asyncio.to_thread(
             get_processing_lineage_repository().get_run_detail,
             doc_id,
@@ -724,6 +756,15 @@ async def get_processing_run_detail(doc_id: str, run_id: str, request: Request):
         )
         if detail is None:
             return {"doc_id": doc_id, "run_id": run_id, "error": "处理运行不存在"}
+        if candidate_scope:
+            detail.update({
+                "publication_status": "unpublished",
+                "document_registered": False,
+                "kb_id": candidate_scope.get("kb_id", ""),
+                "department": candidate_scope.get("department", ""),
+                "tenant_id": candidate_scope.get("tenant_id", ""),
+                "permission_scope": candidate_scope.get("permission_scope", "general"),
+            })
         try:
             from backend.observability.llm_usage_store import get_llm_usage_store
             detail["usage"] = await asyncio.to_thread(

@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react'
 import { knowledgeService } from '@/api/knowledge'
+import { getDepartmentLabel } from '@/lib/knowledge-display'
 
 /** 把后端原始错误翻译成可行动的文案（未知原因保留原文）。 */
 function humanizeError(raw: string): string {
@@ -32,16 +33,19 @@ function humanizeError(raw: string): string {
     return '质量门禁未通过；查看 Trace 中的具体检查项，再修正原文件后重传'
   if (raw.includes('produced 0 chunks'))
     return '解析出 0 个分块（文件可能损坏、加密或无有效文本）'
-  if (raw.includes('暂存源文件缺失'))
-    return '系统内部文件传输中断，请重新上传'
+  if (raw.includes('parse failed') || raw.includes("can't decode"))
+    return '文件编码或内容解析失败；请检查原件编码和文件完整性后重传'
+  if (raw.includes('test_artifact_rejected'))
+    return '测试临时文件被上传安全规则拦截；请从受控资料目录选择正式文件'
+  if (raw.includes('No such file or directory') || raw.includes('暂存源文件缺失'))
+    return '系统暂存文件已丢失；请从原件重新上传'
+  if (raw.includes('Connection error') || raw.includes('连接失败'))
+    return '处理服务连接失败；确认服务恢复后再重试'
+  if (raw.includes('timed out') || raw.includes('timeout'))
+    return '处理超时；请查看追踪详情确认卡住的阶段，再决定是否重试'
   if (raw.includes('provider') || raw.includes('embedding') || raw.includes('Embedding'))
     return '向量化服务暂时异常，稍后重新上传即可'
-  return raw
-}
-
-const DEPARTMENT_CN: Record<string, string> = {
-  warehouse: '仓储部', supply_chain: '供应链部', order_dept: '订单部', customer: '客服部',
-  product_dept: '商品部', hr: '人事部', finance: '财务部', admin: '行政部', general: '通用',
+  return '处理失败；请打开追溯详情查看系统诊断信息'
 }
 
 function basename(path: string): string {
@@ -61,7 +65,7 @@ function getFailureDetailLink(item: any): { href: string; label: string; title: 
   if (!hasVerifiedRunIdentity) {
     return {
       href: `/knowledge/operations/traces/${encodeURIComponent(traceId)}`,
-      label: '查看 Trace',
+      label: '查看处理追踪',
       title: `Trace ID：${traceId}`,
     }
   }
@@ -76,7 +80,7 @@ function getFailureDetailLink(item: any): { href: string; label: string; title: 
 
   return {
     href: `/knowledge/operations/traces/${encodeURIComponent(traceId || runId)}?${params}`,
-    label: traceId ? '查看 Trace / 运行记录' : '查看处理运行（非 Trace）',
+    label: traceId ? '查看追踪 / 运行记录' : '查看处理运行',
     title: traceId
       ? '优先打开 Trace；历史 Span 缺失时回退到文件 SHA 一致的处理运行记录'
       : '该记录没有完整 Trace，打开按文件 SHA 核对的处理运行记录',
@@ -135,7 +139,7 @@ export default function UploadFailuresPanel() {
       <div className="mt-4 rounded-xl border border-black/5 bg-white shadow-card overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
           <span className="text-[13px] font-medium text-text-primary">
-            异常 {total} 项：待处理任务 {counts.async_queue} 项，质量门禁失败 {counts.quality_gate} 份
+            失败记录 {total} 项：异步任务 {counts.async_queue} 项，质量门禁拦截 {counts.quality_gate} 份
           </span>
         </div>
         {loading ? (
@@ -165,7 +169,7 @@ export default function UploadFailuresPanel() {
                     {it.record_kind === 'quality_gate' ? '质量门禁' : '异步任务'}
                   </td>
                   <td className="px-4 py-3 text-text-primary">{basename(it.file_path || '')}</td>
-                  <td className="px-4 py-3 text-text-muted">{DEPARTMENT_CN[it.department || ''] || it.department || '-'}</td>
+                  <td className="px-4 py-3 text-text-muted">{getDepartmentLabel(it.department || '')}</td>
                   <td className="px-4 py-3 text-text-muted whitespace-nowrap">{fmtTime(it.created_at)}</td>
                   <td className="px-4 py-3 text-text-primary" title={it.error || ''}>
                     {humanizeError(it.error || '')}

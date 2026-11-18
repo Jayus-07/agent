@@ -17,6 +17,7 @@ from backend.config.rag import (
     EMBED_RETRY_BACKOFF_BASE,
     EMBED_RETRY_BACKOFF_MAX,
 )
+from backend.infra.llm.budget import RequestBudgetExceeded
 from backend.observability.tracer import trace_collector, SpanKind
 from backend.shared.logger import logger
 
@@ -142,6 +143,8 @@ class EmbeddingStage:
                 return vec
             except Exception as e:
                 last_err = e
+                if isinstance(e, RequestBudgetExceeded):
+                    break
                 # 指数退避 + 抖动：立即连打对抖动的远程服务是雪崩式重试
                 if attempt < EMBED_RETRY_MAX - 1:
                     time.sleep(embed_backoff_seconds(attempt))
@@ -160,6 +163,8 @@ class EmbeddingStage:
         trace_collector.end_span(chunk_span, status="error",
             metrics={"error": str(last_err)[:100] if last_err else "unknown",
                      "retry_count": EMBED_RETRY_MAX})
+        if isinstance(last_err, RequestBudgetExceeded):
+            raise last_err
         return None
 
     def batch_with_retry(self, chunks, parent_span, doc_summary: str = "") -> list:
@@ -276,6 +281,8 @@ class EmbeddingStage:
                 return batch_vecs, cache_hits
             except Exception as e:
                 last_err = e
+                if isinstance(e, RequestBudgetExceeded):
+                    raise
                 # 指数退避 + 抖动（整批重试路径）
                 if _attempt < EMBED_RETRY_MAX - 1:
                     time.sleep(embed_backoff_seconds(_attempt))

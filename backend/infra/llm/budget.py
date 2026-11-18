@@ -155,10 +155,16 @@ class RequestBudget:
             raise ValueError(f"非法预算调用类型: {kind}")
         from backend.infra.llm.models import get_model_billing, lookup_model_entry
 
-        # 本地推理仍受调用/Token 限额约束，但不预占不存在的云端账单。
+        # 非按量模型仍受调用/Token 限额约束，但不按 Token 单价预检或预占费用。
+        # subscription 的套餐消费由供应商套餐额度结算，不由 Token 单价推算。
+        model_billing = (
+            get_model_billing(model_name)
+            if model_name and lookup_model_entry(model_name) is not None
+            else "metered"
+        )
+        non_metered_billing = model_billing in {"local", "subscription"}
         local_inference = (
-            bool(model_name) and lookup_model_entry(model_name) is not None
-            and get_model_billing(model_name) == "local"
+            model_billing == "local"
         )
         # 任务 9 域额度（2026-11-11）：从请求归因读 agent_domain 并归并为
         # 顶级域（''=无标签过渡期/管理端工具，只走总额度闸）；本地推理不预占
@@ -209,7 +215,7 @@ class RequestBudget:
                     )
                 raise RequestBudgetExceeded(reason, detail=detail)
             if (self.mode == "enforce" and model_name and self.quota_store is not None
-                    and not local_inference):
+                    and not non_metered_billing):
                 from backend.infra.llm.pricing import (
                     PriceConflict,
                     get_current_price_table,
@@ -268,7 +274,7 @@ class RequestBudget:
                 and self.quota_store is not None
                 and self.user_id
                 and self.tenant_id
-                and not local_inference
+                and not non_metered_billing
             ):
                 try:
                     # 已结算费用已经计入 PG 的 used_cny，不得在下一次调用时
@@ -301,7 +307,7 @@ class RequestBudget:
                 self.mode == "enforce"
                 and self.quota_store is None
                 and self.user_id
-                and not local_inference
+                and not non_metered_billing
             ):
                 # TD-05 可诊断化：enforce + 有用户但 quota_store 为空 =
                 # bind 时 tenant_id 缺失（网关未注入租户头），本请求全部

@@ -214,6 +214,46 @@ class IndexRunStore:
                 f"{(existing or {}).get('status')} → {status}")
         return dict(row)
 
+    def reconcile_stale_active_runs(self, *, stale_after_seconds: int,
+                                    unpublished_after_seconds: int,
+                                    limit: int = 100) -> list[str]:
+        """把超过运行时限的活动索引记录收口为失败，保留原记录和暂存信息。"""
+        stale_after = max(int(stale_after_seconds), 1)
+        unpublished_after = max(int(unpublished_after_seconds), 1)
+        batch_size = max(1, min(int(limit), 500))
+        message = "索引运行超过配置的处理时限，维护任务已收口；请检查文档后重新提交。"
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""WITH candidates AS (
+                        SELECT upload_id FROM {self._table}
+                         WHERE updated_at IS NOT NULL
+                           AND (
+                               (status IN ('indexing', 'publishing')
+                                AND updated_at::timestamp <=
+                                    (now() AT TIME ZONE 'UTC')
+                                    - (%s || ' seconds')::interval)
+                               OR
+                               (status = 'claimed'
+                                AND COALESCE(celery_task_id, '') = ''
+                                AND updated_at::timestamp <=
+                                    (now() AT TIME ZONE 'UTC')
+                                    - (%s || ' seconds')::interval)
+                           )
+                         ORDER BY updated_at::timestamp, upload_id
+                         LIMIT %s FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE {self._table} AS run
+                       SET status = 'failed', stage = 'stale_reconciled',
+                           error = %s, updated_at = {_NOW_SQL}
+                      FROM candidates
+                     WHERE run.upload_id = candidates.upload_id
+                       AND run.status IN {ACTIVE_STATUSES!r}
+                    RETURNING run.upload_id""",
+                (str(stale_after), str(unpublished_after), batch_size, message),
+            )
+            return [str(row[0]) for row in cur.fetchall()]
+
     # ---- 读 ----
 
     def list_non_terminal_staging_paths(self) -> set[str]:

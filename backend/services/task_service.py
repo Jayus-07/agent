@@ -814,6 +814,44 @@ def fail_recovered_task(task_id: str, *, grace_seconds: int,
 # 不改状态机、不触碰租约/admission/RetryPolicy budget。
 # ═══════════════════════════════════════════════════
 
+def expire_abandoned_pending_without_dispatch(*, max_age_seconds: int,
+                                               limit: int = 50) -> list[str]:
+    """收口超龄且从未入队、从未开始执行的 PENDING 任务。
+
+    只有同时缺少 Celery 回执、queued_at、started_at 和执行租约时才会命中。
+    这些行不再自动重放：标为 CANCELLED 后，即使迟到消息到达，Worker 也会
+    按终态短路。保留完整任务记录，并给出专用错误类型供管理端识别。
+    """
+    ensure_schema()
+    age = max(int(max_age_seconds), 1)
+    batch_size = max(1, min(int(limit), 500))
+    message = "超过自动恢复期限且没有入队回执，系统已停止自动执行；请重新提交任务。"
+    with _pooled_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "WITH candidates AS ("
+            "SELECT id FROM tasks WHERE status = %s "
+            "AND COALESCE(celery_task_id, '') = '' AND queued_at IS NULL "
+            "AND started_at IS NULL AND COALESCE(execution_id, '') = '' "
+            "AND lease_heartbeat_at IS NULL AND lease_expires_at IS NULL "
+            "AND created_at <= now() - (%s || ' seconds')::interval "
+            "AND updated_at <= now() - (%s || ' seconds')::interval "
+            "AND (dispatch_not_before_at IS NULL OR dispatch_not_before_at <= now()) "
+            "ORDER BY updated_at, id LIMIT %s FOR UPDATE SKIP LOCKED) "
+            "UPDATE tasks AS task SET status = %s, "
+            "error_type = 'PENDING_DELIVERY_EXPIRED', error_message = %s, "
+            "progress = '系统已收口：任务超时且无入队回执', "
+            "finished_at = now(), updated_at = now() "
+            "FROM candidates WHERE task.id = candidates.id AND task.status = %s "
+            "AND COALESCE(task.celery_task_id, '') = '' AND task.queued_at IS NULL "
+            "AND task.started_at IS NULL AND COALESCE(task.execution_id, '') = '' "
+            "AND task.lease_heartbeat_at IS NULL AND task.lease_expires_at IS NULL "
+            "RETURNING task.id",
+            (TaskStatus.PENDING.value, str(age), str(age), batch_size,
+             TaskStatus.CANCELLED.value, message, TaskStatus.PENDING.value),
+        )
+        return [str(row[0]) for row in cur.fetchall()]
+
+
 def find_stale_pending(*, threshold_seconds: int,
                        cooldown_seconds: int = 0,
                        max_age_seconds: int | None = None,

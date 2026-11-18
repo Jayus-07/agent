@@ -4,6 +4,13 @@ import { useEffect, useState } from 'react'
 import { CheckCircle2, XCircle, FileText, Clock } from 'lucide-react'
 import { knowledgeService } from '@/api/knowledge'
 import RoleGate from '@/components/auth/RoleGate'
+import {
+  getAdminErrorLabel,
+  getBusinessDomainLabel,
+  getDocumentTypeLabel,
+  getKnowledgeBaseLabel,
+  getQualityIssueLabel,
+} from '@/lib/knowledge-display'
 
 interface PendingDoc {
   id: string
@@ -15,9 +22,18 @@ interface PendingDoc {
   kb_id: string
   summary?: string
   quality_score?: number
+  quality_status?: string
+  quality_issues?: string
   updated_at: string
   orphaned_kb?: boolean
   orphan_reason?: string
+}
+
+function qualityStatusLabel(status?: string): string {
+  if (status === 'pass') return '检查通过'
+  if (status === 'soft_warning') return '有质量提醒'
+  if (status === 'failed') return '检查未通过'
+  return '未核验'
 }
 
 export default function PendingReviewPanel() {
@@ -35,7 +51,7 @@ export default function PendingReviewPanel() {
       setItems(res.items || [])
       setTotal(res.total || 0)
     } catch (e) {
-      setError('加载失败: ' + String(e))
+      setError('加载失败：' + getAdminErrorLabel(String(e)))
     } finally {
       setLoading(false)
     }
@@ -54,7 +70,7 @@ export default function PendingReviewPanel() {
         if (res.warnings?.length) alert('批准完成，但有警告：' + res.warnings.join('；'))
         await refresh()
       } else {
-        alert('批准失败: ' + (res.error || '未知错误'))
+        alert('批准失败：' + getAdminErrorLabel(res.error || '未知错误'))
       }
     } finally {
       setActing(null)
@@ -73,7 +89,7 @@ export default function PendingReviewPanel() {
         if (res.warnings?.length) alert('拒绝完成，但有警告：' + res.warnings.join('；'))
         await refresh()
       } else {
-        alert('拒绝失败: ' + (res.error || '未知错误'))
+        alert('拒绝失败：' + getAdminErrorLabel(res.error || '未知错误'))
       }
     } finally {
       setActing(null)
@@ -131,7 +147,7 @@ export default function PendingReviewPanel() {
                         {doc.file_name}
                       </h3>
                       <span className="text-xs text-text-muted shrink-0">
-                        [{doc.kb_id}]
+                        [{getKnowledgeBaseLabel(doc.kb_id)}]
                       </span>
                     </div>
                     {doc.orphaned_kb && (
@@ -141,24 +157,40 @@ export default function PendingReviewPanel() {
                     )}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                       <div>
-                        <span className="text-text-muted">doc_type: </span>
-                        <span className="text-text-primary">{doc.doc_type || '—'}</span>
+                        <span className="text-text-muted">文档类型： </span>
+                        <span className="text-text-primary">{getDocumentTypeLabel(doc.doc_type)}</span>
                       </div>
                       <div>
-                        <span className="text-text-muted">business_domain: </span>
-                        <span className="text-text-primary">{doc.business_domain || '—'}</span>
+                        <span className="text-text-muted">业务领域： </span>
+                        <span className="text-text-primary">{getBusinessDomainLabel(doc.business_domain)}</span>
                       </div>
                       <div>
-                        <span className="text-text-muted">confidence: </span>
+                        <span className="text-text-muted">分类置信度： </span>
                         <span className={`font-medium ${doc.confidence < 0.5 ? 'text-red-500' : doc.confidence < 0.7 ? 'text-amber-500' : 'text-emerald-500'}`}>
-                          {(doc.confidence || 0).toFixed(2)}
+                          {typeof doc.confidence === 'number' && Number.isFinite(doc.confidence)
+                            ? `${Math.round(doc.confidence * 100)}%`
+                            : '未记录'}
                         </span>
                       </div>
                       <div>
-                        <span className="text-text-muted">quality: </span>
-                        <span className="text-text-primary">{(doc.quality_score || 0).toFixed(0)}</span>
+                        <span className="text-text-muted">质量状态： </span>
+                        <span className="text-text-primary">{qualityStatusLabel(doc.quality_status)}</span>
+                        <span className="text-text-muted"> · 质量分 </span>
+                        <span className="text-text-primary">
+                          {typeof doc.quality_score === 'number' && Number.isFinite(doc.quality_score)
+                            ? Math.round(doc.quality_score)
+                            : '未评分'}
+                        </span>
                       </div>
                     </div>
+                    <p className="mt-2 text-[11px] text-text-muted">
+                      审核状态与质量评分分别记录，请结合来源和质量提醒判断。
+                    </p>
+                    {doc.quality_issues && (
+                      <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+                        质量提醒：{getQualityIssueLabel(doc.quality_issues)}
+                      </div>
+                    )}
                     {doc.summary && (
                       <p className="text-xs text-text-muted mt-2 line-clamp-2">
                         {doc.summary}

@@ -2446,7 +2446,36 @@ async def list_upload_failures(request: Request, limit: int = 50):
     upload_ids = [
         str(item.get("upload_id") or "")
         for item in queue_items
-        if item.get("upload_id") and not item.get("trace_id")
+        if item.get("upload_id")
+    ]
+    candidate_by_upload: dict[str, dict] = {}
+    if upload_ids:
+        try:
+            from backend.rag.indexing.processing_lineage_pg import (
+                get_processing_lineage_repository,
+            )
+
+            candidate_runs = await asyncio.to_thread(
+                get_processing_lineage_repository().list_candidate_runs_by_upload_ids,
+                upload_ids,
+                tenant_id=tenant_id,
+                kb_ids=sorted(authz.kb_scope),
+            )
+            candidate_by_upload = {
+                str(candidate.get("task_id") or ""): candidate
+                for candidate in candidate_runs
+                if candidate.get("task_id") and authz.can_read_row(candidate)
+            }
+        except Exception as exc:  # noqa: BLE001 — 血缘查询失败不隐藏失败项
+            logger.warning("[RAG] 上传失败列表运行身份查询失败: %s", exc)
+    upload_ids = [
+        str(item.get("upload_id") or "")
+        for item in queue_items
+        if item.get("upload_id")
+        and not item.get("trace_id")
+        and not candidate_by_upload.get(
+            str(item.get("upload_id") or ""), {}
+        ).get("trace_id")
     ]
     trace_by_upload: dict[str, str] = {}
     if upload_ids:
@@ -2523,8 +2552,23 @@ async def list_upload_failures(request: Request, limit: int = 50):
     for item in queue_items:
         item.setdefault("record_kind", "async_queue")
         item.setdefault("retryable", True)
+        candidate = candidate_by_upload.get(str(item.get("upload_id") or ""), {})
+        if candidate:
+            for target, source in (
+                ("doc_id", "doc_id"),
+                ("file_hash", "file_hash"),
+                ("processing_run_id", "run_id"),
+                ("operation", "operation"),
+                ("kb_id", "kb_id"),
+                ("department", "department"),
+            ):
+                if candidate.get(source):
+                    item[target] = candidate[source]
+            item["publication_status"] = "unpublished"
+            item["document_registered"] = False
         item["trace_id"] = str(
             item.get("trace_id")
+            or candidate.get("trace_id")
             or trace_by_upload.get(str(item.get("upload_id") or ""))
             or ""
         )

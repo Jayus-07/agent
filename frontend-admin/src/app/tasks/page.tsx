@@ -34,6 +34,20 @@ const STATUS_BADGE: Record<string, string> = {
   FAILED: 'bg-red-100 text-red-700',
   CANCELLED: 'bg-zinc-200 text-zinc-600',
 }
+const STATUS_LABEL: Record<string, string> = {
+  PENDING: '等待处理',
+  RUNNING: '处理中',
+  WAITING_USER: '等待用户',
+  PAUSED: '已暂停',
+  SUCCESS: '成功',
+  FAILED: '失败',
+  CANCELLED: '已取消',
+}
+
+function taskStatusLabel(task: Pick<TaskRow, 'status' | 'error_type'>) {
+  if (task.error_type === 'PENDING_DELIVERY_EXPIRED') return '已过期取消'
+  return STATUS_LABEL[task.status] ?? task.status
+}
 
 /** 操作进行中/弹窗确认状态 */
 interface ConfirmState {
@@ -198,7 +212,7 @@ export default function TasksPage() {
           <option value="">全部状态</option>
           {TASK_STATUSES.map((s) => (
             <option key={s} value={s}>
-              {s}
+              {STATUS_LABEL[s] ?? s}
             </option>
           ))}
         </select>
@@ -211,6 +225,7 @@ export default function TasksPage() {
           <option value={24}>近 24 小时</option>
           <option value={168}>近 7 天</option>
           <option value={720}>近 30 天</option>
+          <option value={2160}>近 90 天</option>
         </select>
         <label className="flex items-center gap-1 text-sm text-slate-600">
           <input
@@ -292,7 +307,7 @@ export default function TasksPage() {
                   </td>
                   <td className="px-3 py-2">
                     <span className={clsx('rounded px-1.5 py-0.5 text-xs font-medium', STATUS_BADGE[t.status] ?? 'bg-slate-100 text-slate-600')}>
-                      {t.status}
+                      {taskStatusLabel(t)}
                     </span>
                   </td>
                   <td className="px-3 py-2 text-xs">
@@ -353,7 +368,7 @@ export default function TasksPage() {
                   <div>
                     <div className="text-xs text-slate-400">状态 / 队列</div>
                     <div>
-                      {detail.status} · {detail.queue}
+                      {taskStatusLabel(detail)} · {detail.queue}
                     </div>
                   </div>
                   <div>
