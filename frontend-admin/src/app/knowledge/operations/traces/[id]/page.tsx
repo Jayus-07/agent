@@ -21,7 +21,7 @@ import {
   getRegistryDocumentIdentityError,
   getProcessingRunDetailError,
 } from "../trace-metrics";
-import ProcessingRunDetailView from "../processing-run-detail";
+import ProcessingRunDetailView, { ProcessingRunFailureNotice } from "../processing-run-detail";
 import {
   getAdminErrorLabel,
   getBusinessDomainLabel,
@@ -87,6 +87,7 @@ export default function DocTracePage() {
   const fileHashParam = searchParams.get("fileHash") || "";
   const runIdParam = searchParams.get("runId") || "";
   const viewParam = searchParams.get("view") || "";
+  const operationParam = searchParams.get("operation") || "";
   const [trace, setTrace] = useState<TraceRecord | null>(null);
   const [registryDocument, setRegistryDocument] = useState<KnowledgeDoc | null>(null);
   const [documentIdentityError, setDocumentIdentityError] = useState("");
@@ -142,6 +143,7 @@ export default function DocTracePage() {
     const loadRunDetail = async (
       options: { expectedTraceId?: string; allowHistoryFallback?: boolean } = {},
       documentIdentity: Promise<KnowledgeDoc | null> = Promise.resolve(null),
+      preloadedRunDetail?: ProcessingRunDetail | null,
     ) => {
       if (!documentIdParam) {
         if (!cancelled) setProcessingRunError("缺少文件 ID，无法核对历史处理记录");
@@ -156,7 +158,8 @@ export default function DocTracePage() {
       let firstError = "";
       if (runIdParam) {
         try {
-          const detail = await knowledgeService.getProcessingRun(documentIdParam, runIdParam);
+          const detail = preloadedRunDetail
+            ?? await knowledgeService.getProcessingRun(documentIdParam, runIdParam);
           const identityError = getProcessingRunDetailError(
             detail, documentIdParam, runIdParam, expectedFileHash, options.expectedTraceId,
           );
@@ -269,6 +272,42 @@ export default function DocTracePage() {
     const loadIdentityAndRunDetail = async (
       options: { expectedTraceId?: string; allowHistoryFallback?: boolean } = {},
     ) => {
+      if (operationParam === "upload" && documentIdParam && runIdParam) {
+        let preloadedRunDetail: ProcessingRunDetail | null = null;
+        try {
+          preloadedRunDetail = await knowledgeService.getProcessingRun(documentIdParam, runIdParam);
+        } catch {
+          // 读取运行失败时沿用文档登记与历史记录回退流程。
+        }
+        if (
+          preloadedRunDetail?.publication_status === "unpublished"
+          && preloadedRunDetail.document_registered === false
+        ) {
+          const identityError = getProcessingRunDetailError(
+            preloadedRunDetail,
+            documentIdParam,
+            runIdParam,
+            fileHashParam,
+            options.expectedTraceId,
+          );
+          const hasSteps = Array.isArray(preloadedRunDetail.steps)
+            && preloadedRunDetail.steps.length > 0;
+          if (!cancelled) {
+            setRegistryDocument(null);
+            setDocumentIdentityError("");
+            setProcessingRun(preloadedRunDetail);
+            setProcessingRunHistoryFallback(false);
+            setProcessingRunError(identityError || (!hasSteps ? "该运行没有保存阶段明细" : ""));
+          }
+          return;
+        }
+        const documentIdentity = loadDocumentIdentity();
+        await Promise.all([
+          documentIdentity,
+          loadRunDetail(options, documentIdentity, preloadedRunDetail),
+        ]);
+        return;
+      }
       const documentIdentity = loadDocumentIdentity();
       await Promise.all([documentIdentity, loadRunDetail(options, documentIdentity)]);
     };
@@ -316,7 +355,7 @@ export default function DocTracePage() {
     })();
 
     return () => { cancelled = true; };
-  }, [id, documentIdParam, documentName, fileHashParam, runIdParam, viewParam]);
+  }, [id, documentIdParam, documentName, fileHashParam, runIdParam, viewParam, operationParam]);
   useEffect(() => { if (!chunkPanelOpen) return; const onKey=(e:KeyboardEvent)=>{if(e.key==="Escape")setChunkPanelOpen(false)}; window.addEventListener("keydown",onKey); return ()=>window.removeEventListener("keydown",onKey); }, [chunkPanelOpen]);
 
   const childSpans = useMemo(() => { if(!trace)return[]; return (trace.spans||[]).filter(s=>s.parent_id!==null).sort((a,b)=>spanOrder(a)-spanOrder(b)); }, [trace]);
@@ -532,6 +571,11 @@ export default function DocTracePage() {
             </p>
           )}
         </section>
+        {processingRun?.status === "failed" && processingRun.error_message && (
+          <div className="mb-3">
+            <ProcessingRunFailureNotice errorMessage={processingRun.error_message} />
+          </div>
+        )}
         <div className="grid grid-cols-4 gap-2 mb-2">
           {[{label:'文件大小',value:overview.fileSize>0?`${(overview.fileSize/1024).toFixed(1)} KB`:'-',sub:`${overview.fileSize} 字节`},{label:'文本分块数',value:overview.chunkCount>0?String(overview.chunkCount):'-',sub:'文本分块数'},{label:'词元数',value:overview.totalTokens>0?overview.totalTokens.toLocaleString():'-',sub:'输入与输出词元数'},{label:'成本',value:traceCost.value,sub:traceCost.detail}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 font-mono">{c.value}</div><div className="text-[9px] text-slate-400">{c.sub}</div></div>))}
         </div>
