@@ -17,7 +17,19 @@ def test_doc_summary_embedding_is_bound_to_processing_run(monkeypatch):
         operation="reindex",
         trace_id="trace-test",
     )
-    recorder = ProcessingRunRecorder(run)
+    class Repository:
+        def __init__(self):
+            self.steps = []
+
+        def create_run(self, _snapshot):
+            pass
+
+        def upsert_stage(self, snapshot):
+            self.steps.append(snapshot)
+
+    repository = Repository()
+    recorder = ProcessingRunRecorder(run, repository)
+    recorder.start()
     seen_bindings = []
 
     class DocStore:
@@ -39,6 +51,25 @@ def test_doc_summary_embedding_is_bound_to_processing_run(monkeypatch):
         ),
     )
 
+    chunk_step, chunk_started_at = recorder.begin_stage(
+        "embedding",
+        role="embedding",
+        engine_type="embedding",
+        model=ModelIdentity(
+            role="embedding",
+            engine_type="embedding",
+            provider="custom-gpu",
+            model_name="bge-m3",
+        ),
+    )
+    recorder.finish_stage(
+        chunk_step,
+        status="success",
+        started_at=chunk_started_at,
+        input_count=2,
+        output_count=2,
+    )
+
     ids = _add_doc_level_vector_with_lineage(
         DocStore(),
         "test summary",
@@ -52,9 +83,14 @@ def test_doc_summary_embedding_is_bound_to_processing_run(monkeypatch):
     assert seen_bindings[0].run_id == run.run_id
     assert seen_bindings[0].step_id
     assert seen_bindings[0].role == "embedding"
-    assert seen_bindings[0].stage == "embedding"
+    assert seen_bindings[0].stage == "document_summary_embedding"
 
-    step = run.snapshot().steps[0]
+    steps = run.snapshot().steps
+    assert {(step.stage, step.attempt_no) for step in repository.steps} == {
+        ("embedding", 1),
+        ("document_summary_embedding", 1),
+    }
+    step = next(step for step in steps if step.stage == "document_summary_embedding")
     assert step.status == "success"
     assert step.provider == "custom-gpu"
     assert step.model_name == "bge-m3"

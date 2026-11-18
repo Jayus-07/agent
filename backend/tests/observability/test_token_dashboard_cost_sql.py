@@ -47,6 +47,16 @@ def test_plan_endpoint_usage_is_separated_from_token_price_estimates():
     assert plan in token_dashboard_classified_call_predicate("usage_row")
 
 
+def test_subscription_plan_wins_over_stale_verified_token_cost():
+    plan = token_dashboard_subscription_billing_predicate("usage_row")
+    verified = token_dashboard_verified_cost_predicate("usage_row")
+    amount = token_dashboard_cost_sql_expr("usage_row")
+
+    plan_guard = f"WHEN ({plan}) THEN NULL"
+    verified_amount = f"WHEN ({verified}) THEN"
+    assert amount.index(plan_guard) < amount.index(verified_amount)
+
+
 def test_local_zero_cost_requires_provider_billing_history_at_event_time():
     local = token_dashboard_local_billing_predicate("usage_row")
     amount = token_dashboard_cost_sql_expr("usage_row")

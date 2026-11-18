@@ -68,6 +68,7 @@ const PROCESSING_STAGE_LABELS: LabelMap = {
   semantic_chunk: '语义切分',
   chunking_llm_fallback: '大模型切分边界兜底',
   embedding: '向量生成',
+  document_summary_embedding: '文档摘要向量',
   vector_write: '写入向量库',
   bm25_write: '写入关键词索引',
   publish: '发布索引',

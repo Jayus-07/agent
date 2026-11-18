@@ -47,6 +47,16 @@ describe("ProcessingRunDetailView", () => {
             group_count: 2,
           },
         },
+        {
+          step_id: "step-3",
+          run_id: "run-1",
+          stage: "document_summary_embedding",
+          status: "success",
+          role: "embedding",
+          model_name: "bge-m3",
+          input_count: 1,
+          output_count: 1,
+        },
       ],
       usage: [],
     };
@@ -63,6 +73,7 @@ describe("ProcessingRunDetailView", () => {
     expect(html).toContain("Trace ID");
     expect(html).toContain("解析文档");
     expect(html).toContain("大模型切分边界兜底");
+    expect(html).toContain("文档摘要向量");
     expect(html).toContain("规则未识别出文档结构");
     expect(html).toContain("已采用");
     expect(html).toContain("输入/输出：145 / 131");

@@ -388,7 +388,7 @@ def _add_doc_level_vector_with_lineage(
     lineage = None
     if lineage_recorder is not None:
         lineage = lineage_recorder.begin_stage(
-            "embedding",
+            "document_summary_embedding",
             role="embedding",
             engine_type="embedding",
             model=_embedding_model_identity(embedding),

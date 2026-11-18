@@ -321,6 +321,54 @@ class TestLLMUsageStorePG:
         assert all(call["cost_status"] in ("", "unpriced") for call in calls["calls"])
         assert all("cost_cny" in call for call in calls["calls"])
 
+    def test_subscription_history_excludes_stale_verified_cost_from_totals(
+        self, _clean_tables
+    ):
+        """调用时按套餐计费时，忽略历史遗留的按量人民币金额。"""
+        from backend.observability.llm_usage_store import get_llm_usage_store
+
+        store = get_llm_usage_store()
+        provider = "pgtest-subscription-overpriced"
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with psycopg2.connect(**OBS_DB_PG_CONFIG) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO llm_config_history (
+                           object_type, object_key, new_value, changed_at
+                       ) VALUES ('provider', %s, %s, %s::timestamptz)""",
+                    (provider, '{"billing":"subscription"}', timestamp),
+                )
+
+        event = _usage_event("pgtid-subscription", ts=timestamp)
+        event.update({
+            "provider": provider,
+            "cost_status": "exact",
+            "billing_schema_version": 2,
+            "billed_cost_cny": 99.0,
+            "pricing_source": "approved_price_table",
+        })
+        try:
+            assert store.record(event) is True
+
+            dashboard = store.dashboard(days=7)
+            assert dashboard["totals"]["subscription_cost_calls"] == 1
+            assert dashboard["totals"]["exact_cost_cny"] == 0
+            assert dashboard["totals"]["cost_cny"] == 0
+            assert dashboard["daily"][0]["cost_cny"] == 0
+            assert dashboard["models"][0]["cost_cny"] == 0
+
+            calls = store.list_calls(days=7)
+            assert calls["calls"][0]["cost_cny"] is None
+            assert calls["calls"][0]["cost_display_status"] == "subscription"
+        finally:
+            with psycopg2.connect(**OBS_DB_PG_CONFIG) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """DELETE FROM llm_config_history
+                           WHERE object_type = 'provider' AND object_key = %s""",
+                        (provider,),
+                    )
+
     def test_dashboard_period_month(self, _clean_tables):
         """M11 尾项：period=month 按自然月分桶（monthly 键），默认 day 零变化。"""
         from backend.observability.llm_usage_store import get_llm_usage_store

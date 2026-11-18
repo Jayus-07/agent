@@ -837,3 +837,12 @@
 - 本轮只做本地代码整合、安装新工作树忽略的依赖和定向测试；没有写共享/生产数据库，没有上传或索引资料，也没有从此整合分支重建/部署本机服务。因此代码行为的共享管理端实机复验仍为 **UNVERIFIED**，PostgreSQL 集成用例也未验收。原四个相关工作树和证据保持未提交；整合分支已提交并推送，PR #481 已创建，当前未合并、未部署。
 - 部署门禁记录：`docker compose ls` 显示共享 `agent` 栈 21 个服务；宿主可用内存 2.88 GiB，Redis、嵌入/重排模型健康，当前 API HTTP 200。未重建的原因不是资源或服务不健康，而是合并分支的维护任务会收口全库超时运行，潜在覆盖 `travel` 等共享知识库；当前没有该共享库的隔离副本与本次改动专用备份/恢复验证。应先在有备份的隔离库验证收口 SQL 和影响范围，再决定是否部署到共享本机栈。
 - PR 首次提交 `820e8e9` 的 GitHub CI：10 个检查中 8 个成功、`frontend-admin-security` 失败、真实 API “RAG Smoke Evaluation (8 cases, real API)” 按工作流配置跳过。安全门禁的 `npm audit` 报高危 `picomatch` ReDoS（[GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)，6 项高危告警）；本 PR 未改 `frontend-admin/package-lock.json`，风险来自基线依赖链。离线 RAG smoke preflight 与独立 8 cases 校验均成功；后者不等于真实 API 检索验收。PR #481 保持 open/blocked，未合并。
+
+## 2026-11-18 — PR #481 审查意见修复与 PostgreSQL 隔离复验
+
+- 修复摘要嵌入与分块嵌入共用 `(run_id, stage, attempt_no)` 唯一键的问题：摘要向量阶段改为 `document_summary_embedding`，管理端 Trace 详情映射为“文档摘要向量”；回归测试证明两条记录使用不同阶段键，均保留各自实际模型与向量计数。
+- 修复 Token 汇总先接受旧 `verified` 按量金额、后识别套餐的顺序错误：套餐判断现在先于已验证按量费用分支；新增真实 PostgreSQL 集成用例，套餐事件即使带旧 `billed_cost_cny=99`，总计、趋势、模型汇总均不计费，明细金额为空并标注套餐。
+- 复验：后端血缘与费用 SQL 定向单测 `6 passed`；隔离 PostgreSQL 可观测存储套件 `17 passed`；管理端 Trace 详情定向测试 `1 file / 6 tests passed`；`npx tsc --noEmit`、`git diff --check` 通过。测试库中的套餐供应商夹具清理后为 0 行；仅保留空的 `pr481_trace_store` 工厂表。
+- PostgreSQL 写入隔离：先对原 `agent_memory` 做只读压缩备份，归档 `D:\tmp\pr481_agent_memory_pretest_20261118.dump`，378,236,417 字节，SHA-256 `3B7DBF59287BF258E1A0B472D90833CBB5F5FD0C1C145549F6D179EE265EF9ED`，`pg_restore --list` 可读、TOC 1,368 项。另创建全新数据库 `agent_memory_pr481_test_20261118`（`template0`），在该库中应用 031/099 迁移后运行集成测试；原 `agent_memory` 未写入，测试库备份为 `D:\tmp\pr481_testdb_pre_migrations_20261118.dump`，SHA-256 `96553E5C37A2AF95D19B40452EDED104174AC9DA49C0AAA933205694FA0A0207`。测试库终态约 9.5 MiB，事件夹具已清除。
+- 当前工作树新增 7 个代码文件改动，另追加本进度记录；尚未提交/推送：后端 2 个实现文件、3 个后端测试文件、管理端 1 个显示映射和 1 个 Trace 详情测试。未执行重建或部署；共享 `agent_memory` 仍约 1,118 MiB。共享 Postgres、Redis、RAG、API 健康；宿主 3.56 GiB 可用内存，`8088/healthz` 返回 ok 且 embedding/reranker 已加载。
+- 安全门禁仍受基线开发依赖 `picomatch@4.0.7` 影响：GitHub 官方告警列出受影响版本 `<=4.0.7`、patched versions `None`；上游发布列表最新仍是 4.0.7。CI 的安全任务失败不是本 PR 引入的依赖差异；`npm audit` 的 Vitest 3.1.4 强制降级提示未作为安全修复。该高危告警及真实 API RAG smoke skipped 已明列；后续只依据 PR 最新 CI、既有风险授权和共享部署影响评估决定合并/部署，不伪报为通过。

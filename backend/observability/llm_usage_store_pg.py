@@ -251,12 +251,14 @@ def token_dashboard_classified_call_predicate(alias: str = "u") -> str:
 
 def token_dashboard_cost_sql_expr(alias: str = "u") -> str:
     """精确费用 + 可信运行估算 + 有来源的历史重算；未知不伪装成 ¥0。"""
+    subscription = token_dashboard_subscription_billing_predicate(alias)
     verified = token_dashboard_verified_cost_predicate(alias)
     historical = token_dashboard_historical_estimate_sql_expr(alias)
     local = token_dashboard_local_billing_predicate(alias)
     local_zero = f"(({local}) AND {alias}.pricing_source = 'local_inference')"
     return (
-        f"CASE WHEN ({verified}) THEN ({cost_cny_sql_expr()}) "
+        f"CASE WHEN ({subscription}) THEN NULL "
+        f"WHEN ({verified}) THEN ({cost_cny_sql_expr()}) "
         f"WHEN ({historical}) IS NOT NULL THEN ({historical}) "
         f"WHEN ({local_zero}) THEN 0 ELSE 0 END"
     )
