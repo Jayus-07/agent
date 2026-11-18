@@ -241,6 +241,8 @@ export function getSystemHealth(): Promise<SystemHealthSnapshot> {
 // ── Token 用量看板 ──────────────────────────────────────
 
 export interface TokenUsageTotals {
+  /** 费用与计价分类口径；前端只展示版本 2 的费用结果。 */
+  cost_classification_version?: number
   requests: number
   calls: number
   prompt_tokens: number
@@ -248,6 +250,30 @@ export interface TokenUsageTotals {
   total_tokens: number
   cached_tokens: number
   reasoning_tokens: number
+  /** 被价格服务标为未计价的调用数；不把未知成本当作零成本。 */
+  unpriced_calls?: number
+  /** 历史账本没有计价状态的调用数。 */
+  missing_cost_status_calls?: number
+  /** 价格表未匹配、只能回退到模型目录估价的调用数。 */
+  unverified_price_calls?: number
+  price_unknown_calls?: number
+  /** 金额未知调用数；不含已单独分类的套餐和本地调用。 */
+  unknown_cost_calls?: number
+  estimated_calls?: number
+  /** 依据可追溯供应商公开价补算的历史调用数。 */
+  historically_estimated_calls?: number
+  /** 运行时曾使用目录回退价的历史调用数。 */
+  registry_fallback_calls?: number
+  /** 调用发生时供应商配置为本地计费的次数。 */
+  local_cost_calls?: number
+  /** 本地调用有记录，但 Token 数为 0 的次数。 */
+  local_usage_missing_calls?: number
+  /** 订阅套餐的 Token 用量；人民币金额需由套餐 AFP/账单明细补齐。 */
+  subscription_cost_calls?: number
+  /** 按量精确计价的调用数（与估算、本地、套餐、未知互斥）。 */
+  exact_calls?: number
+  exact_cost_cny?: number
+  estimated_cost_cny?: number
   /** deprecated（Billing V2 前混算语义）：不再作为展示口径 */
   cost_usd: number
   /** 记账本位币（CNY）合计：V2 行取 billed_cost_cny，唯一展示主口径（2026-10-07） */
@@ -264,6 +290,13 @@ export interface TokenUsageDaily {
   cost_usd: number
   /** 记账本位币（CNY）：唯一展示主口径（2026-10-07） */
   cost_cny: number
+  exact_calls?: number
+  unknown_cost_calls?: number
+  estimated_calls?: number
+  historically_estimated_calls?: number
+  local_cost_calls?: number
+  subscription_cost_calls?: number
+  estimated_cost_cny?: number
 }
 
 export interface TokenUsageByModel {
@@ -276,6 +309,20 @@ export interface TokenUsageByModel {
   total_tokens: number
   cached_tokens: number
   reasoning_tokens: number
+  unpriced_calls?: number
+  missing_cost_status_calls?: number
+  unverified_price_calls?: number
+  price_unknown_calls?: number
+  unknown_cost_calls?: number
+  estimated_calls?: number
+  historically_estimated_calls?: number
+  registry_fallback_calls?: number
+  local_cost_calls?: number
+  local_usage_missing_calls?: number
+  subscription_cost_calls?: number
+  exact_calls?: number
+  exact_cost_cny?: number
+  estimated_cost_cny?: number
   /** deprecated（混算语义） */
   cost_usd: number
   /** 记账本位币（CNY）：唯一展示主口径（2026-10-07） */
@@ -311,8 +358,14 @@ export interface TokenCallRow {
   /** deprecated：原生 USD 金额（Billing V2），仅审计用 */
   cost_usd: number
   /** 记账本位币（CNY）：唯一展示主口径（2026-10-07） */
-  cost_cny?: number
+  cost_cny?: number | null
   cost_status?: string
+  pricing_source?: string
+  /** 管理端安全展示口径；旧账本保留原始字段供排查。 */
+  cost_display_status?: string
+  cost_display_source?: string
+  usage_source?: string
+  billing_schema_version?: number
   price_version?: string
   duration_ms: number
   finish_reason: string

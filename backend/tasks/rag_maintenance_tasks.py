@@ -4,18 +4,61 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.shared.logger import logger
 from backend.tasks.celery_app import celery_app
+
+
+def _reconcile_stale_rag_runs() -> dict[str, Any]:
+    """复核过期索引和处理血缘，分别收口并保留可审计记录。"""
+    from backend.config.tasks import (
+        RAG_INDEX_RUN_STALE_SECONDS,
+        TASK_PENDING_RECOVERY_MAX_AGE_SECONDS,
+    )
+
+    result: dict[str, Any] = {
+        "threshold_seconds": RAG_INDEX_RUN_STALE_SECONDS,
+        "unpublished_threshold_seconds": TASK_PENDING_RECOVERY_MAX_AGE_SECONDS,
+        "index_runs_failed": 0,
+        "processing_runs_failed": 0,
+        "processing_steps_failed": 0,
+        "errors": [],
+    }
+    try:
+        from backend.rag.indexing.index_run_store_pg import get_index_run_store
+
+        failed = get_index_run_store().reconcile_stale_active_runs(
+            stale_after_seconds=RAG_INDEX_RUN_STALE_SECONDS,
+            unpublished_after_seconds=TASK_PENDING_RECOVERY_MAX_AGE_SECONDS)
+        result["index_runs_failed"] = len(failed)
+    except Exception as exc:  # noqa: BLE001 — 独立报告，不阻断文档看门狗
+        result["errors"].append(f"index_runs: {exc}")
+        logger.warning("[RAGMaintenance] 索引运行收口失败: %s", exc)
+
+    try:
+        from backend.rag.indexing.processing_lineage_pg import (
+            get_processing_lineage_repository,
+        )
+
+        counts = get_processing_lineage_repository().fail_stale_running_runs(
+            stale_after_seconds=RAG_INDEX_RUN_STALE_SECONDS)
+        result["processing_runs_failed"] = counts["run_count"]
+        result["processing_steps_failed"] = counts["step_count"]
+    except Exception as exc:  # noqa: BLE001 — 独立报告，不阻断文档看门狗
+        result["errors"].append(f"processing_lineage: {exc}")
+        logger.warning("[RAGMaintenance] 处理血缘收口失败: %s", exc)
+    return result
 
 
 @celery_app.task(name="rag.parsing_timeout_watchdog")
 def parsing_timeout_watchdog() -> dict[str, Any]:
-    """每 15 分钟收敛超过一小时的 parsing 记录，动作幂等且按路径锁定。"""
+    """定期收敛解析超时及长时间没有更新的索引/处理运行。"""
     from backend.config.database import DOC_REGISTRY_PG_CONFIG, DOC_REGISTRY_PG_TABLE
     from backend.infra.db import engine_for
     from backend.observability.metrics import agent_rag_parsing_timeout_total
     from psycopg2 import sql
     from psycopg2.extras import RealDictCursor
 
+    stale_run_result = _reconcile_stale_rag_runs()
     conn = engine_for(DOC_REGISTRY_PG_CONFIG).raw_connection()
     changed = 0
     try:
@@ -56,7 +99,8 @@ def parsing_timeout_watchdog() -> dict[str, Any]:
         conn.close()
     if changed:
         agent_rag_parsing_timeout_total.inc(changed)
-    return {"changed_row_count": changed, "selected_row_count": len(rows)}
+    return {"changed_row_count": changed, "selected_row_count": len(rows),
+            "stale_run_reconciliation": stale_run_result}
 
 
 @celery_app.task(name="rag.index_reconcile")

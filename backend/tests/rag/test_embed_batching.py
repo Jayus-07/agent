@@ -91,6 +91,19 @@ class TestBatchPath:
 
 class TestBatchFallback:
 
+    def test_request_budget_exhaustion_stops_batch_retry_and_fallback(self, patched):
+        from backend.infra.llm.budget import RequestBudgetExceeded
+
+        emb = MagicMock()
+        emb.embed_documents.side_effect = RequestBudgetExceeded("request_tokens")
+        idx = _mk_indexer(emb)
+
+        with pytest.raises(RequestBudgetExceeded, match="request_tokens"):
+            idx._embed_with_retry(_chunks(2), parent_span=None)
+
+        assert emb.embed_documents.call_count == 1
+        assert emb.embed_query.call_count == 0
+
     def test_exhausted_batch_degrades_to_single(self, patched):
         """embed_documents 持续返回非法长度 → 批重试耗尽 → 降级逐条全部成功。
 
@@ -153,6 +166,19 @@ class TestBatchFallback:
 
 
 class TestNoBatchApi:
+
+    def test_request_budget_exhaustion_stops_single_retry(self, patched):
+        from backend.infra.llm.budget import RequestBudgetExceeded
+
+        emb = MagicMock()
+        emb.embed_documents = None
+        emb.embed_query.side_effect = RequestBudgetExceeded("request_tokens")
+        idx = _mk_indexer(emb)
+
+        with pytest.raises(RequestBudgetExceeded, match="request_tokens"):
+            idx._embed_with_retry(_chunks(1), parent_span=None)
+
+        assert emb.embed_query.call_count == 1
 
     def test_embedding_without_embed_documents_uses_single_path(self, patched):
         """仅有 embed_query 的实现（如 e2e FakeEmbedding）→ 逐条路径。"""

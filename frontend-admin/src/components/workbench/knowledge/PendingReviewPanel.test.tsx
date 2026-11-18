@@ -17,12 +17,14 @@ beforeEach(() => {
       id: 'pending-1',
       doc_id: 'doc-1',
       file_name: '制度文档.pdf',
-      doc_type: 'policy',
-      business_domain: 'general',
+      doc_type: 'travel_guide',
+      business_domain: 'travel',
       confidence: 0.91,
-      kb_id: 'policy_general',
+      kb_id: 'travel',
       summary: '待审核制度',
       quality_score: 88,
+      quality_status: 'pass',
+      quality_issues: 'filtered_chunks:14(low_chinese_ratio=13,duplicate=1)',
       updated_at: '2026-10-02 15:00:00',
     }],
     total: 1,
@@ -50,6 +52,14 @@ describe('PendingReviewPanel', () => {
 
     expect(container.querySelector('[data-role-gate]')).not.toBeNull()
     expect(container.textContent).toContain('制度文档.pdf')
+    expect(container.textContent).toContain('旅游知识库')
+    expect(container.textContent).toContain('文档类型： 旅游指南')
+    expect(container.textContent).toContain('业务领域： 旅游')
+    expect(container.textContent).toContain('分类置信度： 91%')
+    expect(container.textContent).toContain('质量状态： 检查通过')
+    expect(container.textContent).toContain('过滤了 14 个分块：中文内容占比偏低 13、内容重复 1')
+    expect(container.textContent).not.toContain('travel_guide')
+    expect(container.textContent).not.toContain('business_domain')
   })
 
   it('孤立知识库记录只允许归档，不显示批准按钮', async () => {
@@ -66,6 +76,7 @@ describe('PendingReviewPanel', () => {
         updated_at: '2026-11-13 10:00:00',
         orphaned_kb: true,
         orphan_reason: '知识库目录中没有此标识',
+        quality_status: 'unknown',
       }],
       total: 1,
     })

@@ -969,6 +969,27 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             )
             return len(cur.fetchall())
 
+    def update_metadata_by_ids(
+        self, ids: list[str], metadata_update: dict,
+    ) -> int:
+        """按明确的向量 ID 更新 metadata，不触及同文档历史版本。"""
+        vector_ids = [str(item) for item in ids or [] if str(item)]
+        if not vector_ids:
+            return 0
+        cleaned = _sanitize_metadata(metadata_update)
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE {self._table} SET metadata = metadata || %s::jsonb "
+                f"WHERE collection = %s AND id = ANY(%s) RETURNING id",
+                (
+                    json.dumps(cleaned, ensure_ascii=False),
+                    self._collection,
+                    vector_ids,
+                ),
+            )
+            return len(cur.fetchall())
+
     def promote_collection(self, source_collection: str) -> int:
         """候选 collection → 主 collection 的发布晋级（单语句原子）。
 

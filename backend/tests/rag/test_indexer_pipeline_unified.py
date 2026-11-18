@@ -39,6 +39,17 @@ def test_indexer_no_raw_docs_variable():
     )
 
 
+def test_chunk_quality_status_uses_current_index_result():
+    """Chunk 质量状态不能复用重解析前 Registry 的旧值。"""
+    source = inspect.getsource(IncrementalIndexer._index_file_inner)
+    stale_registry_copy = (
+        'quality_status = str(doc_row.get("quality_status") or "unknown")'
+    )
+    assert 'ch.metadata["quality_status"] = str(' in source
+    assert 'doc_meta.get("quality_status") or "unknown"' in source
+    assert stale_registry_copy not in source
+
+
 def test_indexer_supported_exts_includes_pdf_docx():
     """indexer 扫描白名单必须包含 pdf/docx（否则增量索引跳过 PDF/DOCX 文档）。
 

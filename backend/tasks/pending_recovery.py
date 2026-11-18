@@ -35,6 +35,7 @@ EVENT_PUBLISHED = "pending_recovery_published"
 EVENT_PUBLISH_FAILED = "pending_recovery_publish_failed"
 EVENT_SKIPPED_NOT_BEFORE = "pending_recovery_skipped_not_before"
 EVENT_EXHAUSTED = "pending_recovery_exhausted"
+EVENT_EXPIRED = "pending_delivery_expired"
 
 
 def recover_stale_pending_tasks(*, limit: int | None = None,
@@ -57,7 +58,8 @@ def recover_stale_pending_tasks(*, limit: int | None = None,
     from backend.services import task_service
 
     if not _enabled():
-        return {"ok": True, "enabled": False, "claimed": 0, "published": 0,
+        return {"ok": True, "enabled": False, "expired": 0,
+                "claimed": 0, "published": 0,
                 "publish_failed": 0, "exhausted": 0, "skipped": 0}
 
     limit = int(limit or TASK_PENDING_RECOVERY_BATCH_SIZE)
@@ -66,6 +68,21 @@ def recover_stale_pending_tasks(*, limit: int | None = None,
     max_count = int(max_recovery_count or TASK_PENDING_RECOVERY_MAX_COUNT)
     max_age = int(max_age_seconds or TASK_PENDING_RECOVERY_MAX_AGE_SECONDS)
 
+    # 超过恢复期限且没有任何入队/执行凭据的任务不再盲目复活。
+    # 通过终态收口阻止潜在迟到消息执行，同时保留可见的失败原因。
+    expired_ids = task_service.expire_abandoned_pending_without_dispatch(
+        max_age_seconds=max_age, limit=limit)
+    from backend.tasks.task_manager import dispatch_task, publish_event
+
+    for task_id in expired_ids:
+        publish_event(
+            task_id, "cancelled", node="queued",
+            error_type="PENDING_DELIVERY_EXPIRED",
+            message="任务超过自动恢复期限且没有入队回执；系统已停止自动执行，请重新提交。",
+        )
+        logger.warning("event=%s task_id=%s", EVENT_EXPIRED, task_id)
+        _record_recovery_metric("pending_expired")
+
     # 候选查询带 count<max 过滤；超限行走独立收口查询（max_recovery_count=None）。
     # 候选批为空不能提前 return——超限收口仍需每轮检查（避免超限行因候选
     # 批长期为空而永远得不到终态收口）。
@@ -73,8 +90,6 @@ def recover_stale_pending_tasks(*, limit: int | None = None,
         threshold_seconds=threshold, cooldown_seconds=cooldown,
         max_age_seconds=max_age, limit=limit,
         max_recovery_count=max_count)
-
-    from backend.tasks.task_manager import dispatch_task
 
     claimed = published = publish_failed = skipped = exhausted = 0
     for task_id in candidate_ids:
@@ -138,7 +153,8 @@ def recover_stale_pending_tasks(*, limit: int | None = None,
                            EVENT_EXHAUSTED, task_id, max_count)
             _record_recovery_metric("pending_exhausted")
 
-    return {"ok": True, "enabled": True, "candidates": len(candidate_ids),
+    return {"ok": True, "enabled": True, "expired": len(expired_ids),
+            "candidates": len(candidate_ids),
             "claimed": claimed, "published": published,
             "publish_failed": publish_failed, "exhausted": exhausted,
             "skipped": skipped}

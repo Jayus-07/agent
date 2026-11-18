@@ -38,7 +38,7 @@ class _Exec:
 
 
 class _PricingSession:
-    """记录 SQL 的假会话；model_price 当前价查询按 dimension 分派。"""
+    """记录 SQL 的假会话；当前有效价按 dimension 分派。"""
 
     def __init__(self, current_prices: dict[str, str] | None = None):
         self.current_prices = current_prices or {}
@@ -49,10 +49,14 @@ class _PricingSession:
         sql = str(statement)
         self.statements.append(sql)
         self.params.append(dict(params or {}))
-        if "SELECT price_per_unit FROM model_price" in sql:
+        if "FROM model_price AS p" in sql:
             dim = dict(params or {}).get("dimension", "")
             current = self.current_prices.get(dim)
-            return _Exec([{"price_per_unit": current}] if current else [])
+            if current is None:
+                return _Exec([])
+            if not isinstance(current, dict):
+                current = {"price_per_unit": current, "currency": "CNY"}
+            return _Exec([current])
         return _Exec([])
 
     async def commit(self):
@@ -105,13 +109,69 @@ async def test_llm_prices_write_catalog_and_effective_rows():
 
 @pytest.mark.asyncio
 async def test_unchanged_price_skips_close_and_insert():
-    session = _PricingSession(current_prices={"input": "0.125000000", "output": "0.500000000"})
+    session = _PricingSession(current_prices={
+        "input": {"price_per_unit": "0.125000000", "currency": "CNY"},
+        "output": {"price_per_unit": "0.500000000", "currency": "CNY"},
+    })
     await _run(session, input_price=Decimal("0.125"), output_price=Decimal("0.5"))
 
     joined = "\n".join(session.statements)
     assert "UPDATE llm_models SET pricing" in joined  # 展示价照常刷新
     assert "UPDATE model_price SET effective_to = now()" not in joined
     assert "INSERT INTO model_price" not in joined
+
+
+@pytest.mark.asyncio
+async def test_llm_cache_read_price_is_published_and_can_be_cleared():
+    session = _PricingSession()
+    await _run(
+        session,
+        input_price=Decimal("0.2"), output_price=Decimal("2"),
+        cached_input_price=Decimal("0.04"),
+    )
+
+    cache_insert = next(
+        params for params in session.params
+        if params.get("dimension") == "cache_read" and "version" in params
+    )
+    assert Decimal(str(cache_insert["price"])) == Decimal("0.04")
+    assert cache_insert["currency"] == "CNY"
+
+    current = _PricingSession(current_prices={
+        "input": {"price_per_unit": "0.2", "currency": "CNY"},
+        "output": {"price_per_unit": "2", "currency": "CNY"},
+        "cache_read": {"price_per_unit": "0.04", "currency": "CNY"},
+    })
+    await _run(
+        current,
+        input_price=Decimal("0.2"), output_price=Decimal("2"),
+        cached_input_price=None,
+    )
+    assert sum("UPDATE model_price SET effective_to = now()" in sql for sql in current.statements) == 1
+    assert not any("INSERT INTO model_price" in sql for sql in current.statements)
+
+
+@pytest.mark.asyncio
+async def test_same_numeric_price_with_wrong_currency_republishes_effective_rows():
+    """同金额但币种不同不能被当成同一价格；失效版本也不能阻止重新发布。"""
+    session = _PricingSession(current_prices={
+        "input": {"price_per_unit": "0.200000", "currency": "CNY"},
+        "output": {"price_per_unit": "2.000000", "currency": "CNY"},
+    })
+    await _run(
+        session,
+        input_price=Decimal("0.2"),
+        output_price=Decimal("2"),
+        price_currency="USD",
+    )
+
+    joined = "\n".join(session.statements)
+    assert "v.status = 'active'" in joined
+    assert joined.count("UPDATE model_price SET effective_to = now()") == 2
+    assert joined.count("INSERT INTO model_price") == 2
+    inserted = [p for p in session.params if p.get("operator") == "user:test-admin"]
+    assert len(inserted) == 2
+    assert all(p["currency"] == "USD" for p in inserted)
 
 
 @pytest.mark.asyncio

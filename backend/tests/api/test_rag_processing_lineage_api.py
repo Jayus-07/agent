@@ -34,6 +34,11 @@ class _Registry:
         return {"doc_id": doc_id, "status": "active"}
 
 
+class _CandidateRegistry:
+    def get_by_doc_id(self, _doc_id):
+        return None
+
+
 def test_processing_lineage_routes_return_runs_and_detail(monkeypatch):
     app = FastAPI()
     app.include_router(rag_documents.router)
@@ -58,6 +63,121 @@ def test_processing_lineage_routes_return_runs_and_detail(monkeypatch):
 
     assert runs["items"][0]["run_id"] == "run-1"
     assert detail["run_id"] == "run-1"
+
+
+def test_unpublished_candidate_run_detail_is_authorized_and_labeled(monkeypatch):
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+    app.dependency_overrides[require_rag_user] = lambda: _Identity()
+    authz = SimpleNamespace(
+        principal=SimpleNamespace(tenant_id="tenant-a"),
+        kb_scope={"kb-test"},
+        can_read_row=lambda row: row.get("kb_id") == "kb-test",
+    )
+
+    async def _require_authz(_request):
+        return authz
+
+    captured = {}
+
+    class _CandidateRepository:
+        def get_candidate_run_scope(self, doc_id, run_id, **kwargs):
+            captured["scope"] = (doc_id, run_id, kwargs)
+            return {
+                "run_id": run_id,
+                "doc_id": doc_id,
+                "file_hash": "a" * 64,
+                "trace_id": "trace-1",
+                "kb_id": "kb-test",
+                "tenant_id": "tenant-a",
+                "department": "general",
+                "permission_scope": "general",
+            }
+
+        def get_run_detail(self, doc_id, run_id):
+            captured["detail"] = (doc_id, run_id)
+            return {
+                "run_id": run_id,
+                "doc_id": doc_id,
+                "file_hash": "a" * 64,
+                "trace_id": "trace-1",
+                "steps": [],
+            }
+
+    monkeypatch.setattr(rag_documents, "_require_authz", _require_authz)
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: _CandidateRegistry())
+    monkeypatch.setattr(
+        rag_documents,
+        "get_processing_lineage_repository",
+        lambda: _CandidateRepository(),
+    )
+    monkeypatch.setattr(
+        "backend.observability.llm_usage_store.get_llm_usage_store",
+        lambda: SimpleNamespace(by_processing_run=lambda _run_id: []),
+    )
+    client = TestClient(app)
+
+    response = client.get("/documents/doc-1/processing-runs/run-1")
+
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail["publication_status"] == "unpublished"
+    assert detail["document_registered"] is False
+    assert detail["file_hash"] == "a" * 64
+    assert detail["trace_id"] == "trace-1"
+    assert detail["kb_id"] == "kb-test"
+    assert captured["scope"] == (
+        "doc-1",
+        "run-1",
+        {"tenant_id": "tenant-a", "kb_ids": ["kb-test"]},
+    )
+    assert captured["detail"] == ("doc-1", "run-1")
+
+
+def test_unpublished_candidate_run_detail_hides_out_of_scope_candidate(monkeypatch):
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+    app.dependency_overrides[require_rag_user] = lambda: _Identity()
+    authz = SimpleNamespace(
+        principal=SimpleNamespace(tenant_id="tenant-a"),
+        kb_scope={"kb-visible"},
+        can_read_row=lambda _row: False,
+    )
+
+    async def _require_authz(_request):
+        return authz
+
+    class _CandidateRepository:
+        def get_candidate_run_scope(self, _doc_id, _run_id, **_kwargs):
+            return {
+                "run_id": "run-1",
+                "doc_id": "doc-1",
+                "kb_id": "kb-hidden",
+                "tenant_id": "tenant-a",
+            }
+
+        def get_run_detail(self, *_args):
+            raise AssertionError("未授权运行不得读取详情")
+
+    monkeypatch.setattr(rag_documents, "_require_authz", _require_authz)
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: _CandidateRegistry())
+    monkeypatch.setattr(
+        rag_documents,
+        "get_processing_lineage_repository",
+        lambda: _CandidateRepository(),
+    )
+    monkeypatch.setattr(
+        "backend.observability.llm_usage_store.get_llm_usage_store",
+        lambda: SimpleNamespace(by_processing_run=lambda _run_id: []),
+    )
+    client = TestClient(app)
+
+    response = client.get("/documents/doc-1/processing-runs/run-1")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "doc_id": "doc-1", "run_id": "run-1", "error": "文档不存在",
+    }
 
 
 def test_llm_chunking_fallback_stats_route_uses_visible_scope(monkeypatch):

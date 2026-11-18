@@ -371,20 +371,42 @@ export default function DocTracePage() {
   const traceDocumentId = trace ? getTraceDocumentId(trace) : null;
   const traceKnowledgeBaseId = trace?.tags?.kb_id || "";
   const traceSla = trace?.sla;
+  const isUnpublishedCandidate = Boolean(
+    processingRun?.publication_status === "unpublished"
+    && processingRun?.document_registered === false,
+  );
   const registryKnowledgeBaseId = registryDocument?.kb_id || "";
-  const knowledgeBaseIdentityError = !traceKnowledgeBaseId && !registryKnowledgeBaseId
+  const expectedKnowledgeBaseId = registryKnowledgeBaseId
+    || (isUnpublishedCandidate ? String(processingRun?.kb_id || "") : "");
+  const knowledgeBaseIdentityError = !traceKnowledgeBaseId && !expectedKnowledgeBaseId
     ? "Trace 与文档登记均未记录知识库 ID，无法确认所属知识库"
     : !traceKnowledgeBaseId
       ? "Trace 未记录知识库 ID，无法与文档登记核对"
-      : !registryKnowledgeBaseId
-        ? "文档登记未记录知识库 ID，无法与 Trace 核对"
-        : traceKnowledgeBaseId !== registryKnowledgeBaseId
-          ? "Trace 知识库 ID 与文档登记不一致"
+      : !expectedKnowledgeBaseId
+        ? "文档登记或处理运行未记录知识库 ID，无法与 Trace 核对"
+        : traceKnowledgeBaseId !== expectedKnowledgeBaseId
+          ? "Trace 知识库 ID 与文档登记或处理运行不一致"
           : "";
   const registryFileHash = String(
     registryDocument?.file_hash || registryDocument?.hash || registryDocument?.sha256 || "",
   );
-  const identityVerified = Boolean(
+  const candidateIdentityVerified = Boolean(
+    isUnpublishedCandidate
+    && processingRun
+    && !processingRunError
+    && (!runIdParam || processingRun.run_id === runIdParam)
+    && processingRun.trace_id === trace?.id
+    && fileHashParam
+    && String(processingRun.file_hash || "").toLowerCase() === fileHashParam.toLowerCase()
+    && documentIdParam
+    && processingRun.doc_id === documentIdParam
+    && traceDocumentId === documentIdParam
+    && trace?.id === id
+    && processingRun.kb_id
+    && processingRun.kb_id === traceKnowledgeBaseId
+    && !knowledgeBaseIdentityError,
+  );
+  const registeredDocumentIdentityVerified = Boolean(
     registryDocument
     && !documentIdentityError
     && processingRun
@@ -400,6 +422,7 @@ export default function DocTracePage() {
     && trace?.id === id
     && !knowledgeBaseIdentityError,
   );
+  const identityVerified = candidateIdentityVerified || registeredDocumentIdentityVerified;
   const registryDocumentName = registryDocument?.file_name || registryDocument?.name || "";
   const traceDocumentTitle = registryDocumentName
     || documentName
@@ -407,13 +430,13 @@ export default function DocTracePage() {
   const identityRows = [
     { label: "文件名", value: traceDocumentTitle, source: registryDocumentName ? "项目文档登记" : documentName ? "入口参数，未核验" : "未记录" },
     { label: "文档编号", value: traceDocumentId || "追踪记录未记录" },
-    { label: "文档登记编号", value: registryDocument?.doc_id || registryDocument?.id || "未核验" },
+    { label: "文档登记编号", value: registryDocument?.doc_id || registryDocument?.id || (isUnpublishedCandidate ? "未登记（失败未发布）" : "未核验") },
     { label: "知识库编号", value: traceKnowledgeBaseId || "追踪记录未记录" },
-    { label: "文档登记知识库编号", value: registryKnowledgeBaseId || "未核验" },
+    { label: "文档登记知识库编号", value: registryKnowledgeBaseId || (isUnpublishedCandidate ? "未登记（失败未发布）" : "未核验") },
     { label: "处理追踪编号", value: trace?.id || "追踪记录未记录" },
     { label: "处理运行编号", value: processingRun?.run_id || (runIdParam ? "未核验" : "未记录") },
     { label: "文件 SHA-256", value: processingRun?.file_hash || fileHashParam || registryFileHash || "未记录" },
-    { label: "文档登记 SHA-256", value: registryFileHash || "未核验" },
+    { label: "文档登记 SHA-256", value: registryFileHash || (isUnpublishedCandidate ? "未登记（失败未发布）" : "未核验") },
     { label: "处理操作", value: getOperationLabel(processingRun?.operation) },
     { label: "处理状态", value: processingRun ? getProcessingStatusLabel(processingRun.status) : (runIdParam ? "未核验" : "未记录") },
     { label: "处理开始", value: processingRun?.started_at ? formatTime(processingRun.started_at) : "未记录" },
@@ -423,10 +446,12 @@ export default function DocTracePage() {
     { label: "服务时限判定", value: !traceSla ? "不判定" : traceSla.breached === null ? "尚未评估" : traceSla.breached ? "已超限" : "未超限" },
   ];
   const identityWarnings = [
-    documentIdentityError,
+    isUnpublishedCandidate ? "" : documentIdentityError,
     processingRunError,
     knowledgeBaseIdentityError,
-    !fileHashParam && !registryFileHash ? "入口与文档登记均未提供文件 SHA-256，无法核对文件版本" : "",
+    isUnpublishedCandidate
+      ? (!fileHashParam ? "失败入口未提供文件 SHA-256，无法核对文件版本" : "")
+      : (!fileHashParam && !registryFileHash ? "入口与文档登记均未提供文件 SHA-256，无法核对文件版本" : ""),
   ]
     .filter(Boolean);
   const handleOpenChunkDetail = async () => { if(!docId)return; setChunkPanelOpen(true);setChunkDetailLoading(true);setChunkDetailError(""); try{const res=await knowledgeService.getChunkDetail(docId); setChunkDetailData((res as any)?.chunks??(res as any)?.data?.chunks??[]);}catch(e){setChunkDetailError(getAdminErrorLabel((e as Error).message));}finally{setChunkDetailLoading(false);} };
@@ -489,7 +514,7 @@ export default function DocTracePage() {
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 id="trace-identity-heading" className="text-xs font-medium text-slate-600">文件与处理身份</h2>
             <span role="status" className={`rounded px-2 py-1 text-[10px] font-semibold ${identityVerified ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>
-              {identityVerified ? "身份核验通过" : "身份未核验"}
+              {identityVerified ? (isUnpublishedCandidate ? "身份核验通过（未发布）" : "身份核验通过") : "身份未核验"}
             </span>
           </div>
           <dl className="grid grid-cols-1 gap-x-5 gap-y-3 sm:grid-cols-2">

@@ -54,7 +54,11 @@ export default function ProcessingRunDetailView({
   const registryFileHash = String(
     registryDocument?.file_hash || registryDocument?.hash || registryDocument?.sha256 || "",
   );
-  const runIdentityVerified = Boolean(
+  const unpublishedCandidate = Boolean(
+    detail.publication_status === "unpublished"
+    && detail.document_registered === false,
+  );
+  const registeredRunIdentityVerified = Boolean(
     expectedDocId
     && detail.doc_id === expectedDocId
     && registryDocId === expectedDocId
@@ -65,13 +69,22 @@ export default function ProcessingRunDetailView({
     && !registryIdentityError
     && !runIdentityError,
   );
+  const unpublishedRunIdentityVerified = Boolean(
+    unpublishedCandidate
+    && expectedDocId
+    && detail.doc_id === expectedDocId
+    && expectedFileHash
+    && String(detail.file_hash || "").toLowerCase() === expectedFileHash.toLowerCase()
+    && !runIdentityError,
+  );
+  const runIdentityVerified = registeredRunIdentityVerified || unpublishedRunIdentityVerified;
   const identityWarnings = [
-    registryIdentityError,
+    unpublishedCandidate ? "" : registryIdentityError,
     runIdentityError,
     !expectedDocId ? "入口未提供文档 ID" : "",
     !expectedFileHash ? "入口未提供文件 SHA-256，无法核对版本" : "",
-    !registryName ? "文档登记未提供可核对的文件名" : "",
-    !registryFileHash ? "文档登记未记录文件 SHA-256" : "",
+    !registryName && !unpublishedCandidate ? "文档登记未提供可核对的文件名" : "",
+    !registryFileHash && !unpublishedCandidate ? "文档登记未记录文件 SHA-256" : "",
   ].filter(Boolean);
 
   return (
@@ -83,9 +96,13 @@ export default function ProcessingRunDetailView({
           </button>
         )}
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <div className="text-sm font-semibold text-amber-900">处理运行记录（非 Trace）</div>
+          <div className="text-sm font-semibold text-amber-900">
+            {unpublishedCandidate ? "处理运行记录（未发布）" : "处理运行记录（非 Trace）"}
+          </div>
           <p className="mt-1 text-xs leading-relaxed text-amber-800">
-            这是数据库保存的处理运行和阶段记录，用来补看未持久化或已过期的 Trace。它不包含未保存的 Span，不能据此还原 Trace 中没有记录的内容。
+            {unpublishedCandidate
+              ? "本次处理没有发布活动文档；页面用运行记录里的文档 ID 与文件 SHA-256 核验来源。"
+              : "这是数据库保存的处理运行和阶段记录，用来补看未持久化或已过期的 Trace。它不包含未保存的 Span，不能据此还原 Trace 中没有记录的内容。"}
           </p>
         </div>
 
@@ -109,18 +126,20 @@ export default function ProcessingRunDetailView({
                 ? "bg-emerald-50 text-emerald-700"
                 : "bg-amber-50 text-amber-800"}`}
             >
-              {runIdentityVerified ? "文件与运行身份核验通过" : "文件身份未核验"}
+              {runIdentityVerified
+                ? (unpublishedCandidate ? "运行身份核验通过（未发布）" : "文件与运行身份核验通过")
+                : "文件身份未核验"}
             </span>
           </div>
           <dl className="grid grid-cols-1 gap-x-5 gap-y-3 sm:grid-cols-2">
             {[
-              ["文档登记文件名", registryName || "未核验"],
+              ["文档登记文件名", registryName || (unpublishedCandidate ? "未登记（未发布）" : "未核验")],
               ["入口文件名", documentName || "未记录"],
               ["入口文档 ID", expectedDocId || "未记录"],
-              ["登记文档 ID", registryDocId || "未核验"],
+              ["登记文档 ID", registryDocId || (unpublishedCandidate ? "未登记（未发布）" : "未核验")],
               ["运行文档 ID", detail.doc_id || "未记录"],
               ["入口文件 SHA-256", expectedFileHash || "未记录"],
-              ["登记文件 SHA-256", registryFileHash || "未核验"],
+              ["登记文件 SHA-256", registryFileHash || (unpublishedCandidate ? "未登记（未发布）" : "未核验")],
               ["运行文件 SHA-256", detail.file_hash || "未记录"],
             ].map(([label, value]) => (
               <div key={label} className="min-w-0">

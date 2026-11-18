@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { ChevronLeft, ChevronRight, RefreshCw, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
 import { useToast } from '@/components/shared/Toast'
 import { knowledgeService, OperationLog, type ActiveUploadOperation, type OperationType } from '@/api/knowledge'
+import { getAdminErrorLabel, getDocumentTypeLabel } from '@/lib/knowledge-display'
 
 /** 操作徽章配置 */
 const OPERATION_CONFIG: Record<string, { label: string; className: string }> = {
@@ -19,6 +20,12 @@ const RESULT_CONFIG: Record<string, { label: string; className: string }> = {
   partial: { label: '部分清理异常', className: 'bg-amber-50 text-amber-600' },
   failed: { label: '失败', className: 'bg-red-50 text-red-600' },
   unknown: { label: '状态待核对', className: 'bg-amber-50 text-amber-700' },
+}
+
+function operatorLabel(userId?: string): string {
+  if (!userId || userId === 'anonymous') return '操作者未记录'
+  if (userId === 'system') return '系统任务'
+  return `用户 ${userId}`
 }
 
 function getOperationTraceHref(op: OperationLog): string {
@@ -132,21 +139,39 @@ export default function OperationsPanel() {
     }
   }, [operation, page, pageSize])
 
+  const liveActiveUploadCount = activeUploads.filter(item => !item.stale).length
+  const staleActiveUploadCount = activeUploads.length - liveActiveUploadCount
+
   useEffect(() => {
     void fetchOps()
     return () => { latestFetchIdRef.current += 1 }
   }, [fetchOps])
 
   useEffect(() => {
-    const intervalMs = activeUploads.length > 0 ? 3000 : 10000
-    const timer = window.setInterval(() => void fetchOps(false), intervalMs)
+    const intervalSeconds =
+      liveActiveUploadCount > 0 ? 3 : staleActiveUploadCount > 0 ? 30 : 10
+    const timer = window.setInterval(
+      () => void fetchOps(false), intervalSeconds * 1000)
     return () => window.clearInterval(timer)
-  }, [activeUploads.length, fetchOps])
+  }, [liveActiveUploadCount, staleActiveUploadCount, fetchOps])
+
+  const formatInactiveDuration = (seconds: number | null) => {
+    if (seconds === null) return '时间未知'
+    if (seconds < 3600) return `${Math.max(1, Math.floor(seconds / 60))} 分钟`
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时`
+    return `${Math.floor(seconds / 86400)} 天`
+  }
 
   const activeStatusLabel = (status: string, stage: string) => {
     if (status === 'claimed') return '排队中'
     if (status === 'publishing') return '正在发布'
-    if (status === 'indexing') return stage ? `处理中 · ${stage}` : '索引处理中'
+    if (status === 'indexing') {
+      const stageLabels: Record<string, string> = {
+        index: '知识索引', embedding: '向量生成', metadata: '元数据处理',
+        publish: '发布', duplicate: '重复检查',
+      }
+      return stage ? `处理中 · ${stageLabels[stage] || '知识索引'}` : '索引处理中'
+    }
     return status || '处理中'
   }
 
@@ -155,9 +180,9 @@ export default function OperationsPanel() {
   /** 格式化耗时 */
   const formatDuration = (ms: number) => {
     if (!ms || ms <= 0) return '-'
-    if (ms < 1000) return `${ms}ms`
-    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
-    return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`
+    if (ms < 1000) return `${Math.round(ms)} 毫秒`
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)} 秒`
+    return `${Math.floor(ms / 60000)} 分 ${Math.round((ms % 60000) / 1000)} 秒`
   }
 
   /** 格式化来源：提取可读信息 */
@@ -169,7 +194,7 @@ export default function OperationsPanel() {
       const ip = parts[0]
       const ua = parts.slice(1).join(' | ')
       // 常见 UA 简化
-      const client = ua.includes('curl') ? 'API' : ua.includes('Mozilla') ? 'Web' : ua.slice(0, 20)
+      const client = ua.includes('curl') ? '接口' : ua.includes('Mozilla') ? '管理端' : '其他客户端'
       return `${ip} · ${client}`
     }
     return source.slice(0, 30)
@@ -188,12 +213,15 @@ export default function OperationsPanel() {
     const obj = parseDetail(detail)
     if (!obj) return null
     if (obj.operation_state === 'unknown') {
-      return { text: `删除状态待核对：${obj.error || '服务端未确认结果'}`, type: 'warning' as const }
+      const detail = obj.error ? getAdminErrorLabel(String(obj.error)) : '服务端未确认结果'
+      return { text: `删除状态待核对：${detail}`, type: 'warning' as const }
     }
     if (Array.isArray(obj.warnings) && obj.warnings.length) {
       return { text: `部分清理异常：${obj.warnings.join('；')}`, type: 'warning' as const }
     }
-    if (obj.error) return { text: `错误: ${obj.error}`, type: 'error' as const }
+    if (obj.error) {
+      return { text: `处理失败：${getAdminErrorLabel(String(obj.error))}`, type: 'error' as const }
+    }
     if (obj.duplicate) return { text: '已存在，跳过索引', type: 'duplicate' as const }
     // 删除操作：只含 file_path，提取文件名展示
     if (obj.file_path && Object.keys(obj).length <= 2) {
@@ -201,7 +229,7 @@ export default function OperationsPanel() {
       return { text: `已删除: ${fname}`, type: 'normal' as const, doc_type: '', llm_used: false, confidence: undefined }
     }
     const parts: string[] = []
-    if (obj.chunk_count !== undefined) parts.push(`Chunks: ${obj.chunk_count}`)
+    if (obj.chunk_count !== undefined) parts.push(`分块：${obj.chunk_count}`)
     return {
       text: parts.join(' · ') || JSON.stringify(obj).slice(0, 100),
       type: 'normal' as const,
@@ -222,12 +250,12 @@ export default function OperationsPanel() {
       <div className="flex items-center gap-1.5 flex-wrap">
         {info.doc_type && info.doc_type !== 'general' && (
           <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 shrink-0">
-            {info.doc_type}
+            {getDocumentTypeLabel(info.doc_type)}
           </span>
         )}
         {info.llm_used && (
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-50 text-violet-600 shrink-0" title="已调用 LLM 提取关键词">
-            🔮LLM
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-50 text-violet-600 shrink-0" title="已调用大模型提取关键词">
+            🔮大模型
           </span>
         )}
         <span className="text-text-muted text-[11px]">{info.text}</span>
@@ -259,22 +287,41 @@ export default function OperationsPanel() {
         </div>
 
         {(operation === '' || operation === 'upload') && activeUploads.length > 0 && (
-          <section className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 p-4" aria-label="正在处理的上传任务">
+          <section className={`mb-4 rounded-xl border p-4 ${staleActiveUploadCount > 0 ? 'border-amber-200 bg-amber-50/70' : 'border-blue-200 bg-blue-50/60'}`} aria-label="后台上传任务状态">
             <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-blue-800">处理中 · {activeUploads.length} 个上传任务</h3>
-              <span className="text-[10px] text-blue-600">每 {activeUploads.length > 0 ? '3' : '10'} 秒自动刷新</span>
+              <h3 className={`text-xs font-semibold ${staleActiveUploadCount > 0 ? 'text-amber-800' : 'text-blue-800'}`}>
+                {liveActiveUploadCount > 0 && staleActiveUploadCount > 0
+                  ? `处理中 ${liveActiveUploadCount} 个；另有 ${staleActiveUploadCount} 个状态待核对`
+                  : liveActiveUploadCount > 0
+                    ? `处理中 · ${liveActiveUploadCount} 个上传任务`
+                    : `状态待核对 · ${staleActiveUploadCount} 个长时间未更新任务`}
+              </h3>
+              <span className={`text-[10px] ${staleActiveUploadCount > 0 ? 'text-amber-700' : 'text-blue-600'}`}>
+                {liveActiveUploadCount > 0
+                  ? '活跃任务每 3 秒刷新'
+                  : staleActiveUploadCount > 0
+                    ? '仅收口可确认过期的运行，不会盲目重放；页面每 30 秒复核'
+                    : '操作记录每 10 秒刷新'}
+              </span>
             </div>
             <div className="space-y-2">
               {activeUploads.map(item => (
                 <div key={item.upload_id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-lg bg-white/80 px-3 py-2 text-[11px]">
                   <div className="min-w-0">
                     <span className="font-medium text-text-primary">{item.doc_name || '未命名文件'}</span>
-                    <span className="ml-2 text-blue-700">{activeStatusLabel(item.status, item.stage)}</span>
+                    <span className={`ml-2 ${item.stale ? 'text-amber-700' : 'text-blue-700'}`}>
+                      {item.stale
+                        ? item.inactive_seconds === null
+                          ? '状态待核对 · 更新时间缺失'
+                          : '状态待核对 · 已 ' + formatInactiveDuration(item.inactive_seconds) +
+                            '未更新（提醒阈值 ' + formatInactiveDuration(item.stale_after_seconds) + '）'
+                        : activeStatusLabel(item.status, item.stage)}
+                    </span>
                   </div>
                   <div className="flex flex-wrap gap-x-3 text-[10px] text-text-muted">
-                    <span title={item.upload_id}>上传 ID: {item.upload_id}</span>
-                    {item.celery_task_id && <span title={item.celery_task_id}>Worker Task ID: {item.celery_task_id}</span>}
-                    <span>{item.updated_at || item.created_at}</span>
+                    <span title={item.upload_id}>入库任务编号：{item.upload_id}</span>
+                    {item.celery_task_id && <span title={item.celery_task_id}>处理任务编号：{item.celery_task_id}</span>}
+                    <span>最后更新：{item.updated_at || item.created_at || '未记录'}</span>
                   </div>
                 </div>
               ))}
@@ -287,7 +334,7 @@ export default function OperationsPanel() {
         <div className="bg-surface-base rounded-xl border border-border-subtle overflow-hidden">
           <table className="w-full text-xs">
             <thead><tr className="border-b border-border-subtle bg-surface-elevated text-text-muted">
-              {['时间', '文档名', '操作', '操作者', '来源', '结果', '耗时', '详情', 'Trace ID', '链路'].map(h => <th key={h} className="text-left px-3 py-2.5 font-medium text-[10px]">{h}</th>)}
+              {['时间', '文档名', '操作', '操作者', '来源', '结果', '耗时', '详情', '追踪编号', '链路'].map(h => <th key={h} className="text-left px-3 py-2.5 font-medium text-[10px]">{h}</th>)}
             </tr></thead>
             <tbody>
               {groupedItems.all.map(item => {
@@ -304,7 +351,7 @@ export default function OperationsPanel() {
                           <span className="font-medium truncate max-w-[180px]">{batch.opLabel} · {batch.firstFile} 等 {batch.logs.length} 个文件</span>
                         </td>
                         <td className="px-3 py-2.5"><span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-600">批次</span></td>
-                        <td className="px-3 py-2.5 text-text-muted text-[10px]">{batch.logs[0]?.user_id || '-'}</td>
+                        <td className="px-3 py-2.5 text-text-muted text-[10px]">{operatorLabel(batch.logs[0]?.user_id)}</td>
                         <td className="px-3 py-2.5 text-text-muted text-[10px]">{formatSource(batch.logs[0]?.source || '')}</td>
                         <td className="px-3 py-2.5">
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${batch.partialCount > 0 || batch.failCount > 0 || batch.unknownCount > 0 ? 'bg-amber-50 text-amber-600' : 'bg-green-50 text-green-600'}`}>
@@ -325,7 +372,7 @@ export default function OperationsPanel() {
                               {OPERATION_CONFIG[op.operation].label}
                             </span>
                           </td>
-                          <td className="px-3 py-2.5 text-text-muted text-[10px]">{op.user_id}</td>
+                          <td className="px-3 py-2.5 text-text-muted text-[10px]">{operatorLabel(op.user_id)}</td>
                           <td className="px-3 py-2.5 text-text-muted text-[10px]">{formatSource(op.source)}</td>
                           <td className="px-3 py-2.5">
                             <ResultBadge result={op.result} />
@@ -336,12 +383,12 @@ export default function OperationsPanel() {
                           <td className="px-3 py-2.5">
                             {op.trace_id ? (
                               <Link href={getOperationTraceHref(op)} className="text-accent hover:text-accent-hover hover:underline text-[10px]">
-                                查看Trace
+                                查看处理追踪
                               </Link>
                             ) : parseDetail(op.detail)?.duplicate ? (
                               <span className="text-text-muted text-[10px]">已跳过</span>
                             ) : (
-                              <span className="text-text-muted text-[10px]">-</span>
+                              <span className="text-text-muted text-[10px]">未关联追踪记录</span>
                             )}
                           </td>
                         </tr>
@@ -359,7 +406,7 @@ export default function OperationsPanel() {
                           {OPERATION_CONFIG[op.operation].label}
                         </span>
                       </td>
-                      <td className="px-3 py-2.5 text-text-muted text-[10px]">{op.user_id}</td>
+                      <td className="px-3 py-2.5 text-text-muted text-[10px]">{operatorLabel(op.user_id)}</td>
                       <td className="px-3 py-2.5 text-text-muted text-[10px]">{formatSource(op.source)}</td>
                       <td className="px-3 py-2.5">
                         <ResultBadge result={op.result} />
@@ -370,10 +417,10 @@ export default function OperationsPanel() {
                       <td className="px-3 py-2.5">
                         {op.trace_id ? (
                           <Link href={getOperationTraceHref(op)} className="text-accent hover:text-accent-hover hover:underline text-[10px]">
-                            查看Trace
+                            查看处理追踪
                           </Link>
                         ) : (
-                          <span className="text-text-muted text-[10px]">-</span>
+                          <span className="text-text-muted text-[10px]">{op.result === 'failed' ? '未关联追踪记录' : '未记录'}</span>
                         )}
                       </td>
                     </tr>

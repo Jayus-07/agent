@@ -245,9 +245,15 @@ jobs:
             backend/tests/rag/test_llm_fallback_chunking.py \
             backend/tests/rag/test_processing_lineage_pg.py::test_chunking_fallback_stats_are_scoped_to_processing_identity_snapshot \
             backend/tests/rag/test_processing_lineage_pg.py::test_chunking_fallback_stats_do_not_signal_production_upgrade_for_test_kb \
+            backend/tests/rag/test_processing_lineage_pg.py::test_candidate_run_lookup_is_scoped_and_returns_latest_per_upload \
+            backend/tests/rag/test_processing_lineage_pg.py::test_candidate_run_scope_requires_matching_tenant_kb_doc_and_run \
             backend/tests/api/test_rag_processing_lineage_api.py::test_llm_chunking_fallback_stats_route_uses_visible_scope \
+            backend/tests/api/test_rag_processing_lineage_api.py::test_unpublished_candidate_run_detail_is_authorized_and_labeled \
+            backend/tests/api/test_rag_processing_lineage_api.py::test_unpublished_candidate_run_detail_hides_out_of_scope_candidate \
             backend/tests/api/test_rag_upload_artifact_completeness.py \
             backend/tests/api/test_rag_routes_regression.py::test_quality_failure_summary_reports_ocr_and_pdf_page_gaps \
+            backend/tests/api/test_rag_routes_regression.py::test_upload_failure_list_includes_authorized_unpublished_run_identity \
+            backend/tests/api/test_rag_routes_regression.py::test_upload_failure_list_does_not_enrich_unreadable_candidate \
             backend/tests/rag/test_chunk_governance_p0.py::test_coverage_audit_detects_missing_table_cell_and_row \
             backend/tests/rag/test_chunk_governance_p0.py::test_index_identity_clears_removed_parent_reference \
             backend/tests/rag/test_chunk_detail_metadata.py::test_chunk_detail_exposes_source_and_split_audit_metadata_only \

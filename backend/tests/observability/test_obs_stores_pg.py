@@ -279,6 +279,7 @@ class TestLLMUsageStorePG:
         store.record(_usage_event("pgtid0emb", component="embedding"))
         res = store.list_calls(days=7)
         assert res["total"] == 6
+        assert "cost_cny" in res["calls"][0]
         res = store.list_calls(days=7, component="llm", limit=3, offset=0)
         assert res["total"] == 5 and len(res["calls"]) == 3
         res = store.list_calls(days=7, model="gpt-test", component="embedding")
@@ -296,7 +297,29 @@ class TestLLMUsageStorePG:
         assert len(dash["daily"]) == 1
         assert len(dash["models"]) == 1
         assert dash["models"][0]["model"] == "gpt-test"
+        assert dash["totals"]["missing_cost_status_calls"] == 3
+        assert dash["models"][0]["missing_cost_status_calls"] == 3
         assert dash["monthly"] == [] and dash["period"] == "day"
+
+    def test_dashboard_distinguishes_unpriced_and_missing_cost_status(self, _clean_tables):
+        from backend.observability.llm_usage_store import get_llm_usage_store
+
+        store = get_llm_usage_store()
+        legacy_ocr = _usage_event("pgtid-ocr-missing", component="ocr", model="ocr-test")
+        store.record(legacy_ocr)
+        unpriced_ocr = _usage_event("pgtid-ocr-unpriced", component="ocr", model="ocr-test")
+        unpriced_ocr["cost_status"] = "unpriced"
+        store.record(unpriced_ocr)
+
+        dash = store.dashboard(days=7, component="ocr")
+        assert dash["totals"]["calls"] == 2
+        assert dash["totals"]["missing_cost_status_calls"] == 1
+        assert dash["totals"]["unpriced_calls"] == 1
+        assert dash["models"][0]["missing_cost_status_calls"] == 1
+        assert dash["models"][0]["unpriced_calls"] == 1
+        calls = store.list_calls(days=7, component="ocr")
+        assert all(call["cost_status"] in ("", "unpriced") for call in calls["calls"])
+        assert all("cost_cny" in call for call in calls["calls"])
 
     def test_dashboard_period_month(self, _clean_tables):
         """M11 尾项：period=month 按自然月分桶（monthly 键），默认 day 零变化。"""

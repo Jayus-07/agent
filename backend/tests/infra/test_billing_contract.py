@@ -380,6 +380,33 @@ def test_unpriced_is_explicit(monkeypatch):
     assert result.pricing_source == pricing.PRICING_SOURCE_UNPRICED
 
 
+def test_subscription_plan_is_not_priced_by_token_table(monkeypatch):
+    """订阅套餐只记录用量；未接入 AFP 账单时不得伪造人民币成本。"""
+    from backend.infra.llm import models
+
+    monkeypatch.setattr(models, "lookup_model_entry", lambda name: {"name": name})
+    monkeypatch.setattr(models, "get_model_billing", lambda name: "subscription")
+    monkeypatch.setattr(
+        pricing,
+        "get_current_price_table",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("订阅制调用不应读取 Token 单价")
+        ),
+    )
+
+    result = price_usage(
+        "plan-model",
+        "llm",
+        NormalizedUsage(input_tokens=1000, output_tokens=300),
+        enforce=True,
+    )
+
+    assert result.cost_status == pricing.COST_STATUS_UNPRICED
+    assert result.pricing_source == pricing.PRICING_SOURCE_SUBSCRIPTION_PLAN
+    assert result.native_cost == Decimal("0")
+    assert result.billed_cost_cny == Decimal("0")
+
+
 # ── P1-02 / P1-12 FX 与价格版本快照不可变 ────────────────────────────────
 
 def test_fx_snapshot_is_immutable(monkeypatch):

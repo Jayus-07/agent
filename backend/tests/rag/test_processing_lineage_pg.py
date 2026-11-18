@@ -50,6 +50,7 @@ def _repo_with_connection(connection: _Connection):
     )
     repo._runs_table = "rag_processing_runs"
     repo._steps_table = "rag_processing_steps"
+    repo._index_runs_table = "rag_index_runs"
     repo._lock = threading.Lock()
 
     @contextmanager
@@ -80,6 +81,7 @@ def test_repository_upserts_stage_by_run_stage_and_attempt():
     connection = _Connection()
     repo = _repo_with_connection(connection)
     context = ProcessingRunContext.create("doc-1", "hash-1", "upload")
+    connection.cursor_instance._rows = [{"run_id": context.run_id}]
     step_id = context.begin_stage(
         "embedding", role="embedding", engine_type="embedding", ordinal=7
     )
@@ -88,8 +90,12 @@ def test_repository_upserts_stage_by_run_stage_and_attempt():
     repo.upsert_stage(context.snapshot().steps[0])
 
     sql, params = connection.cursor_instance.executed[-1]
+    lock_sql, lock_params = connection.cursor_instance.executed[0]
     assert "INSERT INTO rag_processing_steps" in sql
     assert "ON CONFLICT (run_id, stage, attempt_no) DO UPDATE" in sql
+    assert "status = 'running'" in lock_sql
+    assert "FOR SHARE" in lock_sql
+    assert lock_params == (context.run_id,)
     assert context.run_id in params
     assert step_id in params
 
@@ -108,8 +114,27 @@ def test_repository_finishes_run_without_replacing_stage_history():
     sql, params = connection.cursor_instance.executed[-1]
     assert "UPDATE rag_processing_runs" in sql
     assert "model_summary" in sql
+    assert "AND status = 'running'" in sql
     assert params[0] == "success"
     assert params[-1] == "run-1"
+
+
+def test_repository_fails_stale_runs_and_only_their_running_steps():
+    connection = _Connection()
+    connection.cursor_instance._rows = [{"run_count": 2, "step_count": 3}]
+    repo = _repo_with_connection(connection)
+
+    result = repo.fail_stale_running_runs(stale_after_seconds=3660, limit=600)
+
+    assert result == {"run_count": 2, "step_count": 3}
+    sql, params = connection.cursor_instance.executed[-1]
+    assert "WITH candidates AS" in sql
+    assert "FOR UPDATE SKIP LOCKED" in sql
+    assert "run.status = 'running'" in sql
+    assert "step.status = 'running'" in sql
+    assert "step.run_id = finished_runs.run_id" in sql
+    assert params == ("3660", 500, "运行超过配置的处理时限，系统已将未完成阶段收口为失败。",
+                      "运行超过配置的处理时限，系统已将未完成阶段收口为失败。")
 
 
 def test_repository_counts_duplicate_stage_keys_for_selected_runs():
@@ -121,6 +146,76 @@ def test_repository_counts_duplicate_stage_keys_for_selected_runs():
     sql, params = connection.cursor_instance.executed[-1]
     assert "GROUP BY run_id, stage, attempt_no" in sql
     assert params == (["run-1", "run-2"],)
+
+
+def test_candidate_run_lookup_is_scoped_and_returns_latest_per_upload():
+    connection = _Connection()
+    connection.cursor_instance._rows = [
+        {
+            "run_id": "run-new",
+            "task_id": "upload-1",
+            "doc_id": "doc-1",
+            "file_hash": "a" * 64,
+            "trace_id": "trace-new",
+            "kb_id": "kb-test",
+            "tenant_id": "tenant-a",
+            "department": "general",
+            "permission_scope": "general",
+        },
+        {
+            "run_id": "run-old",
+            "task_id": "upload-1",
+            "doc_id": "doc-1",
+            "file_hash": "a" * 64,
+            "trace_id": "trace-old",
+            "kb_id": "kb-test",
+            "tenant_id": "tenant-a",
+            "department": "general",
+            "permission_scope": "general",
+        },
+    ]
+    repo = _repo_with_connection(connection)
+
+    result = repo.list_candidate_runs_by_upload_ids(
+        ["upload-1"], tenant_id="tenant-a", kb_ids=["kb-test"],
+    )
+
+    assert [item["run_id"] for item in result] == ["run-new"]
+    sql, params = connection.cursor_instance.executed[-1]
+    assert "JOIN rag_index_runs AS ir" in sql
+    assert "ir.tenant_id = %s" in sql
+    assert "ir.kb_id = ANY(%s)" in sql
+    assert params == (["upload-1"], "tenant-a", ["kb-test"])
+
+
+def test_candidate_run_scope_requires_matching_tenant_kb_doc_and_run():
+    connection = _Connection()
+    connection.cursor_instance._rows = [{
+        "run_id": "run-1",
+        "doc_id": "doc-1",
+        "file_hash": "b" * 64,
+        "trace_id": "trace-1",
+        "kb_id": "kb-test",
+        "tenant_id": "tenant-a",
+        "department": "general",
+        "permission_scope": "general",
+    }]
+    repo = _repo_with_connection(connection)
+
+    result = repo.get_candidate_run_scope(
+        "doc-1",
+        "run-1",
+        tenant_id="tenant-a",
+        kb_ids=["kb-test"],
+    )
+
+    assert result["trace_id"] == "trace-1"
+    sql, params = connection.cursor_instance.executed[-1]
+    assert "pr.doc_id = %s" in sql
+    assert "pr.run_id = %s" in sql
+    assert "ir.tenant_id = %s" in sql
+    assert "ir.kb_id = ANY(%s)" in sql
+    assert params == ("doc-1", "run-1", "tenant-a", ["kb-test"])
 
 
 def test_chunking_fallback_stats_are_scoped_to_processing_identity_snapshot():

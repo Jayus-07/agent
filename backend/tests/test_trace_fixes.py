@@ -237,6 +237,25 @@ class TestTraceSummaryCounts:
 # =====================================================
 
 class TestObservabilitySlaDto:
+    def test_knowledge_index_trace_uses_shared_internal_slo(self, monkeypatch):
+        import backend.config.rag as rag_config
+
+        monkeypatch.setattr(rag_config, "RAG_INDEX_SLO_THRESHOLD_MS", 60000)
+        monkeypatch.setattr(rag_config, "RAG_INDEX_SLO_THRESHOLD_SOURCE", "测试配置")
+        trace = TraceCollector().start(
+            question="test.md", workflow_name="knowledge_index",
+            workflow_kind="knowledge_index",
+        )
+
+        assert trace.sla_threshold_ms == 60000
+        assert trace.sla_threshold_source == "测试配置：知识索引内部处理时限（60 秒，不含排队）"
+
+    def test_other_trace_kind_does_not_get_knowledge_index_slo(self):
+        trace = TraceCollector().start(question="普通对话")
+
+        assert trace.sla_threshold_ms is None
+        assert trace.sla_threshold_source is None
+
     def test_trace_dto_uses_record_sla_threshold(self):
         from backend.app.api.routes.observability import _to_trace_dto
         rec = TraceRecord(id="t1", question="q", duration_ms=15000)

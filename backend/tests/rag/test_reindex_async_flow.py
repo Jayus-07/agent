@@ -251,8 +251,42 @@ def test_reindex_task_impl_terminal_failure(monkeypatch):
     assert events and events[-1] == "error"
 
 
+def test_reindex_task_impl_terminal_failure_keeps_initiating_user(monkeypatch):
+    from types import SimpleNamespace
+
+    from backend.services import task_service
+    from backend.tasks import index_task_runtime
+
+    monkeypatch.setattr(task_service, "get_task",
+                        lambda task_id: SimpleNamespace(user_id="1014"))
+    monkeypatch.setattr(index_task_runtime, "run_with_task_state",
+                        lambda _task_id, _progress_key, run_node, **_kwargs:
+                        run_node())
+    monkeypatch.setattr(
+        reindex_service, "run_reindex",
+        MagicMock(side_effect=ValueError("文件不存在: /gone.txt")))
+    failed: dict = {}
+    monkeypatch.setattr(
+        reindex_service, "log_reindex_failed",
+        lambda *args, **kwargs: failed.update(args=args, kwargs=kwargs))
+    monkeypatch.setattr("backend.tasks.index_tasks._reindex_redis_emit_fn",
+                        lambda _doc_id: lambda *_args, **_kwargs: None)
+
+    with pytest.raises(ValueError):
+        reindex_document_task_impl(
+            "doc-it-1", db_task_id="task-1", source="test", retries=0)
+
+    assert failed["kwargs"]["user_id"] == "1014"
+
+
 def test_reindex_task_impl_lock_busy_is_terminal(doc_env, monkeypatch):
     """advisory 争用 → validation_error 终态（不进重试预算）。"""
+    # 锁竞争只验证互斥分支，文档登记数据用 fixture 的假数据。
+    monkeypatch.setattr(
+        "backend.rag.indexing.doc_registry.DocumentRegistry",
+        lambda _path: doc_env.registry,
+    )
+
     @contextmanager
     def _lock_busy():
         yield _FakeLockConn(False)

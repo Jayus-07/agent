@@ -366,6 +366,7 @@ export function getAdminErrorLabel(value?: string | null): string {
   if (normalized.includes('ocr') && normalized.includes('page')) return '文字识别页数超出限制或识别不完整'
   if (normalized.includes('timeout')) return '处理超时'
   if (normalized.includes('network') || normalized.includes('fetch')) return '网络连接失败，请检查服务状态后重试'
+  if (/^name ['"].+['"] is not defined$/i.test(value)) return '系统程序错误：缺少必要的内部状态变量，任务未完成'
   return '处理失败，系统已记录错误详情，请查看运行记录'
 }
 
