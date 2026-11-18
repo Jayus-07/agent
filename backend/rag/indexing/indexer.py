@@ -170,6 +170,87 @@ def _build_doc_level_text(full_text: str, doc_meta: dict) -> str:
     return header + "\n\n" + full_text[:body_budget]
 
 
+def _preflight_index_embedding_budget(
+    indexer,
+    chunks: list[Document],
+    doc_level_text: str,
+    doc_summary: str,
+    *,
+    filename: str,
+) -> None:
+    """向量化前按实际待嵌入文本估算预算，避免写入一半后才超限。"""
+    from backend.infra.llm.budget import (
+        RequestBudgetExceeded,
+        current_request_budget,
+    )
+
+    budget = current_request_budget()
+    if budget is None:
+        return
+
+    from backend.rag.preprocessing.token_counter import count_tokens
+
+    vector_chunks = _select_vector_chunks(chunks)
+    embedding_texts = [
+        EmbeddingStage.embedding_text_for(chunk, doc_summary=doc_summary)
+        for chunk in vector_chunks
+    ]
+    try:
+        cached_vectors = indexer._get_embed_cache().get_many(embedding_texts)
+    except Exception:
+        cached_vectors = [None] * len(embedding_texts)
+    if len(cached_vectors) != len(embedding_texts):
+        cached_vectors = [None] * len(embedding_texts)
+
+    estimated_tokens = count_tokens(doc_level_text) if doc_level_text else 0
+    estimated_tokens += sum(
+        count_tokens(text)
+        for text, cached in zip(embedding_texts, cached_vectors)
+        if cached is None
+    )
+    span = trace_collector.start_span(
+        "index_embedding_budget_preflight",
+        parent_id="index_upload",
+        name="向量 Token 预算预检",
+        type="budget",
+        kind=SpanKind.INDEX_EMBED.value,
+        input={
+            "filename": filename,
+            "vector_chunk_count": len(vector_chunks),
+            "doc_level_text_chars": len(doc_level_text),
+        },
+    )
+    try:
+        budget.preflight_estimated_tokens(
+            estimated_tokens,
+            stage="向量化",
+        )
+    except RequestBudgetExceeded as exc:
+        trace_collector.end_span(
+            span,
+            status="error",
+            metrics={
+                "estimated_embedding_tokens": estimated_tokens,
+                "cached_chunk_count": sum(
+                    cached is not None for cached in cached_vectors
+                ),
+                "vector_chunk_count": len(vector_chunks),
+                "error": str(exc)[:240],
+            },
+        )
+        raise
+    trace_collector.end_span(
+        span,
+        metrics={
+            "estimated_embedding_tokens": estimated_tokens,
+            "cached_chunk_count": sum(
+                cached is not None for cached in cached_vectors
+            ),
+            "vector_chunk_count": len(vector_chunks),
+        },
+    )
+
+
 def _serialize_registry_keywords(doc_meta: dict) -> str:
     """把统一元数据关键词写回历史 registry 字段，优先新字段并兼容旧名。"""
     values = doc_meta.get("doc_keywords")
@@ -2385,6 +2466,21 @@ class IncrementalIndexer:
             chunk_llm_model = chunk_llm_model or "qwen2.5:3b"
             logger.info(f"[Chunk] Qwen 完成：{chunk_llm_count}/{len(chunks)} chunks 成功，模型={chunk_llm_model}")
 
+        # 先估算本文件全部待向量化文本；预算不足时，不覆盖旧 chunk_store、
+        # 文档向量或 chunk 向量。
+        doc_level_text = _mask_index_text_for_pii(
+            _build_doc_level_text(full_text, doc_meta),
+            doc_type_val,
+            chunk_filter,
+        )
+        _preflight_index_embedding_budget(
+            self,
+            chunks,
+            doc_level_text,
+            doc_meta.get("summary", "") or "",
+            filename=os.path.basename(path_id),
+        )
+
         # ── 写入 chunk 文本到 SQLite（供 trace 详情页查看完整 chunk 内容）──
         # 候选模式走缓冲代理（正式表在发布时翻新）
         try:
@@ -2433,11 +2529,6 @@ class IncrementalIndexer:
             # Stage1 doc 级检索只需头部语义即可定位文档，超长部分截断。
             # 截断打标进 metadata，doc 级检索对长文档天然残缺，需可观测。
             # 1.2 增强：summary/章节头部拼入 doc 级文本，LLM 元数据参与 doc 级向量
-            doc_level_text = _mask_index_text_for_pii(
-                _build_doc_level_text(full_text, doc_meta),
-                doc_type_val,
-                chunk_filter,
-            )
             if len(full_text) > DOC_LEVEL_TEXT_MAX_CHARS:
                 doc_db_meta["doc_level_truncated"] = "true"
                 doc_db_meta["doc_level_full_chars"] = len(full_text)

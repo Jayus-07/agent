@@ -117,6 +117,57 @@ def test_doc_level_embedding_budget_failure_is_visible_in_trace(
     assert "request_tokens" in failed_span.metrics["error"]
 
 
+def test_embedding_budget_preflight_records_estimate_and_rejection(monkeypatch):
+    from backend.infra.llm import budget as budget_module
+    from backend.infra.llm.budget import RequestBudget, RequestBudgetLimits
+
+    request_budget = RequestBudget(
+        RequestBudgetLimits(
+            max_calls=8,
+            max_total_tokens=1,
+            max_cost=0.5,
+            max_retries=2,
+            max_fallbacks=1,
+        ),
+        mode="enforce",
+    )
+    collector = MagicMock()
+    preflight_span = SimpleNamespace(metrics={})
+    collector.start_span.return_value = preflight_span
+    monkeypatch.setattr(indexer_mod, "trace_collector", collector)
+    monkeypatch.setattr(
+        budget_module, "current_request_budget", lambda: request_budget,
+    )
+    indexer = SimpleNamespace(
+        _get_embed_cache=lambda: SimpleNamespace(
+            get_many=lambda texts: [None] * len(texts),
+        ),
+    )
+    chunks = [
+        Document(
+            page_content="这是需要嵌入的测试内容。",
+            metadata={"vectorize": True},
+        ),
+    ]
+
+    with pytest.raises(
+        budget_module.RequestBudgetExceeded,
+        match="request_tokens_preflight",
+    ):
+        indexer_mod._preflight_index_embedding_budget(
+            indexer,
+            chunks,
+            "文档级摘要测试内容。",
+            "",
+            filename="预算测试.txt",
+        )
+
+    end_call = collector.end_span.call_args
+    assert end_call.args[0] is preflight_span
+    assert end_call.kwargs["status"] == "error"
+    assert end_call.kwargs["metrics"]["estimated_embedding_tokens"] > 1
+
+
 # ==========================================================
 # 1. 正常路径 — 6 个 span 全部创建并 close
 # ==========================================================

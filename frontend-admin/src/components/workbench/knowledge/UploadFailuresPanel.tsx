@@ -16,8 +16,10 @@ import { knowledgeService } from '@/api/knowledge'
 /** 把后端原始错误翻译成可行动的文案（未知原因保留原文）。 */
 function humanizeError(raw: string): string {
   if (!raw) return '未知错误'
+  if (raw.includes('request_tokens_preflight'))
+    return '按解析结果估算，后续向量化用量会超过单文件上限；系统已在向量写入前停止，本次文档未入库。请拆分文件，或联系管理员调整上限后重试。'
   if (raw.includes('request_tokens') || raw.includes('请求预算已超限'))
-    return '本次处理超出 Token 预算，文档未发布；查看 Trace 确认超限环节后调整预算'
+    return '本文件处理累计用量达到单文件上限，系统已停止当前处理，本次文档未入库。请查看 Trace 确认阶段；拆分文件或联系管理员调整上限后重试。'
   if (raw.includes('ocr_coverage_partial'))
     return 'OCR 只覆盖了部分页面，完整性门禁未通过；查看 Trace 核对页预算和未识别页'
   if (raw.includes('parser_pdf_source_text_audit_gap'))
