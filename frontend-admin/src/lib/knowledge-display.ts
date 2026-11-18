@@ -356,9 +356,15 @@ export function getProviderLabel(value?: string | null): string {
 
 export function getAdminErrorLabel(value?: string | null): string {
   if (!value) return '未记录错误详情'
+  const normalized = value.toLowerCase()
+  if (normalized.includes('request_tokens_preflight')) {
+    return '按解析结果估算，后续向量化用量会超过单文件上限，系统已在向量写入前停止；本次文件未入库。请拆分文件或联系管理员调整预算后重试。'
+  }
+  if (normalized.includes('request_tokens') || value.includes('请求预算已超限')) {
+    return '本文件处理累计用量达到单文件上限，系统已停止处理，本次文件未入库。请拆分文件或联系管理员调整预算后重试。'
+  }
   if (/[一-龥]/.test(value)) return value
 
-  const normalized = value.toLowerCase()
   if (normalized.includes('too large')) return '文件超过服务端大小上限'
   if (normalized.includes('empty file') || normalized.includes('file is empty')) return '文件内容为空'
   if (normalized.includes('unsupported') && normalized.includes('ext')) return '文件格式不受支持'

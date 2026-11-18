@@ -24,6 +24,15 @@ function showRecordedNumber(value?: number): string {
     : "未记录";
 }
 
+export function ProcessingRunFailureNotice({ errorMessage }: { errorMessage?: string | null }) {
+  if (!errorMessage?.trim()) return null;
+  return (
+    <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+      运行失败原因：{getAdminErrorLabel(errorMessage)}
+    </div>
+  );
+}
+
 export default function ProcessingRunDetailView({
   detail,
   documentName,
@@ -174,11 +183,7 @@ export default function ProcessingRunDetailView({
           ))}
         </div>
 
-        {detail.error_message && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
-            运行错误：{getAdminErrorLabel(detail.error_message)}
-          </div>
-        )}
+        <ProcessingRunFailureNotice errorMessage={detail.error_message} />
 
         {!!detail.model_summary?.length && (
           <section className="rounded-xl border border-slate-200 bg-white p-5">

@@ -3,9 +3,20 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { KnowledgeDoc, ProcessingRunDetail } from "@/api/knowledge";
-import ProcessingRunDetailView from "./processing-run-detail";
+import ProcessingRunDetailView, { ProcessingRunFailureNotice } from "./processing-run-detail";
 
 describe("ProcessingRunDetailView", () => {
+  it("将请求 Token 预算失败原因显示为可操作的中文说明", () => {
+    const html = renderToStaticMarkup(createElement(ProcessingRunFailureNotice, {
+      errorMessage: "请求预算已超限: request_tokens",
+    }));
+
+    expect(html).toContain("运行失败原因");
+    expect(html).toContain("单文件上限");
+    expect(html).toContain("本次文件未入库");
+    expect(html).not.toContain("request_tokens");
+  });
+
   it("明确标为非 Trace，并显示数据库保存的文件、运行和阶段事实", () => {
     const detail: ProcessingRunDetail = {
       doc_id: "doc-1",
