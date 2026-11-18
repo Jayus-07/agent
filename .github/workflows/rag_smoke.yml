@@ -238,6 +238,7 @@ jobs:
             backend/tests/rag/test_pdf_ocr.py::TestPdfParserOcrFallback::test_request_budget_exceeded_stops_remaining_ocr_pages \
             backend/tests/rag/test_pdf_ocr.py::TestDashScopeUsageRecording::test_missing_provider_usage_is_not_recorded_as_free \
             backend/tests/rag/test_indexer_trace.py::test_doc_level_embedding_budget_failure_is_visible_in_trace \
+            backend/tests/rag/test_indexer_trace.py::test_embedding_budget_preflight_records_estimate_and_rejection \
             backend/tests/rag/test_indexer_trace.py::TestHappyPath::test_candidate_trace_displays_logical_filename \
             backend/tests/rag/test_indexer_trace.py::test_candidate_indexing_does_not_skip_incomplete_same_hash_active_doc \
             backend/tests/rag/test_candidate_publish.py::test_publish_does_not_mark_success_when_active_vectors_are_missing \
@@ -261,6 +262,7 @@ jobs:
             backend/tests/rag/test_multi_query_runtime_queries.py \
             backend/tests/rag/test_multi_query_timeout_lifecycle.py \
             backend/tests/test_llm_budget.py \
+            backend/tests/test_rag_upload_mime.py \
             backend/tests/infra/test_request_budget_remaining.py \
             backend/tests/test_llm_quota.py \
             backend/tests/infra/test_b1b_llm_governance.py \

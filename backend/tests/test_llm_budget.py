@@ -54,6 +54,60 @@ def test_budget_blocks_fallback_and_token_overrun():
     assert fallback_exc.value.reason == "request_fallbacks"
 
 
+def test_embedding_token_preflight_rejects_before_any_provider_call():
+    from backend.infra.llm.budget import RequestBudget, RequestBudgetExceeded
+
+    budget = RequestBudget(_limits(max_total_tokens=10), mode="enforce")
+    budget.record_usage(prompt_tokens=2, completion_tokens=1, total_tokens=3)
+
+    with pytest.raises(RequestBudgetExceeded) as exc_info:
+        budget.preflight_estimated_tokens(8, stage="向量化")
+
+    assert exc_info.value.reason == "request_tokens_preflight"
+    assert "已累计记录 3 Token" in str(exc_info.value)
+    assert "预估后续至少需要 8 Token" in str(exc_info.value)
+    assert budget.snapshot().calls == 0
+
+
+def test_embedding_token_preflight_is_observational_outside_enforce_mode():
+    from backend.infra.llm.budget import RequestBudget
+
+    budget = RequestBudget(_limits(max_total_tokens=1), mode="observe")
+    budget.preflight_estimated_tokens(100, stage="向量化")
+
+    assert budget.snapshot().calls == 0
+
+
+def test_index_task_can_raise_only_its_request_token_limit(monkeypatch):
+    from backend.infra.llm import budget as budget_module
+    from backend.infra.llm.budget import RequestBudgetExceeded
+
+    budget_module.clear_request_budget()
+    monkeypatch.setattr(budget_module, "_config_mode", lambda: "enforce")
+    monkeypatch.setattr(
+        budget_module,
+        "_config_limits",
+        lambda: _limits(max_total_tokens=32000, max_cost="0.50"),
+    )
+
+    budget_module.bind_request_budget(
+        "rag-index-token-limit-override",
+        max_total_tokens=128000,
+    )
+    try:
+        budget = budget_module.current_request_budget()
+        assert budget is not None
+        assert budget.limits.max_total_tokens == 128000
+        assert budget.limits.max_cost == _limits().max_cost
+        budget.record_usage(total_tokens=32000)
+        budget.preflight_estimated_tokens(96000)
+        with pytest.raises(RequestBudgetExceeded) as exc_info:
+            budget.preflight_estimated_tokens(96001)
+        assert exc_info.value.reason == "request_tokens_preflight"
+    finally:
+        budget_module.clear_request_budget()
+
+
 def test_budget_observe_mode_records_without_blocking():
     """observe 模式只记账不阻断；max_calls 自 2026-10-26 起不再产生
     request_calls 超限标记（只作用量观测），exceeded 仅含仍生效的门禁。"""

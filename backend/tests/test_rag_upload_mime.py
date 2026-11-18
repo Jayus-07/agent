@@ -61,19 +61,18 @@ from backend.config.rag import (
 # ============ ALLOWED_MIME_TYPES 结构测试 ============
 
 class TestAllowedMimeStructure:
-    """白名单表结构必须覆盖所有支持的扩展名,且 octet-stream 仅作兜底。"""
+    """管理端上传白名单只开放已选格式,且 octet-stream 仅作兜底。"""
 
     def test_all_supported_exts_have_entry(self):
-        # F6: 白名单从解析器注册表派生，必须覆盖全部已注册扩展名。
+        # 管理端只开放已批准的企业资料格式。
         assert set(ALLOWED_MIME_TYPES.keys()) == {
-            "pdf", "md", "markdown", "txt", "docx", "xlsx", "csv",
-            "html", "htm", "pptx", "json", "xml",
+            "pdf", "md", "markdown", "txt", "docx", "xlsx",
         }
 
     def test_derived_from_parsable_exts(self):
-        """F6: ALLOWED_MIME_TYPES 必须与 PARSABLE_EXTS 一一对应（单一来源，防漂移）。"""
+        """上传白名单必须是解析器能力的子集，不能自动开放新解析器。"""
         from backend.rag.preprocessing.parser import PARSABLE_EXTS
-        assert {f".{ext}" for ext in ALLOWED_MIME_TYPES} == set(PARSABLE_EXTS)
+        assert {f".{ext}" for ext in ALLOWED_MIME_TYPES} <= set(PARSABLE_EXTS)
 
     def test_upload_ocr_budget_uses_the_configured_ocr_cap(self):
         assert RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT == RAG_OCR_MAX_PAGES
@@ -227,19 +226,11 @@ class TestAllowedMimeStructure:
         assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" \
             in ALLOWED_MIME_TYPES["xlsx"]
 
-    def test_csv_has_proper_mime(self):
-        # csv 解析器注册后上传白名单同步开放，且登记 text/csv
-        assert "text/csv" in ALLOWED_MIME_TYPES["csv"]
-
-    def test_new_formats_have_specific_mime_types(self):
-        assert "text/html" in ALLOWED_MIME_TYPES["html"]
-        assert "text/html" in ALLOWED_MIME_TYPES["htm"]
-        assert "application/json" in ALLOWED_MIME_TYPES["json"]
-        assert "application/xml" in ALLOWED_MIME_TYPES["xml"]
-        assert (
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            in ALLOWED_MIME_TYPES["pptx"]
-        )
+    @pytest.mark.parametrize("ext", ["csv", "pptx", "json", "xml", "html", "htm"])
+    def test_non_business_upload_formats_are_not_allowed(self, ext):
+        ok, error = _validate_mime(ext, "application/octet-stream")
+        assert ok is False
+        assert "当前仅支持" in error
 
     def test_octet_stream_not_in_whitelist_dicts(self):
         # 白名单表只登记"显式声明时允许的具体 MIME"。
@@ -304,7 +295,7 @@ class TestValidateMime:
             ok, err = _validate_mime("md", empty)
             assert ok is True, f"content_type={empty!r} 应走 magic 兜底,实际拒绝: {err}"
 
-    @pytest.mark.parametrize("ext", ["md", "txt", "csv", "docx", "xlsx", "pdf"])
+    @pytest.mark.parametrize("ext", ["md", "txt", "docx", "xlsx", "pdf"])
     def test_octet_stream_allowed_when_explicit(self, ext):
         """显式 application/octet-stream 放行（浏览器/Windows 客户端对 docx
         等的通用声明,旧实现一律拒绝属误伤）。真实性由魔数校验兜底:
@@ -329,19 +320,20 @@ class TestValidateMime:
         ok, err = _validate_mime("exe", "application/octet-stream")
         assert ok is False
         assert "文件格式" in err
+        assert "当前仅支持" in err
 
     def test_empty_ext_returns_error(self):
         """扩展名为空(无后缀文件)拒。"""
         ok, err = _validate_mime("", "text/plain")
         assert ok is False
 
-    @pytest.mark.parametrize("ext", ["docx", "xlsx", "pptx"])
+    @pytest.mark.parametrize("ext", ["docx", "xlsx"])
     def test_ooxml_formats_require_zip_magic(self, ext):
         assert _magic_matches(ext, b"PK\x03\x04data")
         assert not _magic_matches(ext, b"<xml>forged</xml>")
 
-    @pytest.mark.parametrize("ext", ["html", "htm", "json", "xml"])
-    def test_new_text_formats_reject_binary_headers(self, ext):
+    @pytest.mark.parametrize("ext", ["md", "markdown", "txt"])
+    def test_allowed_text_formats_reject_binary_headers(self, ext):
         assert _magic_matches(ext, b"text content")
         assert not _magic_matches(ext, b"\x00binary")
         assert not _magic_matches(ext, b"\xff\xfeutf16")

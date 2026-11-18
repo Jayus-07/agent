@@ -13,6 +13,11 @@ import {
   getKnowledgeBaseLabel,
   getProcessingStageLabel,
 } from '@/lib/knowledge-display'
+import {
+  isSupportedKnowledgeUploadName,
+  KNOWLEDGE_UPLOAD_ACCEPT,
+  KNOWLEDGE_UPLOAD_FORMAT_LABEL,
+} from '@/lib/knowledge-upload-formats'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
@@ -423,7 +428,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             )}
             <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${ragReady === false ? 'border-amber-200 bg-amber-50/30 cursor-not-allowed' : 'border-border-subtle cursor-pointer'}`}>
               <input type="file" ref={fileRef} multiple
-                accept=".pdf,.md,.markdown,.txt,.docx,.xlsx,.csv,.html,.htm,.pptx,.json,.xml" className="hidden"
+                accept={KNOWLEDGE_UPLOAD_ACCEPT} className="hidden"
                 disabled={ragReady === false}
                 onChange={e => {
                   // 2026-11-10 评审：超限文件选择即拒（fail-fast），权威上限仍在后端
@@ -432,24 +437,42 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                   // 同一个 A」onChange 不触发（value 未变），列表静默不更新
                   e.target.value = ''
                   if (!fs.length) return
+                  const unsupported = fs.filter(f => !isSupportedKnowledgeUploadName(f.name))
+                  const supported = fs.filter(f => isSupportedKnowledgeUploadName(f.name))
+                  const unsupportedNotice = unsupported.length
+                    ? `已忽略不支持的文件：${unsupported.map(f => f.name).join('、')}。当前支持：${KNOWLEDGE_UPLOAD_FORMAT_LABEL}。`
+                    : ''
+                  if (!supported.length) {
+                    setFiles([])
+                    setError(unsupportedNotice)
+                    return
+                  }
                   if (maxUploadMb === null) {
-                    setFiles(fs)
-                    setError('尚未读取到服务端文件大小上限；文件将由服务端校验')
+                    setFiles(supported)
+                    setError([
+                      unsupportedNotice,
+                      '尚未读取到服务端文件大小上限；文件将由服务端校验。',
+                    ].filter(Boolean).join(' '))
                     return
                   }
                   const limit = maxUploadMb * 1024 * 1024
-                  const oversized = fs.filter(f => f.size > limit)
-                  setFiles(fs.filter(f => f.size <= limit))
-                  setError(oversized.length
-                    ? '以下文件超过 ' + maxUploadMb + ' MB 上限，已忽略：'
-                      + oversized.map(f => f.name).join('、')
-                    : '')
+                  const oversized = supported.filter(f => f.size > limit)
+                  setFiles(supported.filter(f => f.size <= limit))
+                  setError([
+                    unsupportedNotice,
+                    oversized.length
+                      ? `以下文件超过 ${maxUploadMb} MB 上限，已忽略：${oversized.map(f => f.name).join('、')}`
+                      : '',
+                  ].filter(Boolean).join(' '))
                 }} />
               <div onClick={() => { if (ragReady !== false) fileRef.current?.click() }}>
                 <Upload size={28} className={`mx-auto mb-2 ${ragReady === false ? 'text-amber-300' : 'text-text-muted'}`} />
                 <p className={`text-xs ${ragReady === false ? 'text-amber-400' : 'text-text-muted'}`}>
-                  {ragReady === false ? '请等待服务就绪…' : '点击选择 PDF / MD / TXT / DOCX / XLSX / CSV（可多选）'}
+                  {ragReady === false ? '请等待服务就绪…' : '点击选择支持的文件（可多选）'}
                 </p>
+                {ragReady !== false && (
+                  <p className="mt-1 text-[10px] text-text-muted">支持格式：{KNOWLEDGE_UPLOAD_FORMAT_LABEL}</p>
+                )}
               </div>
             </div>
             {files.length > 0 && (

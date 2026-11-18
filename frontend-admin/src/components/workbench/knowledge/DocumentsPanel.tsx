@@ -660,14 +660,32 @@ export default function DocumentsPanel() {
                     <StatusBadge status={d.status} />
                     {(() => {
                       const quality = QUALITY_STATUS_CONFIG[d.quality_status || 'unknown'] || QUALITY_STATUS_CONFIG.unknown
-                      const legacyReport = (d.quality_issues || '').includes('legacy_quality_record_incomplete')
-                      const title = legacyReport
-                        ? '旧报告缺少分块完整性、内容覆盖和清洗覆盖检查；当前需复核，旧分数仅供参考。'
-                        : getQualityIssueLabel(d.quality_issues) || quality.title
+                      const qualityIssues = String(d.quality_issues || '')
+                        .split(/,\s+/)
+                        .filter(Boolean)
+                      const legacyReport = qualityIssues.some(issue => issue.includes('legacy_quality_record_incomplete'))
+                      const contentIssues = qualityIssues.filter(issue => !issue.includes('legacy_quality_record_incomplete'))
+                      const qualityKind = legacyReport
+                        ? contentIssues.length ? '审计记录缺项 + 内容/解析提醒' : '审计记录缺项'
+                        : contentIssues.length ? '内容/解析提醒' : ''
+                      const contentIssueLabels = contentIssues
+                        .map(getQualityIssueLabel)
+                        .filter(Boolean)
+                      const title = [
+                        legacyReport
+                          ? '历史质量记录缺少分块完整性、内容覆盖和清洗覆盖检查；当前需复核，旧分数仅供参考。'
+                          : '',
+                        contentIssueLabels.length
+                          ? `内容/解析提醒：${contentIssueLabels.join('；')}`
+                          : '',
+                        !legacyReport && !contentIssueLabels.length
+                          ? quality.title
+                          : '',
+                      ].filter(Boolean).join(' ')
                       const scoreText = d.quality_score
                         ? `${legacyReport ? '旧分' : ''}${Number(d.quality_score).toFixed(0)}${legacyReport ? '' : '分'}`
                         : ''
-                      return <div className="mt-1"><span data-testid="quality-status" title={title} className={`inline-flex rounded px-1.5 py-0.5 text-[10px] ${quality.className}`}>{quality.label}{scoreText ? ` · ${scoreText}` : ''}</span></div>
+                      return <div className="mt-1"><span data-testid="quality-status" title={title} className={`inline-flex rounded px-1.5 py-0.5 text-[10px] ${quality.className}`}>{quality.label}{qualityKind ? ` · ${qualityKind}` : ''}{scoreText ? ` · ${scoreText}` : ''}</span></div>
                     })()}
                     {(d.processing_status || d.metadata_route || d.model_count) && (
                       <div className="mt-1 text-[10px] text-text-muted">

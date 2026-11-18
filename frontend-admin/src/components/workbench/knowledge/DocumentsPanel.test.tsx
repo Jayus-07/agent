@@ -243,6 +243,26 @@ describe('DocumentsPanel 文档计数刷新', () => {
     expect(knowledgeService.getStats).toHaveBeenCalledTimes(2)
     expect(knowledgeService.listKnowledgeBases).toHaveBeenCalledTimes(2)
   })
+
+  it('区分历史审计记录缺项与内容或解析提醒', async () => {
+    vi.spyOn(knowledgeService, 'getDocuments').mockResolvedValue({
+      documents: [{
+        ...documentFixture,
+        quality_status: 'soft_warning',
+        quality_score: 80,
+        quality_issues: 'legacy_quality_record_incomplete, coverage_gap',
+      }],
+      total: 1,
+    })
+    const container = mountPanel()
+    await settleUi()
+
+    const badge = container.querySelector('[data-testid="quality-status"]')
+    expect(badge?.textContent).toContain('审计记录缺项 + 内容/解析提醒')
+    expect(badge?.textContent).toContain('旧分80')
+    expect(badge?.getAttribute('title')).toContain('历史质量记录缺少')
+    expect(badge?.getAttribute('title')).toContain('内容/解析提醒')
+  })
 })
 
 describe('DocumentsPanel 分块详情', () => {

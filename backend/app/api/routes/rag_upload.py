@@ -402,10 +402,12 @@ async def progress_queue_gc_loop(
             logger.warning(f"[RAG] 进度队列定时清理异常: {e}")
 
 
-# ============ MIME 白名单（P0-2 收紧 / F6 单一来源）============
+# ============ 管理端上传格式白名单 ============
+# 通用知识库上传只接受企业知识原件格式；解析器注册表仍可为内部流程
+# 保留其他格式，但新增解析器不会自动开放管理端上传。
+#
 # 设计要点：
-#   1. 支持的扩展名从解析器注册表 PARSABLE_EXTS 派生（F6 单一来源），
-#      与解析层永远一致；新增解析器自动对上传开放，无需同步多处名单。
+#   1. 上传格式必须同时有解析器和明确的管理端白名单许可。
 #   2. content_type 为空或显式 application/octet-stream 时由 _validate_mime
 #      放行，落盘后靠魔数校验兜底（Windows/浏览器客户端常对 docx 等声明
 #      octet-stream，MIME 层拒绝会误伤合法文件）；白名单表只登记
@@ -421,6 +423,14 @@ _background_index_tasks: set[asyncio.Task] = set()
 _INDEX_CONCURRENCY_LIMIT = RAG_MAX_CONCURRENT_INDEX
 _index_semaphore: asyncio.Semaphore | None = None
 
+MANAGEMENT_UPLOAD_ALLOWED_EXTS: frozenset[str] = frozenset({
+    ".pdf", ".docx", ".xlsx", ".txt", ".md", ".markdown",
+})
+
+MANAGEMENT_UPLOAD_FORMAT_LABEL = (
+    "PDF、Word（.docx）、Excel（.xlsx）、TXT（.txt）和 Markdown（.md/.markdown）"
+)
+
 _MIME_BY_EXT: dict[str, set[str]] = {
     "pdf":      {"application/pdf"},
     "md":       {"text/markdown", "text/plain"},
@@ -428,19 +438,12 @@ _MIME_BY_EXT: dict[str, set[str]] = {
     "txt":      {"text/plain"},
     "docx":     {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
     "xlsx":     {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
-    # csv 解析器注册后同步补齐（F6 单一来源派生，避免漂移）；
-    # 浏览器/客户端常以 text/plain 声明，一并放行。
-    "csv":      {"text/csv", "text/plain"},
-    "html":     {"text/html"},
-    "htm":      {"text/html"},
-    "pptx":     {"application/vnd.openxmlformats-officedocument.presentationml.presentation"},
-    "json":     {"application/json", "text/json"},
-    "xml":      {"application/xml", "text/xml"},
 }
 
 ALLOWED_MIME_TYPES: dict[str, set[str]] = {
     ext: mimes for ext, mimes in _MIME_BY_EXT.items()
     if f".{ext}" in PARSABLE_EXTS
+    and f".{ext}" in MANAGEMENT_UPLOAD_ALLOWED_EXTS
 }
 
 SUPPORTED_EXTS: frozenset[str] = frozenset(ALLOWED_MIME_TYPES.keys())
@@ -484,7 +487,11 @@ def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
         文本格式 NUL + UTF-16 BOM 探测）。
     """
     if ext not in SUPPORTED_EXTS:
-        return False, f"不支持 .{ext} 文件格式"
+        suffix = f".{ext}" if ext else "无扩展名"
+        return False, (
+            f"不支持 {suffix} 文件格式。当前仅支持"
+            f" {MANAGEMENT_UPLOAD_FORMAT_LABEL}。"
+        )
     if not content_type or not content_type.strip():
         # content_type 为空（curl 命令行等场景）→ 走 magic 校验兜底
         return True, ""
@@ -509,11 +516,9 @@ def _magic_matches(
     """按扩展名校验上传文件头；文本格式拒绝明显的二进制伪装。"""
     if ext == "pdf":
         return head.startswith(b"%PDF-")
-    if ext in {"docx", "xlsx", "pptx"}:
+    if ext in {"docx", "xlsx"}:
         return head.startswith(b"PK\x03\x04")
-    if ext in {
-        "md", "markdown", "txt", "csv", "html", "htm", "json", "xml",
-    }:
+    if ext in {"md", "markdown", "txt"}:
         has_nul = b"\x00" in head if contains_nul is None else contains_nul
         return not has_nul and head[:2] not in (b"\xff\xfe", b"\xfe\xff")
     return True

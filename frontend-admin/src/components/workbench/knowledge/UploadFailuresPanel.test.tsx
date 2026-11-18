@@ -215,7 +215,7 @@ describe('UploadFailuresPanel', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
 
     expect(container.textContent).toContain('通用')
-    expect(container.textContent).toContain('超出 Token 预算')
+    expect(container.textContent).toContain('本文件处理累计用量达到单文件上限')
     expect(container.textContent).toContain('OCR 只覆盖了部分页面')
     expect(container.textContent).toContain('未能完成逐页核对')
     expect(container.textContent).toContain('原文有内容未进入切分结果')

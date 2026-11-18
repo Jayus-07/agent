@@ -206,6 +206,7 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
             """绑定运行记录中的可信身份、租户和请求级模型预算。"""
             from backend.core.request_context import RequestContext
             from backend.infra.llm.budget import bind_request_budget
+            from backend.config.rag import RAG_INDEX_REQUEST_MAX_TOKENS
 
             RequestContext(
                 session_id=upload_id,
@@ -218,7 +219,10 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
                 # 后台索引没有 HTTP trace 入口；upload_id 作为稳定请求键，
                 # 让重试沿用同一请求预算，并把预占归属到上传者与租户。
                 bind_request_budget(
-                    upload_id, user_id=actor_id, tenant_id=tenant_id,
+                    upload_id,
+                    user_id=actor_id,
+                    tenant_id=tenant_id,
+                    max_total_tokens=RAG_INDEX_REQUEST_MAX_TOKENS,
                 )
             return run_with_task_state(
                 db_task_id, upload_id, run_index,

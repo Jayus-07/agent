@@ -57,6 +57,13 @@ CHUNK_LLM_MODEL = os.getenv("CHUNK_LLM_MODEL", "qwen2.5:3b")
 # 当前 APISIX 与 BFF 的请求体硬上限为 64 MiB；文件上限必须严格小于请求体
 # 上限，为 multipart 封装留出空间。提高文件上限前需先同步调整入口配置。
 RAG_MAX_FILE_SIZE = int(os.getenv("RAG_MAX_FILE_SIZE", "50"))  # 单位 MB
+# 每个 RAG 索引任务的累计模型 Token 上限。与聊天等通用请求预算分开，
+# 上传/重解析可能包含元数据和多批嵌入，32K 对中等表格文档偏低。
+RAG_INDEX_REQUEST_MAX_TOKENS = int(
+    os.getenv("RAG_INDEX_REQUEST_MAX_TOKENS", "128000")
+)
+if RAG_INDEX_REQUEST_MAX_TOKENS <= 0:
+    raise ValueError("RAG_INDEX_REQUEST_MAX_TOKENS 必须为正整数")
 # 临时文件目录 (atomic rename 前存这里, Docker 容器内安全)
 # 用 RAG_DATA_DIR 派生绝对路径，消除相对路径的 CWD 依赖
 from backend.config.database import RAG_DATA_DIR

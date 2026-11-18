@@ -115,9 +115,13 @@ class RequestBudgetExceeded(RuntimeError):
     retryable = False
     provider_attempted = False
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, *, detail: str = ""):
         self.reason = reason
-        super().__init__(f"请求预算已超限: {reason}")
+        self.detail = str(detail or "").strip()
+        message = f"请求预算已超限: {reason}"
+        if self.detail:
+            message += f"（{self.detail}）"
+        super().__init__(message)
 
 
 @dataclass
@@ -197,7 +201,13 @@ class RequestBudget:
             reason = self._exceeded_reason(kind)
             if reason and self.mode == "enforce":
                 _record_budget_request(self.mode, "rejected")
-                raise RequestBudgetExceeded(reason)
+                detail = ""
+                if reason == "request_tokens":
+                    detail = (
+                        f"已累计记录 {self.total_tokens} Token，"
+                        f"单次处理上限 {self.limits.max_total_tokens} Token"
+                    )
+                raise RequestBudgetExceeded(reason, detail=detail)
             if (self.mode == "enforce" and model_name and self.quota_store is not None
                     and not local_inference):
                 from backend.infra.llm.pricing import (
@@ -348,6 +358,38 @@ class RequestBudget:
                 exceeded=tuple(exceeded),
             )
 
+    def preflight_estimated_tokens(
+        self,
+        estimated_additional_tokens: int,
+        *,
+        stage: str = "",
+    ) -> None:
+        """在模型调用前用保守文本估算拦截确定会超预算的索引任务。"""
+        if (
+            isinstance(estimated_additional_tokens, bool)
+            or not isinstance(estimated_additional_tokens, int)
+            or estimated_additional_tokens < 0
+        ):
+            raise ValueError("estimated_additional_tokens 必须为非负整数")
+        if self.mode != "enforce" or self.limits.max_total_tokens <= 0:
+            return
+        with self._lock:
+            used_tokens = self.total_tokens
+            limit_tokens = self.limits.max_total_tokens
+            remaining_tokens = max(0, limit_tokens - used_tokens)
+            if used_tokens < limit_tokens and estimated_additional_tokens <= remaining_tokens:
+                return
+            _record_budget_request(self.mode, "rejected")
+            stage_detail = f"，阶段：{stage}" if stage else ""
+            raise RequestBudgetExceeded(
+                "request_tokens_preflight",
+                detail=(
+                    f"已累计记录 {used_tokens} Token，"
+                    f"预估后续至少需要 {estimated_additional_tokens} Token，"
+                    f"单文件上限 {limit_tokens} Token{stage_detail}"
+                ),
+            )
+
     def _exceeded_reason(self, kind: str) -> str:
         if (
             self.limits.max_total_tokens > 0
@@ -400,8 +442,9 @@ def bind_request_budget(
     tenant_id: str = "",
     max_retries: int | None = None,
     max_fallbacks: int | None = None,
+    max_total_tokens: int | None = None,
 ) -> None:
-    """按 Trace/request_id 绑定预算，可对任务级重试/回退上限作有界覆写。"""
+    """按 Trace/request_id 绑定预算，可对任务级上限作有界覆写。"""
     if max_retries is not None and (
         isinstance(max_retries, bool)
         or not isinstance(max_retries, int)
@@ -415,6 +458,12 @@ def bind_request_budget(
     ):
         # 全局配置中的 0 表示不限制；任务级覆写必须保留明确的硬上限。
         raise ValueError("max_fallbacks 必须是正整数")
+    if max_total_tokens is not None and (
+        isinstance(max_total_tokens, bool)
+        or not isinstance(max_total_tokens, int)
+        or max_total_tokens <= 0
+    ):
+        raise ValueError("max_total_tokens 必须是正整数")
     request_id = str(request_id or "").strip()
     if not request_id:
         clear_request_budget()
@@ -439,6 +488,8 @@ def bind_request_budget(
                 overrides["max_retries"] = max_retries
             if max_fallbacks is not None:
                 overrides["max_fallbacks"] = max_fallbacks
+            if max_total_tokens is not None:
+                overrides["max_total_tokens"] = max_total_tokens
             if overrides:
                 limits = replace(limits, **overrides)
             state = RequestBudget(
@@ -448,7 +499,11 @@ def bind_request_budget(
             _states[request_id] = state
             while len(_states) > _MAX_TRACKED_REQUESTS:
                 _states.popitem(last=False)
-        elif max_retries is not None or max_fallbacks is not None:
+        elif (
+            max_retries is not None
+            or max_fallbacks is not None
+            or max_total_tokens is not None
+        ):
             # 同一任务重试时保留已记账用量，只更新指定的任务级上限；
             # 不改变 token/cost 等其他请求预算阈值。
             overrides: dict[str, int] = {}
@@ -456,6 +511,8 @@ def bind_request_budget(
                 overrides["max_retries"] = max_retries
             if max_fallbacks is not None:
                 overrides["max_fallbacks"] = max_fallbacks
+            if max_total_tokens is not None:
+                overrides["max_total_tokens"] = max_total_tokens
             state.limits = replace(state.limits, **overrides)
         else:
             _states.move_to_end(request_id)
