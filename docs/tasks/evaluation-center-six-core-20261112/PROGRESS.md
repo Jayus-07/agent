@@ -834,5 +834,6 @@
 - 整合时前端 `OperationsPanel.tsx` 的 JSX 拼接错误被定向测试发现并修复；Token 页面测试夹具也补上 API 契约类型。复验用工作树自己的锁文件离线安装 Vitest 4.1.12 与 TypeScript 5.9.3，不再复用主工作树的旧 Vitest 4.1.11。
 - 定向验证：后端 16 个相关测试文件 `173 passed`（131.55 秒）。`PGHOST=127.0.0.1`、`PGPORT=1` 指向不可用端口；pytest 收尾的残留检查报告连接池超时并跳过，未连接共享或生产 PostgreSQL。`backend/tests/observability/test_obs_stores_pg.py` 因会清理 PostgreSQL 测试表且当前没有隔离测试库，未运行，标记为数据库集成未验收。
 - 前端管理端 4 个受影响页面测试 `22 passed`，`npx tsc --noEmit` 通过；Vite 只输出现有 `configLoader: native` 配置警告。`git diff --check` 通过，未发现冲突标记。
-- 本轮只做本地代码整合、安装新工作树忽略的依赖和定向测试；没有写共享/生产数据库，没有上传或索引资料，也没有从此整合分支重建/部署本机服务。因此代码行为的共享管理端实机复验仍为 **UNVERIFIED**，PostgreSQL 集成用例也未验收。原四个相关工作树和证据保持未提交；整合分支当前也尚未提交、推送、合并或部署。
+- 本轮只做本地代码整合、安装新工作树忽略的依赖和定向测试；没有写共享/生产数据库，没有上传或索引资料，也没有从此整合分支重建/部署本机服务。因此代码行为的共享管理端实机复验仍为 **UNVERIFIED**，PostgreSQL 集成用例也未验收。原四个相关工作树和证据保持未提交；整合分支已提交并推送，PR #481 已创建，当前未合并、未部署。
 - 部署门禁记录：`docker compose ls` 显示共享 `agent` 栈 21 个服务；宿主可用内存 2.88 GiB，Redis、嵌入/重排模型健康，当前 API HTTP 200。未重建的原因不是资源或服务不健康，而是合并分支的维护任务会收口全库超时运行，潜在覆盖 `travel` 等共享知识库；当前没有该共享库的隔离副本与本次改动专用备份/恢复验证。应先在有备份的隔离库验证收口 SQL 和影响范围，再决定是否部署到共享本机栈。
+- PR 首次提交 `820e8e9` 的 GitHub CI：10 个检查中 8 个成功、`frontend-admin-security` 失败、真实 API “RAG Smoke Evaluation (8 cases, real API)” 按工作流配置跳过。安全门禁的 `npm audit` 报高危 `picomatch` ReDoS（[GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)，6 项高危告警）；本 PR 未改 `frontend-admin/package-lock.json`，风险来自基线依赖链。离线 RAG smoke preflight 与独立 8 cases 校验均成功；后者不等于真实 API 检索验收。PR #481 保持 open/blocked，未合并。
