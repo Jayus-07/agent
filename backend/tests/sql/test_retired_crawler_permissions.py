@@ -21,7 +21,11 @@ def test_crawler_read_revocation_is_registered_after_role_and_schema_migrations(
     assert names.index("148_readonly_default_privileges_completion.sql") < names.index(
         MIGRATION.name
     )
+    assert names.index("150_retail_erp_pilot_schema.sql") < names.index(MIGRATION.name)
     assert MIGRATION.name in BUSINESS_MIGRATIONS
+    assert BUSINESS_MIGRATIONS.index("004_readonly_role.sql") < (
+        BUSINESS_MIGRATIONS.index("150_retail_erp_pilot_schema.sql")
+    )
     assert BUSINESS_MIGRATIONS.index("150_retail_erp_pilot_schema.sql") < (
         BUSINESS_MIGRATIONS.index(MIGRATION.name)
     )

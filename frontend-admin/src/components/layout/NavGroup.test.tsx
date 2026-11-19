@@ -57,7 +57,7 @@ describe('NavGroup', () => {
 
     expect(container.textContent).not.toContain('业务洞察')
     expect(container.textContent).not.toContain('选品运营')
-    expect(container.querySelectorAll('a')).toHaveLength(3)
+    expect(container.querySelectorAll('a')).toHaveLength(2)
     expect(container.querySelector('button')?.getAttribute('aria-expanded')).toBe('true')
   })
 
@@ -77,14 +77,14 @@ describe('NavGroup', () => {
 
     expect(container.textContent).toContain('业务洞察')
     expect(container.textContent).not.toContain('选品运营')
-    expect(container.querySelectorAll('a')).toHaveLength(3)
+    expect(container.querySelectorAll('a')).toHaveLength(2)
   })
 
   it('参考图模式常驻显示分类标题和全部页面入口，不显示折叠按钮', () => {
     const container = mount(false, true)
 
     expect(container.querySelector('[role="heading"]')?.textContent).toBe('业务运营')
-    expect(container.querySelectorAll('a')).toHaveLength(3)
+    expect(container.querySelectorAll('a')).toHaveLength(2)
     expect(container.querySelector('button')).toBeNull()
   })
 })

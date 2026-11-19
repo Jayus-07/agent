@@ -411,6 +411,8 @@ ORDER_LAST = [
     # 147/148/152 的 REVOKE 必须晚于 004 的 schema 级 GRANT（否则被重新授权覆盖）。
     "147_readonly_revoke_cs_business_tables.sql",
     "148_readonly_default_privileges_completion.sql",
+    # ERP schema 显式 GRANT 依赖 004 创建的只读角色，并排在权限收口之后。
+    "150_retail_erp_pilot_schema.sql",
     "152_retire_crawler_read_access.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
