@@ -2,10 +2,10 @@
 """test_main_lock_domain.py — AI 助手页锁域（domain_hint=main）回归（2026-10-08）
 
 产品拍板「隔离+引导卡」：/agent 页每条消息带 domain_hint=main：
-- 跳过旅游/预订/选品/商务 prefilter 与延续判定——域请求不在本页执行
-- 旅游/选品/预订/商务强信号 → handoff 引导卡（target=travel/selection_funnel）
+- 跳过旅游/预订/商务 prefilter 与延续判定——域请求不在本页执行
+- 旅游/预订/商务强信号 → handoff 引导卡（target=travel）
 - general_chat 与主路由（sql/rag/plan）不受影响
-- clarify 不给旅游/选品倾向选项（_MAIN_GENERIC_OPTIONS）
+- clarify 不给旅游倾向选项（_MAIN_GENERIC_OPTIONS）
 """
 from unittest.mock import MagicMock
 
@@ -77,11 +77,6 @@ class TestMainHandoffTarget:
         assert out is not None
         assert out.get("route_mode") == "handoff"
         assert out["_handoff"]["target_domain"] == "travel"
-
-    def test_selection_strong_signal(self):
-        out = main_forced_handoff_update("给宠物零食做一次智能选品", {})
-        assert out is not None
-        assert out["_handoff"]["target_domain"] == "selection_funnel"
 
     def test_plain_query_no_signal(self):
         assert main_forced_handoff_update("这个季度的经营状况怎么样", {}) is None

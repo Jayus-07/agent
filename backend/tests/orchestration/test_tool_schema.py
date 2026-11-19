@@ -17,8 +17,8 @@ class TestNameMapping:
         assert capability_to_function_name("sql.query") == "sql__query"
         assert function_name_to_capability("sql__query") == "sql.query"
         assert function_name_to_capability(
-            capability_to_function_name("competitor.analyze")
-        ) == "competitor.analyze"
+            capability_to_function_name("sample.execute")
+        ) == "sample.execute"
 
     def test_illegal_name_rejected(self):
         # 含空格/点以外非法字符的 capability 名无法转为合法 function name

@@ -10,7 +10,6 @@
 | 旅游 | backend/travel/、backend/travel_v2/ | 对话规划、行程版本以及独立 Trip/Revision/Template API |
 | RAG | backend/rag/、backend/services/rag_server.py | 文档处理、索引、检索和证据门；本地/远程服务边界由配置决定 |
 | SQL | backend/sql/ | 受授权范围限制的只读业务查询 |
-| 选品 | backend/selection_funnel/、backend/selection/ | 选品流程与业务决策模块 |
 
 域内具体规则和测试入口见 [业务域导航](../README.md#业务域)。
 

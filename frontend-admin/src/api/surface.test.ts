@@ -23,7 +23,6 @@ const DOMAINS = [
   'approvals',
   'alerts',
   'chat',
-  'competitor',
   'evaluation',
   'feedback',
   'governance',
@@ -34,8 +33,6 @@ const DOMAINS = [
   'observability',
   'prompts',
   'reports',
-  'selection',
-  'selectionDecision',
 ] as const
 
 describe('surface contract: 每域一个模块 src/api/<domain>.ts', () => {

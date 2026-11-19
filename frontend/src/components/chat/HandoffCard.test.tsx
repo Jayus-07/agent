@@ -2,7 +2,7 @@
  * HandoffCard 组件回归（多域隔离 M3）
  *
  * 浏览器实机走查延后窗口内的组件级兜底：验证三域渲染（图标/按钮文案/
- * 引导话术正文）与跳转意图（travel→/travel 带参、selection→/selection-funnel、
+ * 引导话术正文）与跳转意图（travel→/travel 带参、
  * cs→sessionStorage+开抽屉事件、埋点上报发出）。
  *
  * 渲染走项目既有 act+createRoot 模式（与 LLMSwitcher.test.tsx 同款）——
@@ -66,7 +66,7 @@ afterEach(() => {
   }
 })
 
-describe('HandoffCard — 三域渲染与跳转', () => {
+describe('HandoffCard — 受支持域的渲染与跳转', () => {
   it('travel：渲染话术与跳转按钮，点击带参跳旅游页并上报埋点', () => {
     const container = mount(evt({
       text: '这是一次行程规划需求',
@@ -77,17 +77,6 @@ describe('HandoffCard — 三域渲染与跳转', () => {
     act(() => { findButton(container, '去旅游规划页').click() })
     expect(pushMock).toHaveBeenCalledWith('/travel?destination=%E7%A6%8F%E5%B7%9E&days=2&party_size=3&must_go=%E4%B8%89%E5%9D%8A%E4%B8%83%E5%B7%B7')
     expect(silentMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('selection_funnel：带 category/platform 跳选品页', () => {
-    const container = mount(evt({
-      target_domain: 'selection_funnel',
-      params: { category: '宠物零食', platform: '淘宝' },
-    }))
-    act(() => { findButton(container, '去智能选品页').click() })
-    expect(String(pushMock.mock.calls[0][0])).toContain('/selection-funnel?')
-    expect(String(pushMock.mock.calls[0][0])).toContain('category=')
-    expect(String(pushMock.mock.calls[0][0])).toContain('platform=')
   })
 
   it('customer_service：不走路由跳转，写预填并发开抽屉事件', () => {

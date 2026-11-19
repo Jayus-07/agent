@@ -4,7 +4,7 @@
   - 写入旁路软失败：任何异常不抛；未知域/空问题丢弃
   - 问题截断 500 字、哈希按规范化文本稳定、同域同哈希 24h 去重
   - trace 适配器：#12 三分类推导域、plan 支线细分 planner、合成问题不收、
-    selection_funnel/rag_agent 不冒充
+    退役 selection_funnel / rag_agent 历史记录不冒充
   - 状态机只接受 accepted/dismissed；转候选调既有候选管道（redacted=True）
 """
 from __future__ import annotations
@@ -144,7 +144,7 @@ class TestTraceAdapter:
         # 守卫占位问题不收
         assert ledger.record_question_from_trace(
             self._trace(question="[cs-guard-rejected:policy]")) is False
-        # 选品漏斗/独立 RAG 链不冒充三分类
+        # 退役域和独立 RAG 链的历史记录不冒充三分类
         assert ledger.record_question_from_trace(
             self._trace(tags={"runtime_domain": "selection_funnel"})) is False
         assert ledger.record_question_from_trace(

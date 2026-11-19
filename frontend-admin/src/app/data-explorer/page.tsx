@@ -30,12 +30,12 @@ import QuestionLedgerPanel from '@/components/data-query/QuestionLedgerPanel'
 
 type Tab = 'ask' | 'browse' | 'ledger'
 
-/** 快捷示例（覆盖商品/订单/库存/竞品四域，供一键填入） */
+/** 快捷示例覆盖商品、订单和库存查询，供一键填入。 */
 const EXAMPLES = [
   '查询库存低于安全库存的商品及其库存量',
   '统计各商品分类的销售额排名',
   '列出最近 10 个订单的金额',
-  '对比竞品价格与我们售价的差异',
+  '查询近 7 天各门店的销售额',
 ]
 
 const STATUS_BADGE: Record<string, string> = {

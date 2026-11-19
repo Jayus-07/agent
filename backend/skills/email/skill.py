@@ -31,7 +31,7 @@ class EmailSkill(BaseSkill):
 
     def _select_tool(self, capability: str, params: dict):
         """按 capability/action 分发到单职责 Tool，参数过滤到目标签名内
-        （参照 CompetitorAnalysisSkill 的分发模式）。"""
+        （参照多 Tool Skill 的分发模式）。"""
         action = params.get("action") or ""
         if action == "search" or capability == "email.search":
             tool = search_email_tool

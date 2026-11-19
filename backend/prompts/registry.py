@@ -289,28 +289,12 @@ _register(PromptSpec(
     default_file="tool_semantic_suggest.yaml",
 ))
 
-_register(PromptSpec(
-    key="selection_decision.review_pain",
-    name="用户痛点分析",
-    category="selection",
-    risk_level="medium",
-    default_file="selection_decision_review_pain.yaml",
-))
-
-_register(PromptSpec(
-    key="selection_decision.differentiation",
-    name="差异化分析",
-    category="selection",
-    risk_level="medium",
-    default_file="selection_decision_differentiation.yaml",
-))
-
 # ── 市场调研（Skill 集成计划批次 2）────────────────────────────
 
 _register(PromptSpec(
     key="market_research.analyzer",
     name="品类市场调研分组分析",
-    category="selection",
+    category="business",
     risk_level="medium",
     default_file="market_research_analyzer.yaml",
 ))
@@ -386,38 +370,7 @@ _register(PromptSpec(
     default_file="",
 ))
 
-# ── Selection / Competitor / Business Report ───────────────────
-
-_register(PromptSpec(
-    key="selection.panel.vote",
-    name="选品评审投票 Prompt",
-    category="selection",
-    risk_level="medium",
-    variables=(R("role"), R("focus")),
-    default_file="selection_panel_vote.yaml",
-))
-
-_register(PromptSpec(
-    key="selection.recommender.reason",
-    name="选品推荐理由",
-    category="selection",
-    risk_level="medium",
-    variables=(
-        R("title"), R("platform"), R("latest_price"), R("currency"),
-        R("rating"), R("review_count"), R("highlights"),
-        R("total"), R("breakdown"), R("notes"),
-    ),
-    default_file="selection_recommender_reason.yaml",
-))
-
-_register(PromptSpec(
-    key="competitor.extractor",
-    name="竞品数据抽取",
-    category="competitor",
-    risk_level="low",
-    variables=(R("content"),),
-    default_file="competitor_extractor.yaml",
-))
+# ── Business Report ────────────────────────────────────────────
 
 _register(PromptSpec(
     key="business_report.polish",

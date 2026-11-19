@@ -95,14 +95,11 @@ WORKFLOW_DB_PG_CONFIG = _pg_cfg("WORKFLOW_DB_PGDATABASE", "agent_memory")
 INVENTORY_DB_PG_CONFIG = _pg_cfg("INVENTORY_DB_PGDATABASE", "agent_business")
 
 # === 业务族存储（PostgreSQL，唯一实现，目标库 agent_business）===
-SELECTION_PG_CONFIG = _pg_cfg("SELECTION_PGDATABASE", "agent_business")
-SELECTION_DECISION_PG_CONFIG = _pg_cfg("SELECTION_DECISION_PGDATABASE", "agent_business")
 MARKET_RESEARCH_PG_CONFIG = _pg_cfg("MARKET_RESEARCH_PGDATABASE", "agent_business")
-COMPETITOR_PG_CONFIG = _pg_cfg("COMPETITOR_PGDATABASE", "agent_business")
 FEEDBACK_PG_CONFIG = _pg_cfg("FEEDBACK_PGDATABASE", "agent_business")
 
 # === 向量库（pgvector，唯一实现）===
-# 主 RAG chunk 级 / doc 级 / 竞品市场索引 / 编排路由索引 → PgVectorKnowledgeStore
+# 主 RAG chunk 级 / doc 级 / 编排路由索引 → PgVectorKnowledgeStore
 # （rag_vectors 表）。ChromaKnowledgeStore / factory / 裸 chromadb 轨均已删除，
 # 回滚 = git revert 对应提交。
 VECTOR_PG_CONFIG = _pg_cfg("VECTOR_PGDATABASE", "agent_memory")

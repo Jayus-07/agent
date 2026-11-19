@@ -7,7 +7,7 @@ POST /roundtable/stream — 发起一场多域 Agent 人设角色的圆桌对话
   自己域内的**只读工具**（真实执行走 BaseSkill.execute 治理链路），
   再基于工具结果或直接生成本轮发言；发言进入共享记录，后续角色相互回应。
 - 聊完即弃：不落库、无断线续传；客户端断连即停止编排（省 token）。
-- 只读白名单：写类能力（email/data_export/competitor 快照等）一律不进
+- 只读白名单：写类能力（邮件发送、数据导出等）一律不进
   圆桌——有副作用的 Tool 仍只走主图既有 Governance/审批链路，演示场景
   从根上不给。
 - 硬终止自计数：``LLM_BUDGET_MODE`` 默认 off，不能依赖预算链终止；
@@ -70,14 +70,6 @@ _PERSONAS: dict[str, dict[str, Any]] = {
             "退改签政策与售后风险，常引用服务数据和历史工单经验提醒大家避坑。"
         ),
     },
-    "selection_funnel": {
-        "display_name": "选品分析师",
-        "fallback_label": "智能选品",
-        "persona": (
-            "你是圆桌中的「选品分析师」，数据驱动、理性克制，习惯用趋势、"
-            "价格与销量数据说话，给出量化依据后再下结论。"
-        ),
-    },
 }
 
 # ── 域 → 只读工具箱（白名单；写类能力一律不放行） ─────────────────────────
@@ -87,7 +79,6 @@ _READONLY_CAPABILITIES = frozenset({
 _DOMAIN_TOOLS: dict[str, tuple[str, ...]] = {
     "travel": ("travel.poi_search", "map.lookup", "web.search"),
     "customer_service": ("rag.search", "sql.query", "web.search"),
-    "selection_funnel": ("web.search", "sql.query", "rag.search"),
 }
 
 _tools_cache: dict[str, tuple[list[dict], dict[str, str]]] = {}

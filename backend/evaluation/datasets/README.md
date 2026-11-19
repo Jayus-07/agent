@@ -10,11 +10,11 @@
 | rag | `rag/cases.jsonl` | 24 | 6.0.0-desktop-candidate.1 | `load_dataset('rag')` | `desktop_upload_smoke`(8) / `desktop_upload_full`(24)，对应 `rag_eval_kb` 的 28 份上传样本 |
 | planner | `planner/cases.jsonl` | 20 | v2.0 | `load_dataset('planner')` | 业务域和 capability 对齐当前平台；每条样本锁定完整依赖边和步骤范围，hash 由 manifest 校验 |
 | cs | `cs/cases.jsonl` | 324 | v2.2 | `load_dataset('cs')` | 2026-09-19 锁版 320 条（20 v1 + 300 cs-v2）；2026-11-02 P2 修订升 v2.1（faq 标注口径同源化 + intent→target 映射矛盾修复）、P3 收编 4 条候选（t_balance_query×2 / t_order_cancel×2，词表扩圈后回放全绿）升 v2.2。依据见 manifest notes。消费：决策层回放门禁 `backend/tests/customer_service/test_cs_decision_replay.py`（离线口径 284/244，multi_turn 与 safety-risk 显式 skip）+ 词表门禁 `cs/gate/`（test_cs_eval_gate）；管理端评测中心已接线（2026-11-02 P4：dataset_key `cs_locked_v2_2`，domain=cs，v1.0.0 版本 324 cases，offline run 324/324 pass）|
-| sql | `sql/cases.jsonl` | 15 | v1.0 | `load_dataset('sql')` | 含 S014~S017 安全用例 |
+| sql | `sql/cases.jsonl` | 15 | v1.1 | `load_dataset('sql')` | 含 S014~S017 安全用例；已退役的竞品采集域问题为 no_table 拒答 |
 | e2e | `e2e/cases.jsonl` | 25 | v1.0 | `load_dataset('e2e')` | manifest case_count 2026-09-15 由 13 校正为 25 |
 | travel-provider | `travel-provider/cases.jsonl` | 8 | v1.0 | `load_dataset('travel-provider')` | Fake Provider 离线探针；`manifest.content_hash` 锁定样本，真实第三方链路见 `backend/scripts/e2e_travel_providers.py` |
-| planner_params | `planner_params.json` | 8 | v1.0 | `backend/tests/evaluation/test_planner_params.py` 直读 | live 模式（真实 LLM）参数填充集，路径被测试硬引用，**勿移动** |
-| tool_selector | `tool_selector_eval.json` | 67 | v1.3 | `backend/evaluation/run_tool_selector_eval.py` | FC 工具选择独立跑批，不走统一 loader |
+| planner_params | `planner_params.json` | 6 | v1.0 | `backend/tests/evaluation/test_planner_params.py` 直读 | live 模式（真实 LLM）参数填充集，路径被测试硬引用，**勿移动** |
+| tool_selector | `tool_selector_eval.json` | 63 | v1.4 | `backend/evaluation/run_tool_selector_eval.py` | FC 工具选择独立跑批，不走统一 loader |
 
 ## 特殊文件
 
@@ -23,7 +23,9 @@
 - `cs.v1.deprecated.json`：旧 cs 集（ID CS001~020），与新集零交集，2026-09-15 标记弃用。
 - `cs/v2.deprecated/`：cs-v2 生成中间分片归档（2026-11-02 治理定案，由 `cs/v2/` 改名）。304 条 = 与锁版逐字段一致的 300 条 + 4 条候选（t_balance_query×2 / t_order_cancel×2；P2 评审规则层无覆盖暂不收编，P3 词表扩圈后回放全绿并已按锁版流程收编进 v2.2，本目录仅存历史归档）。锁版 `cs/cases.jsonl` 是唯一事实源，分片不再维护；后续增补一律走锁版升版流程（升版本号 + 重算 sha256）。
 - `planner.v1.deprecated.json`：迁移前的顶层 planner.json 原件留档。
-- `sql_v2/`：45 条锁定的专项 NL2SQL 验收基线；`sql_v3/` 修正 SC-117 退款率排名分母；`sql_v4/` 修正 SC-121 自然月对比边界和 SC-127 空销量聚合；当前 `sql_v5/` 再修正客户、商品、分类、竞品的同名实体分组。它们都不属于默认模块清单，默认 `load_dataset('sql')` 仍加载 `sql/cases.jsonl`；当前候选可用 `--module sql --dataset sql_v5/cases.jsonl --live --no-ragas` 显式执行 SQL 结果级评测。该命令会调用真实 SQL Agent 和数据库，需在共享环境空闲且服务健康时再运行，通过后再决定是否接入默认基线。
+- `sql_v2/` 至 `sql_v5/` 是不可变历史快照，不再接受新评测加载；当前 SQL 候选为 `sql_v6/cases.jsonl`（65 条），在 sql_v5 业务问数修正上将 4 条退役 crawler 来源题改为拒答，并并入 20 条零售 ERP 合成业务用例。`sql_retail_erp_v1/` 是已并入 v6 的历史组成集。结果级 live 评测命令为 `--module sql --dataset sql_v6/cases.jsonl --live --no-ragas`，会调用真实 SQL Agent 和数据库；共享环境空闲、服务健康且获准运行时再执行。
+- `sql/cases.v1.0.deprecated.jsonl` 与 `sql/manifest.v1.0.deprecated.json` 只用于历史审计；当前有效默认 SQL 集为 v1.1，竞品采集域问题仅作为 `no_table` 拒答样例，不允许生成或评测 `crawler.competitor_*` 查询。
+- `sql/golden_v2.deprecated.jsonl` 是旧 SQL Golden 的重复归档副本；loader 会拒绝 `.deprecated.` 文件，所有 SQL 用例加载入口也会拒绝 gold SQL/目标表引用已退役 crawler 表。
 - `GROUND_TRUTH_ENRICHMENT_PLAN.md`：数据集增强计划文档（历史）。
 
 ## 维护约定

@@ -10,7 +10,7 @@
 import {
   Plug,
   Activity, AlertTriangle, Bot, CalendarClock, ChartColumn, CheckCheck, CircleDollarSign,
-  ClipboardList, Database, FileCode, FileText, Gauge, GitBranch, KeyRound, LayoutDashboard,
+  ClipboardList, Database, FileCode, FileText, Gauge, KeyRound, LayoutDashboard,
   ListTree, MessagesSquare, Package, Puzzle, Rocket, Settings, Shield, ShieldCheck, TrendingUp, Wrench,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -55,11 +55,6 @@ export const NAV: NavEntry[] = [
     icon: <TrendingUp size={18} />, label: '业务运营', alwaysOpen: true,
     items: [
       { label: '数据查询', path: '/data-explorer', icon: <ChartColumn size={16} />, minRole: 'editor', section: '业务洞察' },
-      { label: '竞品监控', path: '/competitors', icon: <TrendingUp size={16} />, section: '业务洞察' },
-      {
-        label: '选品工作台', path: '/selection-workbench', icon: <ListTree size={16} />, section: '选品运营',
-        activePaths: ['/selection-funnel', '/selection-decision'],
-      },
       { label: '报告中心', path: '/reports', icon: <FileText size={16} />, section: '业务产出' },
     ],
   },
@@ -111,7 +106,6 @@ export const NAV: NavEntry[] = [
         activeQuery: { key: 'tab', value: 'tokens' },
         icon: <CircleDollarSign size={16} />, activePaths: ['/observability/tokens'], section: '服务观测',
       },
-      { label: '选品漏斗历史', path: '/observability/selection-funnel', icon: <GitBranch size={16} />, section: '业务追踪' },
     ],
   },
   {

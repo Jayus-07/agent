@@ -198,13 +198,6 @@ class OrchestratorState(AgentState):
     # schema 外的键（实测 2026-09-19），剥离后追问事件永远发不出去。
     _clarify: dict | None
     clarification_request: ClarificationRequest | None  # canonical 澄清事实源
-    # 选品漏斗域上下文（2026-09-23 补登记）：selection_funnel_prefilter /
-    # selection_funnel_graph_node 写入（conversation_id / source / top 等），
-    # workflow_executor 的 _build_workflow_inputs 据此向 selection_decision
-    # 注入 funnel_candidates。**必须入 schema**——LangGraph 会剥离 schema 外
-    # 的键，缺此键时漏斗产出在 checkpoint 写入即被丢弃，决策工作流恒回落
-    # watchlist（与 selection_blocked / _clarify 同一批坑，2026-09-23 审查）。
-    funnel_context: dict
     # 旅游域上下文（2026-09-23 补登记）：travel_prefilter / router 延续分支
     # 写入（conversation_id / travel_route），travel_graph_node 读写，interrupt
     # 场景经其携带 pending_decision / resume_decision。**必须入 schema**——

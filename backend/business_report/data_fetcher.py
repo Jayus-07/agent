@@ -127,33 +127,6 @@ REPORT_REGISTRY: Dict[str, Dict[str, Any]] = {
             {"type": "bar", "x": "仓库", "y": "现有库存", "title": "各仓库库存量"},
         ],
     },
-    # ═══════ 竞品价格监控（demo 库无广告投放数据，改用 crawler 域） ═══════
-    "ad_performance": {
-        "name": "竞品价格监控报告",
-        "source": {
-            "type": "sql",
-            "sql": """
-                SELECT
-                    cp.platform AS 平台,
-                    cp.brand AS 品牌,
-                    cp.product_name AS 商品名称,
-                    cp.category AS 品类,
-                    MIN(price.price) AS 最低价,
-                    ROUND(AVG(price.price), 2) AS 均价,
-                    MAX(price.crawl_time) AS 最近抓取时间
-                FROM crawler.competitor_products cp
-                JOIN crawler.competitor_price price ON price.product_id = cp.id
-                WHERE price.crawl_time >= CURRENT_TIMESTAMP - INTERVAL '30 days'
-                GROUP BY cp.platform, cp.brand, cp.product_name, cp.category
-                ORDER BY 均价 DESC
-                LIMIT 50
-            """,
-        },
-        "templates": ["ad_performance.j2"],
-        "charts": [
-            {"type": "bar", "x": "商品名称", "y": "均价", "title": "竞品均价对比"},
-        ],
-    },
     # ═══════ 订单履约报告 ═══════
     "order_fulfillment": {
         "name": "订单履约报告",

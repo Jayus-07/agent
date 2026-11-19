@@ -13,13 +13,11 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
   Activity, AlertTriangle, CheckCircle2, ChevronRight, Clock,
-  Database, FileWarning, ShieldCheck, Sparkles, TrendingUp, XCircle, WalletCards, MessageSquareText,
+  Database, FileWarning, ShieldCheck, Sparkles, TrendingUp, WalletCards, MessageSquareText,
 } from 'lucide-react'
 import { getTokensSummary, getTraceStats, type TokensSummary } from '@/api/observability'
 import { evaluationService } from '@/api/evaluation'
 import { approvalService } from '@/api/approvals'
-import { competitorService } from '@/api/competitor'
-import { selectionDecisionApi } from '@/api/selectionDecision'
 import { fetchRaw } from '@/api/client'
 import { getBudgetSummary } from '@/api/budgets'
 import { listPriceVersions } from '@/api/modelPrices'
@@ -172,17 +170,6 @@ export default function AdminDashboard() {
       ? ((await pendingRes.json()) as { total?: number }).total ?? 0
       : 0
     return { docCount: stats.doc_count ?? 0, pending }
-  })
-
-  const competitor = useAsync(async () => {
-    const r = await competitorService.getStats()
-    return r.stats ?? null
-  })
-
-  const decisions = useAsync(async () => {
-    const r = await selectionDecisionApi.list(1, 50)
-    const tasks = r.tasks ?? []
-    return { failed: tasks.filter((t) => t.status === 'failed').length, total: tasks.length }
   })
 
   const uploadFailures = useAsync(async () => {
@@ -343,23 +330,6 @@ export default function AdminDashboard() {
             href="/knowledge/workbench?tab=failures"
             tone="danger"
           />
-          <TodoRow
-            icon={<XCircle size={16} />}
-            title="选品决策失败任务"
-            count={decisions.state === 'ok' ? decisions.data?.failed ?? 0 : null}
-            loading={decisions.state === 'loading'}
-            error={decisions.state === 'error'}
-            href="/selection-workbench?tab=decision"
-            tone="danger"
-          />
-          <TodoRow
-            icon={<AlertTriangle size={16} />}
-            title="竞品降价（今日采集发现）"
-            count={competitor.state === 'ok' && competitor.data ? num(competitor.data.price_drops) : null}
-            loading={competitor.state === 'loading'}
-            error={competitor.state === 'error'}
-            href="/competitors"
-          />
         </section>
 
         <section className="rounded-xl border border-black/5 bg-white p-2 shadow-card">
@@ -372,15 +342,6 @@ export default function AdminDashboard() {
               </div>
             </div>
             <div className="rounded-lg bg-surface-elevated p-3">
-              <div className="text-[11px] text-text-muted">竞品监控</div>
-              <div className="mt-1 text-xl font-semibold text-text-primary">
-                {competitor.state === 'ok' && competitor.data
-                  ? `${fmtInt(competitor.data.enabled)} / ${fmtInt(competitor.data.total)}`
-                  : '—'}
-                <span className="ml-1 text-[11px] font-normal text-text-muted">启用中</span>
-              </div>
-            </div>
-            <div className="rounded-lg bg-surface-elevated p-3">
               <div className="text-[11px] text-text-muted">最近评测通过率</div>
               <div className="mt-1 text-xl font-semibold text-text-primary">
                 {evals.state === 'ok' && evals.data ? fmtPct(evals.data.pass_rate) : '—'}
@@ -390,13 +351,6 @@ export default function AdminDashboard() {
                   {evals.data.module} · <Link className="text-accent hover:underline" href="/evaluations">{evals.data.run_id.slice(0, 8)}</Link>
                 </div>
               )}
-            </div>
-            <div className="rounded-lg bg-surface-elevated p-3">
-              <div className="text-[11px] text-text-muted">选品决策任务</div>
-              <div className="mt-1 text-xl font-semibold text-text-primary">
-                {decisions.state === 'ok' ? fmtInt(decisions.data?.total ?? 0) : '—'}
-                <span className="ml-1 text-[11px] font-normal text-text-muted">近 50 条</span>
-              </div>
             </div>
           </div>
           <div className="flex items-center gap-1.5 px-3 pb-2 pt-1 text-[11px] text-text-muted">

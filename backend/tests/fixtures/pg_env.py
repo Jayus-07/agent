@@ -6,8 +6,8 @@
 
 机制（三步，缺一不可）：
 1. monkeypatch.setenv 全部 *_PG_TABLE_PREFIX / *_PG_TABLE → pgtest_biz_* 测试表名
-2. 强制从 sys.modules 弹出全部 *_pg 存储模块——部分模块（competitor/market_research/
-   inventory/selection/selection_decision/feedback）在**模块导入时**烘焙表名常量，
+2. 强制从 sys.modules 弹出全部 *_pg 存储模块——部分模块（market_research/
+   inventory/feedback）在**模块导入时**烘焙表名常量，
    只 setenv 不重载不会生效。teardown 时再次弹出，让后续 import 回到生产表名。
 3. teardown 按 `pgtest_%` 模式扫描 agent_memory / agent_business 两库并 DROP。
 
@@ -31,12 +31,9 @@ import pytest
 
 from backend.config.database import (
     BUSINESS_DB_CONFIG,
-    COMPETITOR_PG_CONFIG,
     FEEDBACK_PG_CONFIG,
     INVENTORY_DB_PG_CONFIG,
     MARKET_RESEARCH_PG_CONFIG,
-    SELECTION_DECISION_PG_CONFIG,
-    SELECTION_PG_CONFIG,
     WORKFLOW_DB_PG_CONFIG,
 )
 
@@ -58,11 +55,8 @@ def worker_scoped_prefix() -> str:
 # 其余（trace/analytics/llm_usage/chunk/keyword/op_log/doc_registry/persistence_pg/
 # pgvector）在 __init__ 读 env，setenv 即生效；一并弹出也无害。
 _PG_STORE_MODULES = (
-    "backend.competitor.store_pg",
     "backend.market_research.store_pg",
     "backend.orchestration.inventory.store_pg",
-    "backend.selection.store_pg",
-    "backend.selection_decision.store_pg",
     "backend.feedback.pg",
     "backend.orchestration.workflow.persistence_pg",
     "backend.observability.trace_store_pg",
@@ -76,11 +70,8 @@ _PG_STORE_MODULES = (
 
 # 工厂单例属性（best-effort 重置；属性名不存在则跳过）
 _SINGLETON_RESETS = (
-    ("backend.competitor.store", "_store"),
     ("backend.market_research.store", "_store"),
     ("backend.orchestration.inventory.store", "_store"),
-    ("backend.selection.store", "_store"),
-    ("backend.selection_decision.store", "_store"),
     ("backend.orchestration.workflow.persistence", "_store"),
     ("backend.observability.trace_store", "_trace_store"),
     ("backend.observability.analytics_store", "_analytics_store"),
@@ -115,10 +106,7 @@ def set_pg_test_env(monkeypatch):
     prefix = worker_scoped_prefix()
     monkeypatch.setenv("WORKFLOW_DB_PG_TABLE", f"{prefix}workflow_runs")
     monkeypatch.setenv("INVENTORY_DB_PG_TABLE_PREFIX", prefix)
-    monkeypatch.setenv("SELECTION_PG_TABLE_PREFIX", prefix)
-    monkeypatch.setenv("SELECTION_DECISION_PG_TABLE_PREFIX", prefix)
     monkeypatch.setenv("MARKET_RESEARCH_PG_TABLE_PREFIX", prefix)
-    monkeypatch.setenv("COMPETITOR_PG_TABLE_PREFIX", prefix)
     monkeypatch.setenv("FEEDBACK_PG_TABLE", f"{prefix}feedback")
     monkeypatch.setenv("OBS_DB_PG_TABLE_PREFIX", prefix)
     monkeypatch.setenv("RAG_STORES_PG_TABLE_PREFIX", prefix)
@@ -135,9 +123,7 @@ def drop_pgtest_tables() -> int:
     的库名 env（INVENTORY_DB_PGDATABASE，CI 未设时默认 agent_business），
     与 BUSINESS_DB_CONFIG 可能不同库——漏掉会让 inventory 的 pgtest 表
     永远清不掉，同 worker 前序用例的策略行毒死后续用例（CI misc suite
-    test_notification 10 例互踩实证，v2 run 41120872440）。COMPETITOR_
-    PG_CONFIG 同理：CI 独立 competitor 库漏清时 anti_ban:state 计数
-    跨用例累积（v14 backend-root run 41249581757，4 例 BudgetExhausted）。
+    test_notification 10 例互踩实证，v2 run 41120872440）。
     模式按 worker 后缀收窄（xdist 下不得删别的工作进程正在用的表）；
     单进程时与原宽匹配语义一致。连接失败静默跳过。
     """
@@ -146,12 +132,10 @@ def drop_pgtest_tables() -> int:
     like_pattern = prefix.replace("_", r"\_") + "%"
     dropped = 0
     # 库清单覆盖全部「表名烘焙自 worker_scoped_prefix 的存储配置」；缺省
-    # 库名不同的（INVENTORY/COMPETITOR/SELECTION*/MARKET_RESEARCH/FEEDBACK）
+    # 库名不同的（INVENTORY/MARKET_RESEARCH/FEEDBACK）
     # 未显式 setenv 时掉进 agent_business 兼容库，漏扫会让 pgtest 表永不清。
     for cfg in (BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG, INVENTORY_DB_PG_CONFIG,
-                COMPETITOR_PG_CONFIG, SELECTION_PG_CONFIG,
-                SELECTION_DECISION_PG_CONFIG, MARKET_RESEARCH_PG_CONFIG,
-                FEEDBACK_PG_CONFIG):
+                MARKET_RESEARCH_PG_CONFIG, FEEDBACK_PG_CONFIG):
         try:
             conn = psycopg2.connect(**cfg, connect_timeout=2)
         except Exception:

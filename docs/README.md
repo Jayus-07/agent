@@ -18,6 +18,7 @@
 | [architecture/ai-runtime.md](architecture/ai-runtime.md) | 主图、域图接入、公共运行状态契约 | 修改 Router、LangGraph、SSE 或 Checkpoint |
 | [architecture/adr/0002-main-agent-conversation-first.md](architecture/adr/0002-main-agent-conversation-first.md) | `/agent` 对话优先目标与旅游/客服业务边界（**已决策、未实施**） | 后续主助手 Triage、Conversation、授权能力隔离改造 |
 | [architecture/domain-service-map.md](architecture/domain-service-map.md) | 域服务、Provider、凭据和失败边界 | 新增或调整外部服务 |
+| [architecture/sso-login-feasibility.md](architecture/sso-login-feasibility.md) | 企业扫码登录接入、RBAC 复用及多租户身份冲突 | 修改外部登录或身份绑定时 |
 | [architecture/failure-degradation.md](architecture/failure-degradation.md) | Tool/Provider 失败分类、动态依赖、降级与阻断验收 | 修改外部调用或故障处理时 |
 | [architecture/Frozen-Contracts.md](architecture/Frozen-Contracts.md) | 当前公共契约和守卫入口 | 修改 SSE、Runtime、Tool 或 Domain 契约 |
 | [development/tool-skill-guide.md](development/tool-skill-guide.md) | Agent、Skill、Tool、Workflow、MCP 开发规范 | 新增或修改上述资产 |
@@ -46,7 +47,8 @@
 - [客服](domains/customer-service.md)：客服域图、状态流转和人工坐席边界。
 - [RAG](domains/rag.md)：上传、切分、元数据、候选发布、索引生命周期、检索、引用和评测。
 - [SQL](domains/sql.md)：NL2SQL 执行链、安全校验和数据范围。
-- [选品与电商](domains/selection-ecommerce.md)：现有选品能力与未来子域的界限。
+
+竞品监控、选品漏斗和选品决策的专属页面、API、工具及流程已退役。旧数据库表和数据保留，但 `crawler.competitor_*` 与 `crawler.product_reviews` 已从 SQL 运行时白名单和生成提示中移除；迁移 152 还会撤销问数只读账号对旧 `crawler` schema 的读取权。当前有效 SQL 评测会拒绝引用这些表，旧评测快照仅供审计且不能重新加载。
 
 ## 源码入口
 

@@ -86,18 +86,17 @@ PR_STATIC_ONLY_ENTRIES = frozenset({
     # 上下文预算生命周期、聊天产品路由与本地认证展示走免费定向预检；
     # 不因此触发真实 Provider 的付费 RAG 评测。
     "backend/app/api/routes/auth_local.py",
+    "backend/app/api/routes/auth_sso.py",
     "backend/app/api/routes/chat.py",
     "backend/app/api/routes/travel.py",
+    "backend/tests/api/test_auth_sso.py",
 })
-# PR 免费预检触发、main push 付费不触发的目录前缀。#437 评审发现:定向
-# 清单已收录 tools/memory/selection_funnel 的安全与契约测试,但这些源码
-# 目录不触发 smoke——改 map 工具或记忆服务时登记的测试不会在 PR 上跑,
-# 门禁空转。清单守卫断言见 tests/test_rag_smoke_path_filter.py。
+# PR 免费预检触发、main push 付费不触发的目录前缀。修改工具、记忆服务
+# 等受测源码时，PR 应触发对应 smoke；清单守卫见 tests/test_rag_smoke_path_filter.py。
 PR_STATIC_ONLY_PREFIXES = (
     "backend/sql/migrations/",
     "backend/tools/",
     "backend/memory/",
-    "backend/selection_funnel/",
     "backend/context_budget/",
 )
 PREFIX_ENTRIES = (
@@ -193,6 +192,9 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/015_workflow_runs_pg.sql",
     "backend/sql/migrations/016_inventory_alerts_pg.sql",
     "backend/sql/migrations/017_business_stores_pg.sql",
+    "backend/sql/migrations/150_retail_erp_pilot_schema.sql",
+    "backend/sql/migrations/151_auth_sso.sql",
+    "backend/sql/migrations/152_retire_crawler_read_access.sql",
     "backend/sql/migrations/019_gateway_access_logs_pg.sql",
     "backend/sql/migrations/021_selection_funnel_pg.sql",
     "backend/sql/migrations/022_feedback_review_candidates.sql",

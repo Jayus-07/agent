@@ -29,7 +29,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | Gateway / API | `apisix/`、`backend/app/api/` | 身份验证、输入 DTO、HTTP/SSE/WS 接口、安全边界、路由装配 | 私自执行领域副作用、放宽身份 |
 | Router / Runtime | `backend/orchestration/`、`backend/core/node_runtime/` | 意图归宿、状态执行、Checkpoint、节点协调、会话投影 | 自建领域数据库状态机或 Tool 重试 |
-| Domain / Application | `backend/travel*/`、`customer_service/`、`rag/`、`sql/`、`selection*/` | 领域规则、真实业务状态、版本 CAS、领域失败策略 | 重做公共认证、Tool 治理或模型计费 |
+| Domain / Application | `backend/travel*/`、`customer_service/`、`rag/`、`sql/` | 领域规则、真实业务状态、版本 CAS、领域失败策略 | 重做公共认证、Tool 治理或模型计费 |
 | Capability / Skill / Workflow | `backend/orchestration/router/capabilities.yaml`、`backend/skills/`、`backend/orchestration/workflow*/` | 可路由声明、能力组合、执行步骤 | 自建第二份 Tool 注册事实源 |
 | Tool Governance / Runtime | `backend/core/tool_governance/`、`backend/core/tool_runtime/` | 参数/风险/预算、授权、超时/重试/熔断、结果归一 | 自动断言用户业务目标已满足 |
 | Infrastructure / Provider | `backend/infra/`、`backend/providers/`、`mcp_servers/` | 数据源适配、协议、外部服务/连接资源 | 绕过治理链、替用户确认、伪造实时数据 |
@@ -47,7 +47,7 @@ flowchart TD
 
 ## 4. 如何新增或迁移模块
 
-先画 **入口 → 调用方 → 事实源 → 写路径 → 失败路径 → 回滚路径**，确定归属层与唯一注册口，核对 `AGENTS.md`、[开发指南](../development/tool-skill-guide.md) 和 [目录规范](../development/repository-layout.md)。跨层变动写 ADR、兼容性与对应 T2 守卫。模块合并/移动不以文件名相似作为证据：`workflow` / `workflows` 或 `selection` / `selection_funnel` 必须审查职责及引用后再裁决。
+先画 **入口 → 调用方 → 事实源 → 写路径 → 失败路径 → 回滚路径**，确定归属层与唯一注册口，核对 `AGENTS.md`、[开发指南](../development/tool-skill-guide.md) 和 [目录规范](../development/repository-layout.md)。跨层变动写 ADR、兼容性与对应 T2 守卫。模块合并/移动不以文件名相似作为证据：`workflow` / `workflows` 等必须审查职责及引用后再裁决。
 
 ## 5. 七层架构、核心组件与职责（统一开发归属表）
 
@@ -57,7 +57,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | **接入层** | APISIX；`backend/app/api`；`frontend*` BFF | JWT 校验、可信身份头/限流、REST/SSE/WS、DTO、接口幂等键传递 | 不用前端 role/user_id 决定权限；不把业务状态机放进 BFF |
 | **编排层** | Router、LangGraph builder、Domain Graph、Supervisor、Planner、Workflow | 归宿判断、任务拆解、交接、流程/Checkpoint、跨节点调度 | 不承担业务领域状态机和持久化权威 |
-| **领域应用层** | `backend/rag/`、`backend/sql/`、`backend/travel*/`、`backend/customer_service/`、`backend/selection*/` | 领域策略/状态机、业务授权约束、证据/质量门、版本 CAS、用户目标完成判定 | 不重做公共身份、模型计费或 Tool Runtime |
+| **领域应用层** | `backend/rag/`、`backend/sql/`、`backend/travel*/`、`backend/customer_service/` | 领域策略/状态机、业务授权约束、证据/质量门、版本 CAS、用户目标完成判定 | 不重做公共身份、模型计费或 Tool Runtime |
 | **执行层** | Skill Executor、Node Runtime、Tool Governance/Runtime、Celery | 合法能力执行、Schema/审批、并发 deadline/retry、异步作业 | 不替领域应用决定用户目标是否已满足 |
 | **模型层** | `backend/config/model_roles.py`、`backend/infra/llm/`、`backend/prompts/` | DB Model Role/Provider 快照、Proxy、Prompt 版本、Token/预算与价格 | 不在各 Agent 直接写第二份 LLM SDK/模型配置 |
 | **工具/数据层** | `backend/tools`、`mcp_servers`、Provider Adapter、领域 Repository、PostgreSQL/Redis/对象存储 | 原子外部调用、存储读写、协议适配与数据隔离 | MCP 不绕过执行治理；RAG/SQL 业务逻辑归领域层而非全部归 Tool |

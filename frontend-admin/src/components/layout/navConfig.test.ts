@@ -49,7 +49,6 @@ describe('NAV — 管理端导航分类', () => {
 
   it('所有管理端工作台都归入对应分组，兼容入口仍能定位到工作台', () => {
     const groupOf = (label: string) => groupByItemLabel(label)?.label
-    expect(groupOf('选品工作台')).toBe('业务运营')
     expect(groupOf('知识库工作台')).toBe('内容与质量')
     expect(groupOf('评测中心')).toBe('内容与质量')
     expect(groupOf('运行总览')).toBe('运行监控')
@@ -61,7 +60,6 @@ describe('NAV — 管理端导航分类', () => {
     expect(groupOf('审批与审计')).toBe('安全运维')
 
     for (const route of [
-      '/selection-funnel', '/selection-decision',
       '/knowledge', '/knowledge/documents', '/knowledge/pending', '/knowledge/upload-failures',
       '/knowledge/keywords', '/knowledge/operations', '/evaluations',
       '/evaluations/datasets', '/evaluations/feedback',
@@ -75,9 +73,9 @@ describe('NAV — 管理端导航分类', () => {
   it('业务、内容、治理和安全分组保留既有关键页面', () => {
     const paths = items.map((item) => item.path)
     for (const path of [
-      '/data-explorer', '/competitors', '/selection-workbench', '/reports',
+      '/data-explorer', '/reports',
       '/knowledge/workbench', '/evaluations/center', '/observability/monitoring',
-      '/agents', '/tasks', '/schedules', '/observability/selection-funnel',
+      '/agents', '/tasks', '/schedules',
       '/tools', '/skills', '/settings/models', '/cost-governance/budgets', '/prompts',
       '/consistency', '/releases', '/settings/access', '/approvals', '/security',
       '/observability/alerts', '/alerts',

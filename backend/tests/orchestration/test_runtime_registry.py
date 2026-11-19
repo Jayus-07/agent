@@ -20,21 +20,18 @@ def _noop_adapter(state: dict) -> dict:
 def test_real_domains_register_runtime_descriptors():
     cs = domain_graph_registry.get("customer_service")
     travel = domain_graph_registry.get("travel")
-    selection = domain_graph_registry.get("selection_funnel")
 
     assert cs is not None and cs.runtime_type is RuntimeType.AGENT
     assert travel is not None and travel.runtime_type is RuntimeType.WORKFLOW
-    assert selection is not None and selection.runtime_type is RuntimeType.WORKFLOW
 
     assert cs.runtime_id == "customer_service"
     assert travel.runtime_id == "travel"
-    assert selection.runtime_id == "selection_funnel"
     assert cs.supports_checkpoint is True
     assert cs.supports_interrupt is False
     assert travel.supports_checkpoint is True
     assert travel.supports_interrupt is True
-    assert selection.supports_checkpoint is False
-    assert selection.supports_interrupt is False
+    # 退役域不能再作为活动图注册；旧 Trace 归因单独保留历史标签。
+    assert domain_graph_registry.get("selection_funnel") is None
 
 
 def test_subflow_runtime_descriptors_are_registered():
@@ -52,7 +49,7 @@ def test_registry_derives_runtime_views_for_real_and_new_domains():
     assert target_view["travel"].id == "travel"
     assert target_view["travel"].subflow == "planning"
     assert "travel_booking" not in target_view
-    assert family_view["selection_funnel"] is RuntimeType.WORKFLOW
+    assert "selection_funnel" not in family_view
     assert entry_view["travel"] == ("execute", "guide")
 
     registry = DomainGraphRegistry()

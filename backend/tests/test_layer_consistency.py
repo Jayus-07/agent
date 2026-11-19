@@ -13,7 +13,7 @@
      Skill 的节点注册写在 skills/registry.py 集中处，其余 10 个写在各包
      __init__.py，同一件事两种写法。
   4. workflow 声明 ↔ 注册双向对齐：capabilities.yaml 的 workflows 段与
-     register_all() 的注册清单必须一致。病根：selection_decision 已注册却
+     register_all() 的注册清单必须一致。病根：workflow 曾注册却
      不在 manifest（向量路由看不见它）；MarketResearch 在 manifest 里却没被
      评测侧的注册列表覆盖。
 """

@@ -375,9 +375,9 @@ class TestMcpChannelClosure:
         tables = set(out["tables"])
         expected = set(schema_loader.get_all_table_names())
         assert tables == expected  # 严格一致，不是「非空」
-        for schema in ("product", "order", "inventory", "customer",
-                       "crawler", "finance", "ai"):
+        for schema in ("product", "order", "inventory", "customer", "finance", "ai"):
             assert any(t.startswith(f"{schema}.") for t in tables), schema
+        assert not any(t.startswith("crawler.") for t in tables)
         # 白名单外对象绝不出现（旧实现连 agent_memory 库会列出内部表）
         assert "public.schema_migrations" not in tables
         assert not any(t.startswith("auth.") for t in tables)

@@ -1,0 +1,13 @@
+{
+  "version": "6.0",
+  "case_count": 65,
+  "module": "sql",
+  "schema_description": "NL2SQL 当前候选集：继承 sql_v5 的业务问数语义修正，退役竞品采集数据问题必须拒答，并纳入 20 条零售 ERP 合成业务问题。",
+  "created": "2026-11-19",
+  "parent_dataset": [
+    "sql_v5",
+    "sql_retail_erp_v1"
+  ],
+  "content_hash": "e62bf3eb4cc344c2",
+  "notes": "当前候选集，不覆盖默认 sql v1.1。SC-006/007/015/120 是 crawler 数据域退役拒答样例；RE-001..RE-020 为单租户单店合成 ERP 数据样例。共享业务库上的结果级评测仍需在服务窗口获准后运行。"
+}

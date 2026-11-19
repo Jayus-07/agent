@@ -201,19 +201,6 @@ class TemplateEngine:
 *(暂无数据)*
 {% endif %}
 """,
-            "ad_performance.j2": """## {{ metadata.get("title", "广告效果分析报告") }}
-> 生成时间：{{ metadata.fetched_at }}，近 30 天数据
-
-| 广告平台 | 活动名称 | 类型 | 状态 | 总花费 | 总展示 | 总点击 | CTR | CPC | 总转化 | 广告销售额 | ACoS | ROAS |
-|----------|---------|------|------|--------|--------|--------|-----|-----|--------|-----------|------|------|
-{% for row in data %}
-| {{ row.get("广告平台", row.get("ad_channel", "—")) }} | {{ row.get("活动名称", row.get("campaign_name", "—")) }} | {{ row.get("活动类型", row.get("campaign_type", "—")) }} | {{ row.get("状态", row.get("status", "—")) }} | {{ row.get("总花费", row.get("total_spend", 0)) | money }} | {{ row.get("总展示", row.get("impressions", 0)) }} | {{ row.get("总点击", row.get("clicks", 0)) }} | {{ row.get("CTR", 0) }}% | {{ row.get("CPC", 0) | money }} | {{ row.get("总转化", row.get("conversions", 0)) }} | {{ row.get("广告销售额", row.get("ad_sales", 0)) | money }} | {{ row.get("ACoS", 0) }}% | {{ row.get("ROAS", 0) }} |
-{% endfor %}
-
-{% if data | length == 0 %}
-*(暂无数据)*
-{% endif %}
-""",
             "order_fulfillment.j2": """## {{ metadata.get("title", "订单履约报告") }}
 > 生成时间：{{ metadata.fetched_at }}，近 30 天数据
 
@@ -326,9 +313,6 @@ class TemplateEngine:
         "inventory_health.j2":      [{"仓库", "warehouse"}, {"产品名称", "product_name"},
                                      {"SKU编码", "sku_code"}, {"现有库存", "qty_on_hand"},
                                      {"可用库存", "qty_available"}, {"库存状态", "inventory_status"}],
-        "ad_performance.j2":        [{"广告平台", "ad_channel"}, {"活动名称", "campaign_name"},
-                                     {"总花费", "total_spend"}, {"ACoS", "ROAS"},
-                                     {"CTR", "CPC"}, {"总转化", "conversions"}],
         "order_fulfillment.j2":     [{"渠道", "channel"}, {"订单状态", "order_status"},
                                      {"订单数", "order_count"}, {"金额合计", "total_amount"},
                                      {"退款率", "refund_rate"}],

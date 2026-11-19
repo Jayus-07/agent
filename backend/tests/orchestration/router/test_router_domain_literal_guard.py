@@ -16,7 +16,6 @@ _PRODUCTION_FILES = (
 _REGISTERED_DOMAIN_KEYS = {
     "customer_service",
     "travel",
-    "selection_funnel",
 }
 
 

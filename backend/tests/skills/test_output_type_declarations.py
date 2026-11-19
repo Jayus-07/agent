@@ -34,7 +34,7 @@ _ENVELOPE_MARKERS = re.compile(
 
 SKILL_NAMES = {"rag", "report", "email", "data_export", "web_search",
                "web_crawl", "data_collection", "business_analysis",
-               "competitor_analysis", "travel_poi", "sql", "map_lookup",
+               "travel_poi", "sql", "map_lookup",
                # 收编重构 U4（2026-11-01）：旅游域三个无状态能力 Skill
                "travel_food", "travel_hotel", "travel_booking_quote"}
 

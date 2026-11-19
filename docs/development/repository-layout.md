@@ -9,7 +9,7 @@
 | `backend/app/api/` | 接入层 | 路由聚合、DTO、会话/认证入口；业务状态落领域服务 |
 | `backend/orchestration/` | 主图、路由、运行控制 | workflow/workflows 区分后才能合并；注册机制不得悄悄丢失 |
 | `backend/core/`、`backend/infra/` | 节点/Tool 执行底座、协议基础设施 | 公共能力单一事实源；避免反向 import |
-| `backend/{travel,travel_v2,customer_service,rag,sql,selection,selection_funnel}/` | 业务领域 | 多子域可并存；只因目标边界明确才合并 |
+| `backend/{travel,travel_v2,customer_service,rag,sql}/` | 业务领域 | 多子域可并存；只因目标边界明确才合并 |
 | `backend/providers/`、`mcp_servers/` | 外部适配器 | 查询与行程卡/领域服务可共用 Provider；MCP 不复制业务规则 |
 | `backend/tests/`、`tests/` | 自动化回归 | 有效契约测试不能凭名称或耗时删除；旧测试须用替代覆盖证据换出 |
 | `frontend/`、`frontend-admin/`、`frontend-cs/` | 用户端、管理端、客服端 | 可以抽取经过验证的共享客户端契约；暂不强行做 monorepo |

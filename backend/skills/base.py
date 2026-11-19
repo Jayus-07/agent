@@ -218,8 +218,7 @@ class BaseSkill(ABC):
     output_type: ClassVar[str] = "text"
     output_types: ClassVar[dict] = {}
     capability_metadata: ClassVar[dict[str, dict]] = {}
-    # 类级默认：execute 未显式传参时生效。子类可覆盖（如 competitor
-    # 单次抓取自身 timeout=90s，必须大于它，否则被 Skill 层先判超时重试）
+    # 类级默认：execute 未显式传参时生效。子类可按能力需要覆盖。
     default_timeout: ClassVar[float] = DEFAULT_TIMEOUT
     default_max_retries: ClassVar[int] = DEFAULT_MAX_RETRIES
 
@@ -241,7 +240,7 @@ class BaseSkill(ABC):
         """返回本次调用使用的 (tool_fn, invoke_params)。
 
         默认用 _tool_fn 原样传参；一个 Skill 对应多个 Tool 时覆盖此钩子，
-        按 capability/params 分发（参照 CompetitorAnalysisSkill），并应把
+        按 capability/params 分发，并应把
         params 过滤到目标 Tool 的签名内——LangChain invoke 遇到未知参数
         会直接抛错。
         """

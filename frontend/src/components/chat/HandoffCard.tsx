@@ -7,11 +7,10 @@
  * 消息正文是后端下发的引导话术（reporter 直出），本卡是它的可操作形态：
  * 图标 + 一句话 + 带参跳转按钮。点击 = 埋点上报 + 跳转三专属入口：
  *   travel          → /travel?destination=…&days=…（旅游页解析参数预填 brief）
- *   selection_funnel → /selection-funnel?category=…&platform=…
  *   customer_service → 导航到 /customer-service 并预填问题（sessionStorage
  *                      + 兼容事件，见 app/agent/page.tsx）
  */
-import { Compass, Headphones, ShoppingBag, ArrowRight } from 'lucide-react'
+import { Compass, Headphones, ArrowRight } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import type { HandoffEvent } from '@/types/handoff'
 import { requestSilent } from '@/lib/fetcher'
@@ -22,7 +21,6 @@ const DOMAIN_META: Record<
   { icon: typeof Compass; button: string }
 > = {
   travel: { icon: Compass, button: '去旅游规划页' },
-  selection_funnel: { icon: ShoppingBag, button: '去智能选品页' },
   customer_service: { icon: Headphones, button: '打开智能客服' },
 }
 
@@ -57,13 +55,6 @@ export default function HandoffCard({ event }: { event: HandoffEvent }) {
     if (event.target_domain === 'travel') {
       const qs = buildTravelQuery(event.params)
       router.push(qs ? `/travel?${qs}` : '/travel')
-      return
-    }
-    if (event.target_domain === 'selection_funnel') {
-      const qs = new URLSearchParams()
-      if (event.params.category) qs.set('category', event.params.category)
-      if (event.params.platform) qs.set('platform', event.params.platform)
-      router.push(qs.toString() ? `/selection-funnel?${qs.toString()}` : '/selection-funnel')
       return
     }
     // customer_service：主助手监听此事件后跳独立客服页，并带上预填问题

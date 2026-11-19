@@ -2,13 +2,12 @@
 
 背景：仓库与 APISIX 配置此前均无 body size 上限（审计
 ``bff-arraybuffer-body-unbounded`` / ``automations.webhook.body-buffer-
-before-auth-no-size-limit`` / ``selection-funnel-unbounded-import-body``）。
+before-auth-no-size-limit``）。
 边缘层由 APISIX ``client_max_body_size`` 兜底；本中间件是源内第二道：
 在 endpoint 读取 body 之前按 Content-Length 拒绝，避免先整包读入内存。
 
 分路径上限（字节）：
   - /webhooks/automations  1 MiB —— 外部回调负载只有事件 JSON；
-  - /selection-funnel/import 32 MiB —— 选品表格导入；
   - /rag/upload            APISIX 请求体硬上限——multipart 总体按入口限制，
                            单文件精确上限由上传路由流式字节计数强制执行；
   - 其余                   8 MiB —— 普通 JSON API。
@@ -27,7 +26,6 @@ DEFAULT_BODY_LIMIT = 8 * 1024 * 1024
 
 _BODY_LIMIT_RULES: tuple[tuple[str, int], ...] = (
     ("/webhooks/automations", 1 * 1024 * 1024),
-    ("/selection-funnel/import", 32 * 1024 * 1024),
     ("/rag/upload", RAG_UPLOAD_INGRESS_MAX_BODY_BYTES),
 )
 

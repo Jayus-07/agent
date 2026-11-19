@@ -53,7 +53,7 @@
      tool_selector / tool_routing / router_domain 三者无守卫测试、不在任何 CI。
   2. suite 级：cs_q3_acceptance / cs_q3_action_pool 未声明 cases_hash（loader 校验 opt-in，loader.py:205-213）。
   3. rag 版本漂移：manifest=`6.0.0-desktop-candidate.4`，两个 suite 与 snapshot 仍 candidate.1。
-  4. 双事实源：sql_v2/cases.jsonl 与 sql/golden_v2.jsonl 字节级相同，前者无代码消费者。
+  4. 历史双事实源：sql_v2/cases.jsonl 与 sql/golden_v2.deprecated.jsonl 字节级相同，前者无代码消费者；重复副本已明确归档，不能作为新评测入口。
   5. 文档漂移：scripts/weekly_eval.py:25 自述 rag_test_kb「v1.3/54 条」，文件实为 v4.0/103 条。
   6. 孤儿资产：rag_cases_20.jsonl、travel/golden_v1.baseline.json 全仓零引用。
   7. INVALID 语义缺口：markdown 报告把 INVALID 折叠成 FAIL（report/markdown.py:451）；

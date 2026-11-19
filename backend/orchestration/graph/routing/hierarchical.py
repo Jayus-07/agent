@@ -120,11 +120,6 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
             elif action == "prefilter_travel":
                 from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
                 update = try_travel_prefilter(query, state)
-            elif action == "prefilter_selection":
-                from backend.orchestration.graph.selection_funnel_prefilter import (
-                    try_selection_funnel_prefilter,
-                )
-                update = try_selection_funnel_prefilter(query, state)
         except Exception as e:
             logger.warning(f"[RouterNode] 域图 prefilter 失败，继续走统一路由引擎: {e}")
         if update is not None:

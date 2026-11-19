@@ -53,7 +53,7 @@ def main_forced_handoff_update(query: str, state: dict) -> dict | None:
 
     命中返回 handoff 路由更新，否则 None。
 
-    优先级与全局 prefilter 一致（旅游 > 选品 > 预订/商务）；预订/商务
+    优先级与全局 prefilter 一致（旅游 > 预订/商务）；预订/商务
     归旅游族（commerce 已收编为旅游域数据源层，意图判定复用其 extract），
     一并引导去旅游页。纯判定零副作用——不复用 run_domain_prefilters：
     其命中路径会经 _finish_prefilter_hit 回写路由上下文，与 handoff 语义
@@ -62,9 +62,6 @@ def main_forced_handoff_update(query: str, state: dict) -> dict | None:
     target: str | None = None
     try:
         from backend.orchestration.graph.travel_prefilter import is_travel_request
-        from backend.orchestration.graph.selection_funnel_prefilter import (
-            is_selection_funnel_request,
-        )
         from backend.travel.providers_support.commerce.extract import (
             detect_commerce_intent,
         )
@@ -75,8 +72,6 @@ def main_forced_handoff_update(query: str, state: dict) -> dict | None:
             target = "travel"
         elif is_travel_request(query):
             target = "travel"
-        elif is_selection_funnel_request(query):
-            target = "selection_funnel"
         elif detect_commerce_intent(query):
             target = "travel"
     except Exception as e:
@@ -111,8 +106,8 @@ def detect_cs_redirect(query: str) -> str | None:
     """redirect_main 两阶段判定（原 router_node 主函数 ~438-471 段）。
 
     阶段一（2026-09-18，确定性正则）：域锁下"明显非客服"的问法转出主路由：
-    无任何客服规则信号，且命中旅游/选品强信号 → 不进 CS，放行后续
-    prefilter 自然路由，抽屉内也能拿到旅游/选品的正常回答（设计稿第 4 节
+    无任何客服规则信号，且命中旅游强信号 → 不进 CS，放行后续
+    prefilter 自然路由，抽屉内也能拿到旅游的正常回答（设计稿第 4 节
     next_action=redirect_main 的确定性子集）。混合信号（如"订单里的行程单
     怎么退款"含客服规则）仍守 CS 优先——与主路由既有判定一致，避免旅游
     关键词抢走客服流量。
@@ -123,13 +118,8 @@ def detect_cs_redirect(query: str) -> str | None:
     cs_redirect = None
     try:
         from backend.orchestration.graph.travel_prefilter import is_travel_request
-        from backend.orchestration.graph.selection_funnel_prefilter import (
-            is_selection_funnel_request,
-        )
         if is_travel_request(query):
             cs_redirect = "travel_regex_hit"
-        elif is_selection_funnel_request(query):
-            cs_redirect = "selection_funnel_regex_hit"
     except Exception as e:
         logger.debug(f"[RouterNode] redirect_main 正则判定失败，维持锁域: {e}")
     # 阶段二：正则未命中的域锁 query 走 LLM 语义仲裁（软失败留守 CS）。

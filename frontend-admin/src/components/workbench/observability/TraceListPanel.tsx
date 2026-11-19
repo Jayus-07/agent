@@ -390,7 +390,6 @@ export default function TraceListPanel() {
           <p className="mt-1 text-sm text-text-secondary">按时间和终态筛选最近授权记录；失败运行的问题与错误摘要在详情页展示并审计。</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Link href="/observability/selection-funnel" className="inline-flex min-h-10 items-center rounded-md border border-border-subtle bg-white px-3 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">选品记录</Link>
           <Link href="/observability/alerts" className="inline-flex min-h-10 items-center rounded-md border border-border-subtle bg-white px-3 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">系统告警</Link>
           {compareIds.size >= 2 && (
             <button type="button" onClick={goCompare} className="inline-flex min-h-10 items-center gap-1.5 rounded-md bg-accent px-3 text-sm font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><Scale size={14} />对比 {compareIds.size} 条</button>

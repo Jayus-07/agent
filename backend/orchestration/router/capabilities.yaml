@@ -11,31 +11,17 @@
 #   - workflow 名须形如 ^[a-z][a-z0-9_]*$（纯蛇形，不带点——带点的是
 #     capability 命名空间），且必须与 @workflow 装饰器写入的 meta.name 一致。
 #     本段必须覆盖 orchestration/workflows/__init__.py::register_all() 里的
-#     每一个 workflow，否则该 workflow 在向量路由里"失明"（2026-09-16 前的
-#     selection_decision 就是这个状态）。
+#     每一个 workflow，否则该 workflow 在向量路由里"失明"。
 #
 # examples 撰写要点（2026-09-16 补）：
 #   - 条数是**召回余量**，不是装饰。2 条只是硬下限，5-10 条才是安全区；
 #     向量路由靠它们建索引，条数太少的 capability 容易在多个近义能力间被抢走。
 #   - 必须落在该 capability 的**能力边界内**：travel.poi_search 只支持
-#     福州/厦门/杭州；competitor.analyze 只处理「有明确竞品 URL 的页面级分析」，
-#     不含无 URL 的经营决策咨询（那属 business.analyze）。
+#     福州/厦门/杭州。
 #   - 块内不得重复（manifest.py 会抛 ManifestError）。
 #
-# 「反直觉设计」备忘（2026-09-16 核实；审计时最容易误判的三点）：
-#   - routed: false 的能力（email.watch / competitor.watch /
-#     competitor.history）**不在向量索引里**（vector_router 只索引
-#     routed_capabilities），Rule/LLM Router 也选不到它们 —— 因此它们
-#     **抢不走**任何 routed 能力的路由。写 examples 时不必为「避让」
-#     内部能力而回避某些措辞。
-#   - 竞品三个 capability 是「漏斗式」：RuleRouter 把 竞品/比价/巡检/
-#     监控列表/价格监控/降价/涨价 全部指向 competitor.analyze，再由
-#     Skill._select_tool 按 action 分发到 analyze / watch / history /
-#     watchlist 四个 Tool。故 competitor.analyze 的 examples **必须**
-#     保留「监控」类措辞（如「监控一下竞品价格变化」）—— 该问句在
-#     RuleRouter 只命中「竞品」1 个弱信号（confidence 0.72 < 0.8），
-#     会 fallback 到向量路由；删掉这条样例会让「监控」类提问失去
-#     determinism，而不是「消除重叠」。
+# 「反直觉设计」备忘（2026-09-16 核实）：routed:false 的能力不参与
+# 向量索引与普通用户问题路由；内部能力不应抢占 routed 能力的路由。
 #   - Planner prompt 与 critique 的能力清单由
 #     manifest.planner_visible_capability_names 派生：包含 routed:true 能力
 #     和显式 Planner fallback 白名单（travel.poi_search / map.lookup）；普通
@@ -47,8 +33,8 @@
 # domains 段：粗分类器（CoarseIntentClassifier）的唯一事实源。
 #   - description/examples 供 embedding prototype 分类器建域心；
 #   - keywords 供规则 hint（强信号 >= COARSE_RULE_STRONG_HITS 直接判域）；
-#   - customer_service / travel / selection_funnel 是域图（无主图 capability），
-#     粗分类命中后由 router_node 复用各自既有 prefilter，不新增路由实现。
+#   - customer_service / travel 是域图（无主图 capability），粗分类命中后
+#     由 router_node 复用各自既有 prefilter，不新增路由实现。
 #
 # capability 三字段（声明式，禁止代码手写映射）：
 #   domain            归属粗域（必须已在 domains 段声明，manifest fail-fast）
@@ -211,15 +197,6 @@ domains:
       - 出行
       - 天气
       - 行程
-
-  - name: selection_funnel
-    owner: platform-team
-    description: 智能选品：品类评估、选品漏斗、上不上架决策（域图承载）
-    examples:
-      - 给宠物零食做一次智能选品
-      - 评估蓝牙耳机品类值不值得做
-    keywords:
-      - 选品
 
   - name: communication
     owner: platform-team
@@ -1273,224 +1250,6 @@ capabilities:
       - 帮我查一下附近有什么咖啡店
       - 把这几个地点画成一张地图
 
-  # 竞品分析此前只在 rule_router 硬编码强信号，ALL_CAPABILITIES 缺失导致
-  # LLM Router 会拒绝它（tool_selector.py 注释已承认该漂移）。manifest 化
-  # 后正式纳入路由，规则强信号依旧优先生效。
-  - name: competitor.analyze
-    owner: platform-team
-    skill: competitor_analysis
-    description: 竞品分析：抓取竞品商品页/官网，抽取价格、促销、评价数等结构化信息，存为快照并与历史对比（识别涨价/降价）。支持监控列表管理与价格历史查询。适合'分析这个竞品链接'、'查这个商品页的价格促销信息'、'巡检所有监控的竞品'等请求。注意：仅处理有明确竞品 URL（或已监控项）的页面级分析；不提供 URL 的经营决策咨询（如'竞品降价了要不要跟'）应选业务分析。
-    params_schema:
-      action:
-        type: string
-        required: false
-        enum:
-        - analyze
-        - watch
-        - history
-        - add
-        - remove
-        - toggle
-        - list
-        description: 操作类型（默认 analyze）
-      url:
-        type: string
-        required: false
-        description: 竞品页面完整 URL（analyze/history/add/remove/toggle 需要）
-      name:
-        type: string
-        required: false
-        description: 竞品名称（add 时可选）
-      question:
-        type: string
-        required: false
-        description: 用户原始问题（其中的 URL 会被自动提取）
-      enabled:
-        type: boolean
-        required: false
-        description: toggle 时是否启用（默认 True）
-      idempotency_key:
-        type: string
-        required: false
-        description: 客户端幂等键；重复提交同键不会重复抓取或修改
-    planner_examples:
-    - action: analyze
-      url: https://item.jd.com/100012043978.html
-      question: 帮我分析这个竞品的价格
-    - action: watch
-      question: 巡检一下所有监控的竞品
-    - action: history
-      url: https://item.jd.com/100012043978.html
-      question: 这个竞品最近价格走势如何
-    - action: add
-      url: https://item.jd.com/100012043978.html
-      name: iPhone 15 Pro Max
-    - action: remove
-      url: https://item.jd.com/100012043978.html
-    routed: true
-    domain: business
-    risk_level: LOW
-    fast_path_enabled: true
-    tool_spec:
-      version: 2
-      operation: read
-      operation_by:
-        add: create
-        remove: delete
-        toggle: update
-        watch: read
-      risk_by:
-        analyze: R0
-        watch: R0
-        history: R0
-        list: R0
-        add: R2
-        remove: R2
-        toggle: R2
-      confirmation_by:
-        analyze: none
-        watch: none
-        history: none
-        list: none
-        add: user_confirmation
-        remove: user_confirmation
-        toggle: user_confirmation
-      risk_level: R0
-      confirmation_policy: none
-    examples:
-      - 分析这个竞品链接
-      - 帮我跟竞品比价
-      - 看看竞品这个商品的卖点和差评
-      - 监控一下竞品价格变化
-      - 查一下这个商品页的价格和促销信息
-      - 这个竞品链接的价格有变化吗
-
-  # 内部能力：不参与用户问题路由。用户侧「巡检/监控」类提问由
-  # competitor.analyze 的 examples 承接，再经 action=watch 分发。
-  - name: competitor.watch
-    owner: platform-team
-    skill: competitor_analysis
-    description: 竞品分析：抓取竞品商品页/官网，抽取价格、促销、评价数等结构化信息，存为快照并与历史对比（识别涨价/降价）。支持监控列表管理与价格历史查询。适合'分析这个竞品链接'、'查这个商品页的价格促销信息'、'巡检所有监控的竞品'等请求。注意：仅处理有明确竞品 URL（或已监控项）的页面级分析；不提供 URL 的经营决策咨询（如'竞品降价了要不要跟'）应选业务分析。
-    params_schema:
-      action:
-        type: string
-        required: false
-        enum:
-        - analyze
-        - watch
-        - history
-        - add
-        - remove
-        - toggle
-        - list
-        description: 操作类型（默认 analyze）
-      url:
-        type: string
-        required: false
-        description: 竞品页面完整 URL（analyze/history/add/remove/toggle 需要）
-      name:
-        type: string
-        required: false
-        description: 竞品名称（add 时可选）
-      question:
-        type: string
-        required: false
-        description: 用户原始问题（其中的 URL 会被自动提取）
-      enabled:
-        type: boolean
-        required: false
-        description: toggle 时是否启用（默认 True）
-      idempotency_key:
-        type: string
-        required: false
-        description: 客户端幂等键；重复提交同键不会重复抓取或修改
-    planner_examples:
-    - action: analyze
-      url: https://item.jd.com/100012043978.html
-      question: 帮我分析这个竞品的价格
-    - action: watch
-      question: 巡检一下所有监控的竞品
-    - action: history
-      url: https://item.jd.com/100012043978.html
-      question: 这个竞品最近价格走势如何
-    - action: add
-      url: https://item.jd.com/100012043978.html
-      name: iPhone 15 Pro Max
-    - action: remove
-      url: https://item.jd.com/100012043978.html
-    routed: false
-    domain: business
-    risk_level: HIGH
-    fast_path_enabled: false
-    tool_spec:
-      version: 2
-      operation: read
-      risk_level: R0
-      confirmation_policy: none
-    reason: 竞品巡检为全量扫描 + 快照写入，不参与用户问题路由：用户侧「巡检/监控」类提问由 competitor.analyze 承接并经 action=watch 分发（selection_decision workflow 直接读 store，不经过本能力）
-
-  - name: competitor.history
-    owner: platform-team
-    skill: competitor_analysis
-    description: 竞品分析：抓取竞品商品页/官网，抽取价格、促销、评价数等结构化信息，存为快照并与历史对比（识别涨价/降价）。支持监控列表管理与价格历史查询。适合'分析这个竞品链接'、'查这个商品页的价格促销信息'、'巡检所有监控的竞品'等请求。注意：仅处理有明确竞品 URL（或已监控项）的页面级分析；不提供 URL 的经营决策咨询（如'竞品降价了要不要跟'）应选业务分析。
-    params_schema:
-      action:
-        type: string
-        required: false
-        enum:
-        - analyze
-        - watch
-        - history
-        - add
-        - remove
-        - toggle
-        - list
-        description: 操作类型（默认 analyze）
-      url:
-        type: string
-        required: false
-        description: 竞品页面完整 URL（analyze/history/add/remove/toggle 需要）
-      name:
-        type: string
-        required: false
-        description: 竞品名称（add 时可选）
-      question:
-        type: string
-        required: false
-        description: 用户原始问题（其中的 URL 会被自动提取）
-      enabled:
-        type: boolean
-        required: false
-        description: toggle 时是否启用（默认 True）
-      idempotency_key:
-        type: string
-        required: false
-        description: 客户端幂等键；重复提交同键不会重复抓取或修改
-    planner_examples:
-    - action: analyze
-      url: https://item.jd.com/100012043978.html
-      question: 帮我分析这个竞品的价格
-    - action: watch
-      question: 巡检一下所有监控的竞品
-    - action: history
-      url: https://item.jd.com/100012043978.html
-      question: 这个竞品最近价格走势如何
-    - action: add
-      url: https://item.jd.com/100012043978.html
-      name: iPhone 15 Pro Max
-    - action: remove
-      url: https://item.jd.com/100012043978.html
-    routed: false
-    domain: business
-    risk_level: LOW
-    fast_path_enabled: true
-    tool_spec:
-      version: 2
-      operation: read
-      risk_level: R0
-      confirmation_policy: none
-    reason: 竞品快照历史查询依赖已存快照，不参与用户问题路由：用户侧「价格历史」类提问由 competitor.analyze 承接并经 action=history 分发（selection_decision workflow 直接读 store，不经过本能力）
-
 workflows:
   - name: daily_report
     examples:
@@ -1512,16 +1271,6 @@ workflows:
       - 帮我做宠物零食的品类市场调研报告
       - 分析这个品类的市场规模和竞争格局
 
-  # 批次3 选品决策：市场评估→差异化→财务测算→AI评审团→决策报告
-  # 2026-09-16 补登记：该 workflow 此前只在 app/server.py 注册、不在本清单，
-  # 导致向量路由对用户问题看不见它（manifest 不完整）。
-  - name: selection_decision
-    examples:
-      - 评估蓝牙耳机品类值不值得做
-      - 帮我做一次选品决策
-      - 这个品类能不能上
-      - 给宠物零食品类出一份选品决策报告
-
 # 具体 @tool 适配器的治理契约。主路由 Capability 仍以上面的
 # capabilities 为唯一入口；未参与主路由、但被域图/Workflow/MCP 直接消费的
 # Tool 也必须在这里声明完整 ToolSpec，禁止通过裸调用绕过治理运行时。
@@ -1529,18 +1278,6 @@ tool_specs:
   - name: calculate_tool
     params_schema: {type: object, additionalProperties: false, properties: {expression: {type: string, minLength: 1}}, required: [expression]}
     governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
-  - name: competitor_analyze_tool
-    params_schema: {type: object, additionalProperties: false, properties: {url: {type: string}, name: {type: string}, question: {type: string}, idempotency_key: {type: string}}}
-    governance: {version: 2, operation: create, risk_level: R1, confirmation_policy: none}
-  - name: competitor_watch_tool
-    params_schema: {type: object, additionalProperties: false, properties: {idempotency_key: {type: string}}}
-    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
-  - name: competitor_history_tool
-    params_schema: {type: object, additionalProperties: false, properties: {url: {type: string}, question: {type: string}}}
-    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
-  - name: competitor_watchlist_tool
-    params_schema: {type: object, additionalProperties: false, properties: {action: {type: string, enum: [list, add, remove, toggle]}, url: {type: string}, name: {type: string}, enabled: {type: boolean}, idempotency_key: {type: string}}}
-    governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none, operation_by: {add: create, remove: delete, toggle: update, list: read}, risk_by: {add: R2, remove: R2, toggle: R2, list: R0}, confirmation_by: {add: user_confirmation, remove: user_confirmation, toggle: user_confirmation, list: none}}
   - name: data_collection_tool
     params_schema: {type: object, additionalProperties: false, properties: {source: {type: string}, target_table: {type: string}, fetcher_type: {type: string}, dedup_keys: {type: string}, groupby_keys: {type: string}, write_mode: {type: string}, enable_analysis: {type: boolean}, idempotency_key: {type: string}}}
     governance: {version: 2, operation: external_write, risk_level: R2, confirmation_policy: user_confirmation}

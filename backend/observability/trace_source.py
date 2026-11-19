@@ -8,8 +8,8 @@
 全部消费 ``classify_trace_source`` 的结果，禁止在别处第二套映射（G2）。
 
 边界说明：
-  - ``selection_funnel``（选品漏斗）是独立域图但不在本口径三分类内，
-    归 SOURCE_UNKNOWN；后续扩展第四来源时在这里加一行即可。
+  - 已退役的 ``selection_funnel`` 历史 Trace 仍归 SOURCE_UNKNOWN，避免
+    被误计为 AI 助手对话。
   - ``rag_agent``（独立 RAG 链）与 knowledge_index 等非主图工作流同样
     归 SOURCE_UNKNOWN——它们不是「AI 助手对话」。
 """

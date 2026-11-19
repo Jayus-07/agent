@@ -15,7 +15,6 @@ from unittest.mock import patch
 
 import pytest
 
-from backend.skills.competitor_analysis.skill import CompetitorAnalysisSkill
 from backend.skills.base import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT
 
 
@@ -24,10 +23,6 @@ from backend.skills.base import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT
 # =====================================================
 
 class TestSkillTimeoutOverride:
-    def test_competitor_timeout_above_crawl_timeout(self):
-        # crawler_runtime 单次抓取 timeout=90s，Skill 层必须更大
-        assert CompetitorAnalysisSkill.default_timeout >= 120.0
-
     def test_default_class_attrs_fallback(self):
         from backend.skills.web_search.skill import WebSearchSkill
 
@@ -36,7 +31,9 @@ class TestSkillTimeoutOverride:
 
     def test_execute_uses_class_default(self):
         """execute 未显式传参时取类级默认值"""
-        skill = CompetitorAnalysisSkill()
+        from backend.skills.web_search.skill import WebSearchSkill
+
+        skill = WebSearchSkill()
         # 反射验证 execute 的默认解析逻辑（不真正执行抓取）
         import inspect
         src = inspect.getsource(type(skill).execute.__wrapped__ if hasattr(
@@ -59,15 +56,6 @@ class TestToolReraise:
                    side_effect=urllib.error.URLError("dns fail")):
             with pytest.raises(urllib.error.URLError):
                 web_search_tool.invoke({"query": "x", "num_results": 1})
-
-    def test_competitor_reraises_on_analysis_error(self):
-        from backend.tools.competitor import competitor_analyze_tool
-
-        with patch("backend.tools.competitor.analyze_url",
-                   side_effect=RuntimeError("boom")):
-            with pytest.raises(RuntimeError):
-                competitor_analyze_tool.invoke(
-                    {"action": "analyze", "url": "https://t.com"})
 
     def test_web_crawl_reraises_on_crawl_error(self):
         from backend.tools.web import web_crawl_tool

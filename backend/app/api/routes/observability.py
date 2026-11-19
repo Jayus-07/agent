@@ -333,8 +333,7 @@ async def list_traces(
     """在当前 TraceStore 留存范围内筛选并分页返回已授权 Trace。
 
     workflow_name / session_id 服务端过滤：前端不再拉 200 条本地 filter。
-    has_tag：按 tags 键存在性过滤（如 has_tag=funnel_run_id → 选品漏斗运行历史，
-    漏斗跑在主图内、workflow_name 仍是主图，只能以标签为口径）。
+    has_tag：按 tags 键存在性过滤（支持按运行标签定位历史 Trace）。
     has_tool：按 tool_call span 的契约名过滤（span input.tool，治理埋点落键；
     旧 trace 无该键时回退 span name 后缀匹配）——/tools 页失败行「Trace 下钻」
     用它，键与契约 lock/指标同口径。
@@ -1433,7 +1432,7 @@ async def report_handoff_click(req: HandoffClickRequest) -> dict:
     from backend.observability.metrics import agent_handoff_total
 
     domain = (req.target_domain or "").strip()
-    if domain not in ("travel", "customer_service", "selection_funnel"):
+    if domain not in ("travel", "customer_service"):
         raise HTTPException(status_code=422, detail=f"未知 target_domain: {domain!r}")
     agent_handoff_total.labels(target_domain=domain, phase="clicked").inc()
     return {"ok": True}

@@ -268,8 +268,7 @@ def test_secret_none_for_empty_provider():
 def test_secret_never_returns_ciphertext(monkeypatch):
     """env 里若出现 enc: 前缀的密文（P1 之前不该有），必须视为坏值返回 None。
 
-    否则密文会被当 API Key 发给 provider，换回 401 而真因被埋 ——
-    与 competitor/crypto.py:decrypt_cookie 的静默返回原文是同一类坑。
+    否则密文会被当 API Key 发给 provider，换回 401 而真因被埋。
     """
     monkeypatch.setenv("DEEPSEEK_API_KEY", "enc:gAAAAABfakeciphertext")
     assert get_secret("deepseek") is None

@@ -53,7 +53,6 @@
 - `architecture/async-task-governance.md`：Celery/QueueRouter/Admission/Lease/Retry/Recovery；
 - `governance/data-lifecycle.md`：正式业务数据、发布、迁移、备份与恢复；
 - `governance/memory-governance.md`：三层记忆、画像冲突、长期归因；
-- `domains/selection-ecommerce.md`：选品和未来电商子域的已实现/目标区分。
 
 `docs/ARCHITECTURE.md`、`docs/AGENT_DESIGN.md`、`docs/PRD.md` 等历史入口须通过审计确认使用范围，适用时加“历史设计/请读现行规范”指针；**未审计前不删除或大面积移动**，不要将旧版规范当作新需求实现依据。
 

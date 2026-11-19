@@ -13,7 +13,6 @@
 export type HandoffTargetDomain =
   | 'travel'
   | 'customer_service'
-  | 'selection_funnel'
 
 export interface TravelHandoffParams {
   destination?: string
@@ -23,18 +22,12 @@ export interface TravelHandoffParams {
   must_go?: string[]
 }
 
-export interface SelectionFunnelHandoffParams {
-  category?: string
-  platform?: string
-}
-
 export interface CustomerServiceHandoffParams {
   prefill_question?: string
 }
 
 /** 参数包按域声明 schema（后端 extra=forbid 严格校验，前端按需读取） */
 export type HandoffParams = TravelHandoffParams &
-  SelectionFunnelHandoffParams &
   CustomerServiceHandoffParams
 
 export interface HandoffPayloadV1 {
@@ -57,8 +50,7 @@ export function parseHandoffEvent(data: unknown): HandoffEvent | null {
   if (d.v !== 1) return null
   if (
     d.target_domain !== 'travel' &&
-    d.target_domain !== 'customer_service' &&
-    d.target_domain !== 'selection_funnel'
+    d.target_domain !== 'customer_service'
   ) {
     return null
   }

@@ -11,7 +11,6 @@
   Gate 6  SQL             数据问句 200 + 非空（权限门在链路内生效）
   Gate 7  CS              客服问句 200 + cs_graph_node 执行
   Gate 8  Travel          旅游问句 200 + travel_graph_node 执行
-  Gate 9  Selection       选品问句 200 + selection_funnel 执行
   Gate 10 Task Runtime    Celery 在线 worker 响应且消费 agent 队列
   Gate 11 Model           当前主问答角色可用且最近 24h 有真实调用探测成功
   Gate 12 Observability   /metrics 指标族在册 + prometheus targets up
@@ -463,9 +462,6 @@ def main() -> int:
                                       "cs_graph_node")),
         ("Gate8_Travel", lambda: g_domain(editor, "g8", "帮我规划厦门的行程",
                                           "travel_graph_node")),
-        ("Gate9_Selection", lambda: g_domain(editor, "g9",
-                                             "给宠物零食做一次智能选品",
-                                             "selection_funnel_graph_node")),
         ("Gate10_TaskRuntime", g10_task),
         ("Gate11_Model", lambda: g11_model(editor)),
         ("Gate12_Observability", g12_observability),

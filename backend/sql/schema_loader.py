@@ -2,7 +2,7 @@
 schema_loader.py — 多业务域 schema 加载器
 
 支持：
-  - 多 schema（product / order / inventory / customer / crawler / finance / ai）
+  - 多 schema（product / order / inventory / customer / finance / ai / retail）
   - 表名以 `schema.table` 全限定形式加载
   - 反向索引：schema → [tables]（供 router / validator 使用）
   - 表数据域策略（table_policies → TablePolicy，供 SQLPolicyGuard 消费）
@@ -33,6 +33,14 @@ class TablePolicy:
 
 class SchemaLoader:
     """加载并缓存 schema 配置，提供快速查询接口"""
+
+    # 旧数据仓库表名已经被历史裸表 SQL 使用。新增同名业务域表后，
+    # 裸名仍解析到旧表；新表必须使用 schema-qualified 名，避免静默换表。
+    BARE_TABLE_PREFERENCES = {
+        "products": "product.products",
+        "warehouses": "inventory.warehouses",
+        "purchase_orders": "inventory.purchase_orders",
+    }
 
     def __init__(self):
         self._config = SCHEMA_CONFIG
@@ -118,8 +126,11 @@ class SchemaLoader:
 
         # reverse-resolve：把裸名映射回 schema-qualified 名
         bare_to_qualified: Dict[str, str] = {}
-        for qname in self.allowed_tables:
-            bare_to_qualified[qname.split(".", 1)[-1]] = qname
+        bare_names = {qname.split(".", 1)[-1] for qname in self.allowed_tables}
+        for bare_name in bare_names:
+            resolved = self.resolve_bare_table(bare_name)
+            if resolved:
+                bare_to_qualified[bare_name] = resolved
 
         parts = []
         for qname in qualified_names:
@@ -149,6 +160,18 @@ class SchemaLoader:
             schema, table = qualified_name.split(".", 1)
             return schema.lower(), table.lower()
         return "", qualified_name.lower()
+
+    def resolve_bare_table(self, bare_name: str) -> str | None:
+        """解析裸表名；旧表冲突按显式兼容映射，其余只接受唯一匹配。"""
+        bare = bare_name.lower()
+        matches = sorted(
+            qname for qname in self.allowed_tables
+            if qname.split(".", 1)[-1] == bare
+        )
+        preferred = self.BARE_TABLE_PREFERENCES.get(bare)
+        if preferred in matches:
+            return preferred
+        return matches[0] if len(matches) == 1 else None
 
     # =================================================
     # 行级安全

@@ -2,9 +2,9 @@
 """test_entry_mode_handoff.py — 域入口模式判据与 handoff 短路回归（多域隔离收官 M2/M3）
 
 锁定三件事：
-  1) **默认零变化**：三开关缺省 execute，prefilter 命中照旧进域图（既有
+  1) **默认零变化**：受支持域开关缺省 execute，prefilter 命中照旧进域图（既有
      prefilter 用例不改断言即可过 = 基线等价的回归门）；
-  2) guide 判据：规划/漏斗/客服诉求 → handoff 引导；旅游一次性查询
+  2) guide 判据：规划/客服诉求 → handoff 引导；旅游一次性查询
      （景点/门票/在哪）→ passthrough 落回主路由（travel.poi_search 直答）；
   3) handoff 更新形态：route_mode="handoff" + 契约体过 HandoffPayloadV1 +
      不回写路由上下文（无 mark_domain_turn）。
@@ -48,7 +48,7 @@ def _domain_update(route_mode: str, **extra) -> dict:
 
 
 def test_default_verdict_is_execute_for_all_domains():
-    for mode in ("travel", "customer_service", "selection_funnel"):
+    for mode in ("travel", "customer_service"):
         assert entry_mode_verdict("帮我规划福州3天行程", _domain_update(mode)) == "execute"
 
 
@@ -77,10 +77,8 @@ def test_guide_mode_travel_one_shot_passthrough(monkeypatch):
     assert entry_mode_verdict("三坊七巷在哪", update) == "passthrough"
 
 
-def test_guide_mode_selection_and_cs_guides(monkeypatch):
-    _guide(monkeypatch, "SELECTION_GLOBAL_ENTRY_MODE", "CS_GLOBAL_ENTRY_MODE")
-    assert entry_mode_verdict(
-        "给宠物零食做一次智能选品", _domain_update("selection_funnel")) == "guide"
+def test_guide_mode_cs_guides(monkeypatch):
+    _guide(monkeypatch, "CS_GLOBAL_ENTRY_MODE")
     assert entry_mode_verdict(
         "我的订单怎么退款", _domain_update("customer_service")) == "guide"
 

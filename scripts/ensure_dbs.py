@@ -49,6 +49,8 @@ BUSINESS_MIGRATIONS = [
     "043_readonly_public_revoke.sql",  # 收窄 public 后再启用只读口令
     "083_readonly_ai_grant_scope.sql",  # 收窄 ai 后再启用只读口令
     "093_revoke_readonly_default_password.sql",  # 清除历史默认口令
+    "150_retail_erp_pilot_schema.sql",  # 零售 ERP 试点业务域
+    "152_retire_crawler_read_access.sql",  # 竞品旧表保留但问数账号无读取权限
 ]
 MEMORY_MIGRATIONS = [
     "002_agent_memory_schema.sql",
@@ -60,6 +62,7 @@ MEMORY_MIGRATIONS = [
     "013_obs_analytics_pg.sql",
     "014_rag_stores_pg.sql",
     "027_rag_processing_lineage.sql",
+    "151_auth_sso.sql",  # 扫码身份绑定与租户级企业登录配置
 ]
 
 # "已存在 / 已导入"类错误码（幂等跳过，不算失败）

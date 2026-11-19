@@ -21,9 +21,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# ── 目标域（第四扇门选品页上线前，selection_funnel 落地页为规划中的
-#    /selection-funnel 路由；契约先行，域枚举一步到位）────────────────
-HandoffTargetDomain = Literal["travel", "customer_service", "selection_funnel"]
+# ── 目标域 ─────────────────────────────────────
+HandoffTargetDomain = Literal["travel", "customer_service"]
 
 CONTRACT_VERSION: Literal[1] = 1
 
@@ -43,15 +42,6 @@ class TravelHandoffParams(BaseModel):
     must_go: list[str] = Field(default_factory=list)
 
 
-class SelectionFunnelHandoffParams(BaseModel):
-    """选品页预填参数（类目/平台，对应漏斗 brief 的两个槽位）。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    category: str = ""
-    platform: str = ""
-
-
 class CustomerServiceHandoffParams(BaseModel):
     """客服抽屉预填参数（原样带入用户最后一问，不做改写）。"""
 
@@ -63,7 +53,6 @@ class CustomerServiceHandoffParams(BaseModel):
 _PARAMS_MODELS: dict[str, type[BaseModel]] = {
     "travel": TravelHandoffParams,
     "customer_service": CustomerServiceHandoffParams,
-    "selection_funnel": SelectionFunnelHandoffParams,
 }
 
 
@@ -95,10 +84,6 @@ GUIDE_TEXTS: dict[str, str] = {
         "这是一次行程规划需求，主对话不直接生成完整行程。"
         "已把目的地、天数等整理进下方卡片，点击即可带参跳转「旅游规划」页，"
         "到那边我会实时检索景点、交通与预算并逐日排程。"
-    ),
-    "selection_funnel": (
-        "智能选品是完整漏斗流程（导入 → 粗筛 → 核验 → 经济性 → 排序），"
-        "请点击下方卡片进入「智能选品」页导入数据并运行，报告会在页面内生成。"
     ),
     "customer_service": (
         "这个问题更适合在智能客服窗口处理。点击下方卡片打开客服窗口，"
@@ -234,21 +219,13 @@ def build_handoff_payload(
     query: str,
     *,
     reason: str = "domain_planning_request",
-    extra_params: dict | None = None,
 ) -> HandoffPayloadV1:
     """从用户原话构造 handoff 契约体（SSE 发射端的唯一构造入口）。
 
-    extra_params：调用方已知的结构化槽位（如选品 prefilter 场景的
-    category/platform）优先于正则抽取。
     """
     params: dict = {}
     if target_domain == "travel":
         params = build_travel_params(query)
-    elif target_domain == "selection_funnel":
-        params = {
-            "category": (extra_params or {}).get("category", ""),
-            "platform": (extra_params or {}).get("platform", ""),
-        }
     elif target_domain == "customer_service":
         params = {"prefill_question": (query or "").strip()}
     return HandoffPayloadV1(

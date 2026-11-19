@@ -1,7 +1,7 @@
 """请求体上限中间件（2026-11-08 安全审计 T6）。
 
 锁定：按路径上限在读取 body 之前用 Content-Length 拒绝 413；
-webhook / 选品导入 / RAG 上传各有独立上限，普通 JSON API 用默认 8MB。
+webhook / RAG 上传有独立上限，普通 JSON API 用默认 8MB。
 """
 from __future__ import annotations
 
@@ -38,7 +38,6 @@ def _client() -> TestClient:
 
 def test_request_body_limit_rules() -> None:
     assert request_body_limit("/webhooks/automations/t/a") == 1024 * 1024
-    assert request_body_limit("/selection-funnel/import/file") == 32 * 1024 * 1024
     # multipart 请求体总上限与 APISIX 一致；文件本身由上传流精确限长。
     assert request_body_limit("/rag/upload") == RAG_UPLOAD_INGRESS_MAX_BODY_BYTES
     assert request_body_limit("/chat/stream") == DEFAULT_BODY_LIMIT

@@ -16,7 +16,7 @@ import StreamingContent from '@/components/chat/StreamingContent'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
-const LONG_TEXT = '你好，我是企业智能助手，能为你提供旅游行程规划、订单与售后客服、商品智能选品、经营数据查询与分析，还有知识库问答哦。'
+const LONG_TEXT = '你好，我是企业智能助手，能为你提供旅游行程规划、订单与售后客服、商品信息查询、经营数据分析，还有知识库问答哦。'
 
 describe('StreamingContent 匀速打字机', () => {
   let container: HTMLDivElement

@@ -506,22 +506,7 @@ def run_domain_prefilters(query: str, state: dict) -> dict | None:
     except Exception as e:
         logger.warning(f"[RouterNode] 旅游预过滤失败，回退到主 Router: {e}")
 
-    # ── 选品漏斗预过滤：纯正则（~1ms），与旅游同层（2026-09-17 接线）──
-    # 「给宠物零食做一次智能选品」这类请求短路进选品漏斗域图；语义与
-    # selection_decision workflow（上不上架决策）通过 _DECISION_EXCLUDE 互斥。
-    try:
-        from backend.orchestration.graph.selection_funnel_prefilter import (
-            try_selection_funnel_prefilter,
-        )
-        funnel_update = try_selection_funnel_prefilter(query, state)
-        if funnel_update is not None:
-            result = _finish_prefilter_hit(state, query, funnel_update)
-            if result is not None:
-                return result
-    except Exception as e:
-        logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
-
-    # ── 预订域预过滤（STOP L9）：选品与商务之间加法插入 ──
+    # ── 预订域预过滤（STOP L9）──
     # 2026-11-01 收编重构：预订/商务两域 prefilter 均随域图壳删除——
     # 找酒店/查机票归旅游域 lodging/intercity；预订走 travel_v2 REST 确认门。
 

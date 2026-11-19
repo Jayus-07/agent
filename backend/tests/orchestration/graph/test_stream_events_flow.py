@@ -420,18 +420,17 @@ def test_abort_after_graph_answer_does_not_commit_memory():
 
 
 def test_shared_runner_keeps_domain_answer_contracts(monkeypatch):
-    """公共终态答案变化兼容客服、旅游、选品三个域图出口。"""
+    """公共终态答案变化兼容客服和旅游域图出口。"""
     from backend.orchestration.graph import builder
     from backend.orchestration.domain_registry import domain_graph_registry
 
     domain_nodes = {
-        "cs_graph_node", "travel_graph_node", "selection_funnel_graph_node",
+        "cs_graph_node", "travel_graph_node",
     }
     monkeypatch.setattr(domain_graph_registry, "get_node_names", lambda: domain_nodes)
     for node_name, answer, payload in (
         ("cs_graph_node", "客服域回答", {"cs_pending_action": {"action_type": "confirm"}}),
         ("travel_graph_node", "旅游域回答", {"travel_context": {"itinerary": {"status": "draft"}}}),
-        ("selection_funnel_graph_node", "选品域回答", {"funnel_context": {"stage": "review"}}),
     ):
         # 模拟 build_graph() 已从 DomainGraphRegistry 派生节点标签的启动态。
         monkeypatch.setitem(builder._NODE_LABELS, node_name, node_name)

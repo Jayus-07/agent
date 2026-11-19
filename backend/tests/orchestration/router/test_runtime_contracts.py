@@ -109,28 +109,28 @@ def test_invalid_runtime_and_interaction_combination_is_rejected():
         )
 
 
-def test_runtime_result_normalizes_cs_travel_and_selection_outputs():
+def test_runtime_result_normalizes_cs_travel_and_workflow_outputs():
     cs = normalize_runtime_result("客服回答", runtime_id="customer_service")
     travel = normalize_runtime_result(
         {"itinerary": [{"day": 1}], "sources": ["poi-1"]},
         runtime_id="travel",
     )
-    selection = normalize_runtime_result(
+    workflow = normalize_runtime_result(
         {
-            "answer": "选品报告",
+            "answer": "工作流报告",
             "answer_type": "markdown",
-            "ui_payload": {"funnel": "done"},
+            "ui_payload": {"summary": "done"},
         },
-        runtime_id="selection_funnel",
+        runtime_id="sample_workflow",
     )
 
     assert cs.answer == "客服回答"
     assert cs.metadata["runtime_id"] == "customer_service"
     assert travel.ui_payload["itinerary"] == [{"day": 1}]
     assert travel.sources == ["poi-1"]
-    assert selection.answer == "选品报告"
-    assert selection.answer_type == "markdown"
-    assert selection.ui_payload == {"funnel": "done"}
+    assert workflow.answer == "工作流报告"
+    assert workflow.answer_type == "markdown"
+    assert workflow.ui_payload == {"summary": "done"}
 
 
 def test_runtime_result_preserves_clarification_handoff_tool_calls_and_metadata():

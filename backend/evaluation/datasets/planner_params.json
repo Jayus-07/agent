@@ -16,30 +16,6 @@
       "metadata": {"difficulty": "easy", "type": "write_op_email"}
     },
     {
-      "id": "PP-002",
-      "question": "把这个竞品 https://item.jd.com/100012043978.html 加入监控列表，名称叫iPhone 15",
-      "expected": {
-        "capabilities": ["competitor.analyze"],
-        "max_steps": 1,
-        "params": {
-          "competitor.analyze": {"action": "add", "url": {"contains": "item.jd.com"}}
-        }
-      },
-      "metadata": {"difficulty": "easy", "type": "write_op_watchlist"}
-    },
-    {
-      "id": "PP-003",
-      "question": "把 https://item.jd.com/100012043978.html 从竞品监控里移除",
-      "expected": {
-        "capabilities": ["competitor.analyze"],
-        "max_steps": 1,
-        "params": {
-          "competitor.analyze": {"action": "remove"}
-        }
-      },
-      "metadata": {"difficulty": "easy", "type": "write_op_watchlist"}
-    },
-    {
       "id": "PP-004",
       "question": "抓取 https://www.example.com/product/123 这个页面的内容",
       "expected": {

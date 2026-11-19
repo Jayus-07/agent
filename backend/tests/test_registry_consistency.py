@@ -131,9 +131,8 @@ class TestRuleTableSingleSource:
 class TestCapabilityManifest:
     """manifest ↔ skills/registry ↔ 路由派生量三方对账。
 
-    背景：曾出现 competitor.analyze 已注册 skill、可被 rule_router 硬编码
-    路由、却被 LLM Router 拒绝（ALL_CAPABILITIES 缺失）的三方漂移。manifest
-    化后由本组测试锁死。
+    背景：曾出现 capability 在 Skill 注册、规则路由和 LLM Router 之间
+    漂移。manifest 化后由本组测试锁死。
     """
 
     def test_types_derived_from_manifest(self):
@@ -194,13 +193,13 @@ class TestCapabilityManifest:
             f"多渲染={rendered_names - visible} 少渲染={visible - rendered_names}"
         )
         # E9 收缩的实体断言：内部能力确实退出了规划面
-        for internal in ("email.watch", "competitor.watch", "competitor.history"):
+        for internal in ("email.watch",):
             assert internal not in rendered_names, f"内部能力 {internal} 仍在 Planner 可见清单"
 
     def test_every_skill_capability_in_manifest(self):
         """反向对账：skills 注册表里每个 capability 都出现在 manifest
         （routed 或 unrouted）。新 Skill 加了 capability 忘了更新 manifest
-        会导致它对路由不可见——正是 competitor.analyze 曾经的病。"""
+        会导致它对路由不可见。"""
         from backend.orchestration.router.manifest import load_manifest
         from backend.skills import registry as skill_reg
 

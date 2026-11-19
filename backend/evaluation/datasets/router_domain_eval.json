@@ -59,10 +59,10 @@
       }
     },
     {
-      "query": "看看竞品这个链接的价格变化",
+      "query": "分析 SKU001 上周销量下滑是否需要调整售价",
       "expected": {
         "domain": "business",
-        "tool": "competitor.analyze"
+        "tool": "business.analyze"
       }
     },
     {
@@ -144,12 +144,6 @@
       "query": "厦门有哪些值得去的景点",
       "expected": {
         "domain": "travel"
-      }
-    },
-    {
-      "query": "给宠物零食做一次智能选品",
-      "expected": {
-        "domain": "selection_funnel"
       }
     },
     {

@@ -1517,7 +1517,7 @@ class RAGPipeline:
 
         M3 权限显式化（fail-closed）：必须声明主体——用户链路传
         subject_type/department/permissions/roles（走授权 keep-set）；
-        内部系统调用（旅游域/选品漏斗/经营分析等平台公共库消费方）传
+        内部系统调用（旅游域/经营分析等平台公共库消费方）传
         system_subject=<模块名> 留痕。空主体一律拒绝，杜绝「忘传
         department=静默绕过隔离」的旁路。
         """

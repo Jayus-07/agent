@@ -47,11 +47,8 @@ HIGH_RISK_CAPABILITIES = frozenset({
     "email.send",
     "data.export",
     "data.collect",
-    "competitor.analyze",
-    "competitor.watch",
 })
 
-_WRITE_ACTIONS = frozenset({"add", "remove", "toggle"})
 _FAILURE_PREFIXES = (
     "[EXPORT FAILED]",
     "[AGENTLY ERROR:",
@@ -115,15 +112,6 @@ def _validate_email(capability: str, params: dict[str, Any]) -> str | None:
     return None
 
 
-def _validate_competitor(capability: str, params: dict[str, Any]) -> str | None:
-    action = (params.get("action") or capability.rsplit(".", 1)[-1]).strip().lower()
-    if action in {"analyze", "history"}:
-        return _require_any(params, "url", "question")
-    if action in _WRITE_ACTIONS:
-        return _require_all(params, "url")
-    return None
-
-
 def _validate_map_lookup(_capability: str, params: dict[str, Any]) -> str | None:
     action = str(params.get("action") or "").strip().lower()
     requirements = _MAP_ACTION_REQUIREMENTS.get(action)
@@ -158,9 +146,6 @@ CAPABILITY_VALIDATORS: dict[str, Callable[[str, dict[str, Any]], str | None]] = 
     "email.search": _validate_email,
     "email.read": _validate_email,
     "email.watch": _validate_email,
-    "competitor.analyze": _validate_competitor,
-    "competitor.watch": _validate_competitor,
-    "competitor.history": _validate_competitor,
     "map.lookup": _validate_map_lookup,
     "web.crawl": _validate_web_crawl,
     "web.search": _validate_positive_limit,
@@ -217,16 +202,6 @@ def validate_invocation(
     # 声明式 schema 通过后，再执行能力级跨字段契约；这一步仍发生在
     # Tool.invoke 之前，失败不会触发外部请求或写副作用。
     validate_capability_parameters(capability, params)
-
-    # action 型 capability 的跨字段约束不能由 JSON schema 的单字段 required
-    # 表达，在 Skill 边界补齐，避免 action=add 且 url 为空仍进入 Tool。
-    action = params.get("action")
-    if capability.startswith("competitor.") and action in _WRITE_ACTIONS:
-        if not str(params.get("url") or "").strip():
-            raise ValidationFailure(
-                "parameter", ErrorCode.INVALID_PARAM,
-                f"action={action} 必须提供 url",
-            )
 
     if capability in HIGH_RISK_CAPABILITIES:
         _validate_permission_context(capability)
@@ -348,14 +323,6 @@ def validate_semantics(capability: str, params: dict, output: Any) -> None:
             semantic_code="approval_required",
         )
 
-    if capability.startswith("competitor."):
-        action = params.get("action")
-        if action in _WRITE_ACTIONS and "请提供" in stripped:
-            _record_validation_metric("semantic", "rejected")
-            raise ValidationFailure(
-                "semantic", ErrorCode.INVALID_PARAM,
-                f"{capability} 的写操作未形成有效目标",
-            )
     _record_validation_metric("semantic", "passed")
 
 

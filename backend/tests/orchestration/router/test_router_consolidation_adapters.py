@@ -52,7 +52,6 @@ class TestDomainRouter:
         [
             ({"route_mode": "customer_service"}, "customer_service", None),
             ({"route_mode": "travel"}, "travel", "planning"),
-            ({"route_mode": "selection_funnel"}, "selection_funnel", "funnel"),
         ],
     )
     def test_prefilter_update_normalizes_domain(self, update, domain, subflow):
@@ -144,7 +143,6 @@ class TestExecutionModeResolver:
             workflow_names={"daily_report"},
             domain_graph_modes={
                 "customer_service": "customer_service",
-                "selection_funnel": "selection_funnel",
                 "travel": "travel",
             },
         )

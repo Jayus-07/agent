@@ -152,7 +152,7 @@ agent_unanswered_total = Counter(
 
 # ── 域引导（handoff）漏斗（多域隔离收官 M3，2026-10-06）────────────────
 # 退役指标（实施计划 §七）：guide 模式下引导卡 曝光→点击 转化按域计数；
-# target_domain 只取契约枚举（travel/customer_service/selection_funnel），
+# target_domain 只取契约枚举（travel/customer_service），
 # phase ∈ shown（后端帧下发）/ clicked（前端跳转回报），禁止携带问题原文。
 agent_handoff_total = Counter(
     "agent_handoff_total",

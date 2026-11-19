@@ -247,9 +247,7 @@ TURNS = [
     ("T8_cs_return", "订单里的行程单怎么退款",
      {"cs_graph_node"}, "CS 回归（Travel→CS）"),
     ("T9_ambiguous", "那这个怎么办",
-     None, "模糊回指（禁 travel/selection 域图）"),
-    ("T10_selection", "给宠物零食做一次智能选品",
-     {"selection_funnel_graph_node"}, "切 Selection"),
+     None, "模糊回指（禁 travel/CS 域图）"),
 ]
 
 
@@ -267,10 +265,9 @@ def run_matrix(token: str, tenant: str, user: str, session_id: str) -> bool:
         if expect_nodes is not None:
             route_ok = bool(nodes) and bool(set(nodes) & expect_nodes)
         else:
-            # T9：模糊回指不得被随机切进 travel/selection 域图（C4）
+            # T9：模糊回指不得被随机切进 travel/CS 域图（C4）
             route_ok = bool(nodes) and not (
-                {"travel_graph_node", "selection_funnel_graph_node",
-                 "cs_graph_node"} & set(nodes))
+                {"travel_graph_node", "cs_graph_node"} & set(nodes))
         ctx = redis_context(tenant, user, session_id) or {}
         active = ctx.get("active_domain") or ""
         turn_ok = hard_ok and route_ok

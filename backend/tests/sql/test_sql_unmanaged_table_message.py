@@ -7,7 +7,7 @@
 
 收口口径：
   - `table_forbidden` → status=validation_error / error_type=`table_not_managed`
-    / 文案说明**能力边界**（7 个业务域），且不回显表名（沿用 policy.py 的
+    / 文案说明**能力边界**（包含零售 ERP 试点），且不回显表名（沿用 policy.py 的
     「详细原因只进日志」纪律）
   - 其余校验拒绝（敏感列/危险函数/非 SELECT 等）文案与 error_type 不变
   - 真权限/数据域拒绝的文案不动（`该数据不在当前可访问范围内。`，
@@ -30,6 +30,7 @@ def test_table_forbidden_maps_to_unmanaged_message():
     assert result.status == "validation_error"
     assert result.error_type == "table_not_managed"
     assert "不在 SQL 助手的可查询范围内" in (result.error or "")
+    assert "零售 ERP" in (result.error or "")
     # 不回显表名（详细原因只进日志）
     assert "public" not in (result.error or "")
     assert "ai." not in (result.error or "")

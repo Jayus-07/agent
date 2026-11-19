@@ -18,13 +18,13 @@ function mount(onTabChange = vi.fn()): { root: Root; container: HTMLDivElement; 
   act(() =>
     root.render(
       <WorkbenchShell
-        title="选品工作台"
-        description="统一处理选品任务"
+        title="业务工作台"
+        description="统一处理业务任务"
         tabs={[
-          { id: 'funnel', label: '选品漏斗' },
-          { id: 'decision', label: '选品决策' },
+          { id: 'summary', label: '汇总' },
+          { id: 'details', label: '明细' },
         ]}
-        activeTab="funnel"
+        activeTab="summary"
         onTabChange={onTabChange}
       >
         <div data-panel>当前面板</div>
@@ -38,11 +38,11 @@ describe('WorkbenchShell', () => {
   it('渲染标题、Tab 语义和当前面板', () => {
     const { root, container } = mount()
 
-    expect(container.textContent).toContain('选品工作台')
-    expect(container.textContent).toContain('统一处理选品任务')
+    expect(container.textContent).toContain('业务工作台')
+    expect(container.textContent).toContain('统一处理业务任务')
     expect(container.querySelector('[role="tablist"]')).not.toBeNull()
     expect(container.querySelectorAll('[role="tab"]')).toHaveLength(2)
-    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('选品漏斗')
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('汇总')
     expect(container.querySelector('[data-panel]')?.textContent).toBe('当前面板')
 
     act(() => root.unmount())
@@ -54,7 +54,7 @@ describe('WorkbenchShell', () => {
 
     expect(decisionTab?.className).toContain('focus-visible')
     act(() => decisionTab?.click())
-    expect(onTabChange).toHaveBeenCalledWith('decision')
+    expect(onTabChange).toHaveBeenCalledWith('details')
 
     act(() => root.unmount())
   })

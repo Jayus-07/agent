@@ -144,17 +144,11 @@ def test_build_handoff_payload_all_domains():
     assert travel.params["destination"] == "福州"
     assert travel.text == GUIDE_TEXTS["travel"]
 
-    selection = build_handoff_payload(
-        "selection_funnel", "给宠物零食做一次智能选品",
-        extra_params={"category": "宠物零食", "platform": "淘宝"},
-    )
-    assert selection.params == {"category": "宠物零食", "platform": "淘宝"}
-
     cs = build_handoff_payload("customer_service", "我的订单怎么还没发货")
     assert cs.params["prefill_question"] == "我的订单怎么还没发货"
 
 
 def test_guide_texts_cover_all_domains():
-    assert set(GUIDE_TEXTS) == {"travel", "customer_service", "selection_funnel"}
+    assert set(GUIDE_TEXTS) == {"travel", "customer_service"}
     for domain, text in GUIDE_TEXTS.items():
         assert text.strip(), f"{domain} 引导话术不能为空"

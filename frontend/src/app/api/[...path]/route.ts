@@ -125,6 +125,12 @@ function hasRefreshCookie(req: NextRequest): boolean {
 function isPublicApi(path: string[], method: string, req: NextRequest): boolean {
   if (isAnonymousShareApi(path, method)) return true;
   if (method === "POST" && path.length === 2 && path[0] === "auth" && path[1] === "login") return true;
+  if (method === "GET" && path.join("/") === "auth/sso/providers") return true;
+  if (
+    method === "POST" && path.length === 4 && path[0] === "auth" &&
+    path[1] === "sso" && ["feishu", "wecom", "dingtalk"].includes(path[2]) &&
+    ["start", "callback"].includes(path[3])
+  ) return true;
   if (
     method === "POST" && path.length === 2 && path[0] === "auth" &&
     (path[1] === "refresh" || path[1] === "logout") && hasRefreshCookie(req)

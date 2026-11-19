@@ -112,17 +112,6 @@ def _make_decision(
             "workflow_runtime",
         ),
         (
-            "selection_funnel",
-            _make_decision(
-                execution=ExecutionMode.WORKFLOW,
-                runtime_type=RuntimeType.WORKFLOW,
-                runtime_id="selection_funnel",
-                domain="selection",
-            ),
-            "execute",
-            "workflow_runtime",
-        ),
-        (
             "clarify",
             _make_decision(
                 execution=ExecutionMode.PLAN,
@@ -200,7 +189,6 @@ def test_projection_emits_legacy_domain_and_execution_snapshots():
         ("workflow", "workflow", RuntimeType.WORKFLOW, InteractionMode.EXECUTE),
         ("customer_service", "workflow", RuntimeType.AGENT, InteractionMode.EXECUTE),
         ("travel", "workflow", RuntimeType.WORKFLOW, InteractionMode.EXECUTE),
-        ("selection_funnel", "workflow", RuntimeType.WORKFLOW, InteractionMode.EXECUTE),
         ("clarify", "plan", RuntimeType.GENERIC, InteractionMode.CLARIFY),
         ("handoff", "plan", RuntimeType.GENERIC, InteractionMode.HANDOFF),
         ("general_chat", "direct", RuntimeType.GENERIC, InteractionMode.EXECUTE),

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """tenant scope 注入测试（STOP B 决策 D1）。
 
-真实 18 表均无租户列（单租户仓库，结构隔离）；本组用 fixture 表证明
+旧核心表未声明租户列（retail 试点除外）；本组用 fixture 表证明
 Guard 的 tenant_column 注入能力位：声明即注入、all 也不例外（tenant
 永远优先）、tenant_id 缺失 fail-closed。
 """
@@ -63,7 +63,7 @@ class TestTenantFailClosed:
 
 class TestNoTenantColumnNoInjection:
     def test_shared_table_without_tenant_column_untouched(self):
-        """未声明 tenant_column（真实 18 表现状）→ 不注入、不虚构租户条件。"""
+        """未声明 tenant_column 的旧表 → 不注入、不虚构租户条件。"""
         ctx = make_ctx("all", tenant_id="tenant-a")
         guarded = SQLPolicyGuard().validate_and_rewrite(
             "SELECT sku FROM product.products", ctx)

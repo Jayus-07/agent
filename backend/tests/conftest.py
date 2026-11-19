@@ -349,7 +349,7 @@ _prepare_isolated_data_dir()
 def _auto_approve_tools(monkeypatch):
     """测试会话写操作免审批（TOOL_APPROVAL_MODE=auto）。
 
-    背景：写操作工具（data_collection/competitor 等）默认走审批门
+    背景：写操作工具（data_collection 等）默认走审批门
     （config 默认 required），而审批单在 PG 里有 TTL——批准过一次后
     600 秒内重跑测试"侥幸通过"，超时后被拦，测试结果随时间漂移
     （2026-09-13 全量隔离套件 13 个失败即此因）。
@@ -367,7 +367,7 @@ def _budget_mode_hermetic(monkeypatch):
 
     背景：宿主 .env 的 LLM_BUDGET_MODE=enforce 时，写副作用工具经
     ensure_approved → 预算硬门禁要求可信 user/tenant 上下文（单测没有）→
-    QuotaConfigurationError。2026-09-21 实测 test_competitor 9 例随宿主
+    QuotaConfigurationError。2026-09-21 实测若干 PG 测试随宿主
     配置漂移失败，此前 test_email_skill / test_tool_approval 已各自打补丁。
     预算门自身的行为契约由 security/test_tool_approval.py 与 quota 专项
     覆盖（其 fixture 会按需覆盖本 fixture 的设置）。

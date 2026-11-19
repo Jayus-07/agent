@@ -1,9 +1,4 @@
 export const WORKBENCH_ROUTES = {
-  selection: {
-    path: '/selection-workbench',
-    defaultTab: 'funnel',
-    tabs: ['funnel', 'decision'],
-  },
   knowledge: {
     path: '/knowledge/workbench',
     defaultTab: 'documents',
@@ -25,8 +20,6 @@ export type WorkbenchId = keyof typeof WORKBENCH_ROUTES
 export type WorkbenchTabId = (typeof WORKBENCH_ROUTES)[WorkbenchId]['tabs'][number]
 
 const LEGACY_ROUTE_MAP: Record<string, { workbench: WorkbenchId; tab: string }> = {
-  '/selection-funnel': { workbench: 'selection', tab: 'funnel' },
-  '/selection-decision': { workbench: 'selection', tab: 'decision' },
   '/knowledge': { workbench: 'knowledge', tab: 'documents' },
   '/knowledge/documents': { workbench: 'knowledge', tab: 'documents' },
   '/knowledge/pending': { workbench: 'knowledge', tab: 'pending' },

@@ -45,10 +45,9 @@ describe('orderDomainGraphs', () => {
   it('多个父域各自成组，保持后端给的相对顺序', () => {
     const ordered = orderDomainGraphs([
       graph('travel_tour', 'travel'),
-      graph('selection_funnel', null),
       graph('travel', null),
     ])
-    expect(ordered.map((n) => n.route_mode)).toEqual(['selection_funnel', 'travel', 'travel_tour'])
+    expect(ordered.map((n) => n.route_mode)).toEqual(['travel', 'travel_tour'])
   })
 
   it('长度恒等：不丢节点、不重复', () => {

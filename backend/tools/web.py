@@ -301,10 +301,10 @@ def _search_bing(query: str, num_results: int) -> list[str]:
 def web_crawl_tool(url: str, mode: str = "markdown") -> str:
     """
     抓取指定网页的正文内容，返回干净的 Markdown 格式文本。
-    适用场景：竞品页面分析、行业资讯摘要、平台政策原文获取。
+    适用场景：行业资讯摘要、业务官网信息、公开政策原文获取。
     建议先通过 web.search 发现目标链接，再用本 tool 抓取正文。
 
-    url: 要抓取的网页地址（完整 URL，如 https://www.amazon.com/dp/B0EXAMPLE）
+    url: 要抓取的网页地址（完整 URL，如 https://example.com/about）
     mode: "markdown" (默认，干净 Markdown) | "raw" (原始 HTML)
     返回: Markdown 格式的网页正文
     """
@@ -318,9 +318,7 @@ def web_crawl_tool(url: str, mode: str = "markdown") -> str:
             logger.warning(f"[Tool:web_crawl] 抓取失败: {result['error']}")
             raise RuntimeError(f"无法抓取 '{url}': {result['error']}")
         text = result["content"]
-        # 50000 字符上限: 电商商品页（亚马逊等）正文通常 50-300KB，
-        # 前段是导航/面包屑，商品数据（价格/评价/规格）在中后段。
-        # 8000 字符截断会导致 pipeline 无法提取到价格等关键字段。
+        # 保留较长网页正文供企业助手总结，避免截断主要内容。
         if len(text) > 50000:
             text = text[:50000] + f"\n\n... (内容已截断，原文共 {len(text)} 字符)"
         logger.info(f"[Tool:web_crawl] 成功抓取 {url} ({len(text)} 字符, mode={mode})")

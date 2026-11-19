@@ -206,7 +206,6 @@ def test_travel_domain_graph_continuity(first_query, second_query):
         ("customer_service", "customer_service", "travel", "travel.plan"),
         ("travel", "travel.plan", "customer_service", "customer_service"),
         ("customer_service", "customer_service", "data", "sql.query"),
-        ("travel", "travel.plan", "selection_funnel", "selection_funnel"),
         ("data", "sql.query", "travel", "travel.plan"),
     ],
 )

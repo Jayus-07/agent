@@ -46,7 +46,6 @@ __all__ = ["ToolCandidate", "ToolSelection", "HierarchicalRouter", "get_hierarch
 _DOMAIN_ACTIONS = {
     "customer_service": "prefilter_cs",
     "travel": "prefilter_travel",
-    "selection_funnel": "prefilter_selection",
 }
 
 
@@ -104,8 +103,8 @@ def resolve_domain_tools(domain: str) -> list[ToolCandidate]:
     candidates: list[ToolCandidate] = []
     for name in manifest.capabilities_by_domain.get(domain, ()):
         decl = decls.get(name)
-        # 只放行 routed 能力：routed:false 是内部能力（如 competitor.watch
-        # 长轮询副作用），用户问题路由不可见，FC 也绝不能 bind 到它们
+        # 只放行 routed 能力：routed:false 是内部能力，不进入用户问题路由，
+        # FC 也不能绑定到这些能力。
         if decl is None or not decl.routed:
             continue
         if tool_registry.get_node(name) is None:

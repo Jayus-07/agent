@@ -1,5 +1,7 @@
 // Prompt Management API Service
 
+import { request, type RequestOptions } from '@/api/client'
+
 export type PromptStatus = 'draft' | 'testing' | 'evaluation' | 'passed' | 'published' | 'archived'
 
 export const PROMPT_STATUSES: PromptStatus[] = ['draft', 'testing', 'evaluation', 'passed', 'published', 'archived']
@@ -141,19 +143,8 @@ export type PromptEvaluationMode = 'offline' | 'semantic' | 'ragas' | 'self+raga
 
 const BASE = '/api/prompts'
 
-async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    // 凭据收口（2026-09-16 方案 B）：X-API-Key 由 BFF 代理路由服务端注入；
-    // 勿引用 NEXT_PUBLIC_API_KEY（NEXT_PUBLIC_* 会被内联进浏览器 bundle）。
-    ...(init?.headers as Record<string, string> || {}),
-  }
-  const res = await fetch(url, { ...init, headers })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail || `HTTP ${res.status}`)
-  }
-  return res.json()
+async function api<T>(url: string, init?: RequestOptions): Promise<T> {
+  return request<T>(url, init)
 }
 
 export const promptsService = {

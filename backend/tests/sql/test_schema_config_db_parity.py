@@ -13,7 +13,7 @@
   3. 脱敏列 / 敏感列声明的列必须真实存在
   4. `agent_readonly` 在声明 schema 内的可见面**恒等于声明面**
      （多一张 = 越权授权，少一张 = 声明了却读不到；
-      004 + 043 + 083 的授权收窄由本用例锁定）
+      004 + 043 + 083 + 152 的授权收窄由本用例锁定）
 
 运行：
     cd backend && python -m pytest tests/sql/test_schema_config_db_parity.py -v --no-cov

@@ -660,7 +660,7 @@ export default function ToolsPage() {
 
             <p className="flex items-center gap-1.5 text-[11px] text-text-muted">
               <CheckCircle2 size={12} />
-              中文名在 backend/tools/labels.py 登记、随契约 lock 派生（G2 禁手抄）；红色失败行点击可展开错误来源明细；「不可静态派生」= 该 Skill 的 Tool 分发逻辑无法从 _tool_fn 主链求值（如 SQL/Competitor）；数据源徽章：MCP=外部 MCP server 数据源（tooltip 含上游工具与开关）、外部=外部网络 API，无徽章 = 平台内部数据源
+              中文名在 backend/tools/labels.py 登记、随契约 lock 派生（G2 禁手抄）；红色失败行点击可展开错误来源明细；「不可静态派生」= 该 Skill 的 Tool 分发逻辑无法从 _tool_fn 主链求值（如 SQL）；数据源徽章：MCP=外部 MCP server 数据源（tooltip 含上游工具与开关）、外部=外部网络 API，无徽章 = 平台内部数据源
             </p>
 
             <AssetSection title="契约变更历史" meta="生成器检测到变更时自动落库，最新在前" bodyClassName="p-0">
