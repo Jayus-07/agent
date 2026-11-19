@@ -75,8 +75,6 @@ class MutationType:
     CLEAR_EVIDENCE = "clear_evidence"
     SET_TOPIC = "set_topic"
     OVERWRITE_DESTINATION = "overwrite_destination"
-    SET_FUNNEL_CANDIDATES = "set_funnel_candidates"
-    CLEAR_FUNNEL_CANDIDATES = "clear_funnel_candidates"
     APPLY_FOLLOWUP_RESOLUTION = "apply_followup_resolution"
     SET_SQL_QUERY_CONTEXT = "set_sql_query_context"
     CLEAR_SQL_QUERY_CONTEXT = "clear_sql_query_context"
@@ -93,8 +91,6 @@ _CREATING_MUTATIONS = frozenset({
     MutationType.SET_BOOKING_INTENT,
     MutationType.SET_TOPIC,
     MutationType.OVERWRITE_DESTINATION,
-    MutationType.SET_FUNNEL_CANDIDATES,
-    MutationType.CLEAR_FUNNEL_CANDIDATES,
     MutationType.APPLY_FOLLOWUP_RESOLUTION,
     MutationType.CLEAR_EVIDENCE,
     MutationType.SET_SQL_QUERY_CONTEXT,
@@ -387,17 +383,6 @@ def apply_mutation(
                                   version=ctx.version, detail="empty dest")
         ctx.overwrite_destination(new_dest,
                                   keep_days=payload.get("keep_days", True))
-
-    elif mtype == MutationType.SET_FUNNEL_CANDIDATES:
-        candidates = payload.get("candidates") or []
-        run_id = payload.get("run_id") or ""
-        if not candidates:
-            return MutationResult(status="noop", context=ctx.copy(),
-                                  version=ctx.version, detail="empty top")
-        ctx.set_funnel_candidates(candidates, run_id)
-
-    elif mtype == MutationType.CLEAR_FUNNEL_CANDIDATES:
-        ctx.clear_funnel_candidates()
 
     elif mtype == MutationType.APPLY_FOLLOWUP_RESOLUTION:
         # 对齐 follow_up_resolver.apply_resolution_to_context 语义：

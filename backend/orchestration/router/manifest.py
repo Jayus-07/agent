@@ -2,8 +2,7 @@
 
 治理目标：消灭「capability 声明散落多处、漏改一处静默失效」。
 此前 ALL_CAPABILITIES / ROUTE_EXAMPLES / skills 注册表三处手写，曾出现
-competitor.analyze 已注册、可被规则路由、却被 LLM Router 拒绝的漂移
-（tool_selector.py 注释承认"ALL_CAPABILITIES 静态表缺 competitor.analyze"）。
+能力已注册、可被规则路由、却被 LLM Router 拒绝的配置漂移。
 
 现在：capabilities.yaml 是唯一声明处，本模块加载 + fail-fast 校验，
 types.py / vector_router.py 从这里派生。一致性由
@@ -123,7 +122,7 @@ class RouterManifest:
         """Planner/critique 能力清单可见集（yaml 派生，禁止第二份手抄）。
 
         = routed:true 全集 ∪ 兜底白名单。routed:false 的内部能力
-        （email.watch 120s 阻塞长轮询 / competitor.watch / competitor.history）
+        （如 email.watch 长轮询）
         退出规划面：guide 模式下主图不再承接域规划，Planner 可选面应与
         主图可执行面对齐；email.watch 被 Planner 选中会阻塞 Supervisor 调度。
         """

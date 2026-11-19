@@ -1,89 +1,15 @@
-"""test_clarify_flow.py — 拒答转追问（L1 入口弱命中 + L2 拒答兜底）回归测试
+"""test_clarify_flow.py — 拒答转追问（L2 拒答兜底）回归测试
 
 覆盖：
-  - clarify_content：弱命中判定、三语境追问内容、选项文案必命中对应域预过滤、
-    防循环守卫（会话级连续追问上限）
-  - router_node：L1 弱命中 → route_mode="clarify" 短路
+  - clarify_content：定向追问内容、防循环守卫（会话级连续追问上限）
   - route_selector / builder edge_map：clarify → reporter
-  - reporter：L1 短文案（零 LLM）+ L2 拒答打标（技术错误不打标）
+  - reporter：clarify 短文案（零 LLM）+ 拒答打标（技术错误不打标）
   - events：_clarify 标记 → clarification SSE 事件
 """
 import pytest
 
 from backend.config import REFUSAL_CLARIFY_ENABLED
 from backend.orchestration.graph.travel_prefilter import is_travel_request
-from backend.orchestration.graph.selection_funnel_prefilter import (
-    is_selection_funnel_request,
-)
-
-
-# =====================================================
-# clarify_content：L1 入口弱命中
-# =====================================================
-
-class TestEntryClarify:
-    def test_travel_weak_hit_no_longer_clarifies(self):
-        """路由入口重构（2026-09-22）：旅游弱命中不再全局追问——
-
-        「帮我做个行程」直接进旅游域图，由 brief 节点在域内追问目的地/天数
-        （参数缺失由域内处理）；入口追问只保留选品类目分支。
-        """
-        from backend.orchestration.graph import clarify_content
-
-        assert clarify_content.build_entry_clarify(
-            "帮我做个行程", domain_hint="") is None
-        assert clarify_content.build_entry_clarify(
-            "帮我规划个行程", domain_hint="") is None
-        # 同时保证这类请求确实能进旅游域（预过滤命中 → 域图 brief 追问）
-        assert is_travel_request("帮我规划个行程")
-
-    def test_no_clarify_when_strong_hit(self):
-        """强命中（≥2 信号词）走正常旅游域，不追问。"""
-        from backend.orchestration.graph import clarify_content
-
-        assert clarify_content.build_entry_clarify(
-            "帮我规划一份福州2天的旅游行程", domain_hint="") is None
-
-    def test_no_clarify_city_only_query(self):
-        """「福州天气怎么样」：有城市无信号词，意图发散，不追问。"""
-        from backend.orchestration.graph import clarify_content
-
-        assert clarify_content.build_entry_clarify(
-            "福州天气怎么样", domain_hint="") is None
-
-    def test_no_clarify_no_signal(self):
-        """完全无信号：交给 L2 兜底，入口不追问。"""
-        from backend.orchestration.graph import clarify_content
-
-        assert clarify_content.build_entry_clarify(
-            "今天天气如何", domain_hint="") is None
-
-    def test_no_clarify_cs_locked(self):
-        """客服域锁下不做入口追问（设计约束：客服窗口不被业务追问打断）。"""
-        from backend.orchestration.graph import clarify_content
-
-        assert clarify_content.build_entry_clarify(
-            "帮我做个行程", domain_hint="customer_service") is None
-
-    def test_no_clarify_when_disabled(self, monkeypatch):
-        """总开关关闭 → 全部回滚为原行为。"""
-        from backend.orchestration.graph import clarify_content
-
-        monkeypatch.setattr(clarify_content, "REFUSAL_CLARIFY_ENABLED", False)
-        assert clarify_content.build_entry_clarify(
-            "帮我做个行程", domain_hint="") is None
-
-    def test_selection_weak_hit(self):
-        """「宠物零食这个品类」：类目暗示无选品动词 → 追问。"""
-        from backend.orchestration.graph import clarify_content
-
-        result = clarify_content.build_entry_clarify(
-            "宠物零食这个品类", domain_hint="")
-        assert result is not None
-        for label in result["options"]:
-            assert is_selection_funnel_request(label), f"选项未命中选品域: {label}"
-
-
 # =====================================================
 # clarify_content：L2 拒答兜底
 # =====================================================
@@ -120,9 +46,9 @@ class TestRefusalClarify:
             "想出去玩", domain_hint="")
         assert result is not None
         labels = result["options"]
-        # 通用导航必须覆盖旅游/选品入口，且文案可被对应域预过滤命中
+        # 通用导航必须保留旅游和数据查询入口。
         assert any(is_travel_request(label) for label in labels)
-        assert any(is_selection_funnel_request(label) for label in labels)
+        assert any("经营数据" in label for label in labels)
 
     def test_sql_lean_gets_sql_slot_card(self):
         """实机缺口回归（2026-10-03）：「查一下经营数据」被向量路由拦成
@@ -276,55 +202,6 @@ class TestSqlEmptyClarify:
 # =====================================================
 # router_node L1 接线
 # =====================================================
-
-def test_router_weak_hit_short_circuits_to_clarify(monkeypatch):
-    """选品类目弱命中 query → route_mode="clarify"，不进主 Router。
-
-    路由入口重构（2026-09-22）后 L1 追问仅剩选品类目分支；旅游弱命中
-    改为进旅游域图由 brief 节点追问（见 TestEntryClarify）。
-    """
-    import backend.orchestration.graph.cs_prefilter as cs_prefilter
-    import backend.orchestration.graph.router_node as router_node
-    import backend.orchestration.graph.selection_funnel_prefilter as sel_prefilter
-    from backend.orchestration.graph import clarify_content
-    from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
-
-    monkeypatch.setattr(clarify_content, "REFUSAL_CLARIFY_ENABLED", True)
-    # 末行真实断言 travel prefilter 命中；M16 后总闸唯一判定源是 sys_config
-    # （CI 无 .env 时 env 兜底不存在、注册表缺省 false），经 setitem 强制
-    # 开启，teardown 恢复原值，不向同 worker 后续测试泄漏。
-    from backend.services import sys_config
-    monkeypatch.setitem(sys_config._values, "TRAVEL_ENABLED", "true")
-
-    class _FreshCache:
-        """隔离守卫缓存：Redis 是跨进程持久的，同 session 重跑会误判已追问。"""
-
-        def get_json(self, key):
-            return None
-
-        def set_json(self, key, value, ttl=None):
-            pass
-
-        def delete(self, key):
-            pass
-
-        def incr(self, key, ttl=None):
-            return 1
-
-    monkeypatch.setattr(clarify_content, "_get_guard_cache", lambda: _FreshCache())
-    # CS 兜底在 L1 之前执行（检测器已无向量通道），测试中必须屏蔽
-    monkeypatch.setattr(cs_prefilter, "try_cs_prefilter", lambda *a, **k: None)
-    # 选品预过滤不命中（类目暗示无选品动词）才会走到 L1 追问，屏蔽之
-    monkeypatch.setattr(sel_prefilter, "try_selection_funnel_prefilter",
-                        lambda *a, **k: None)
-
-    state = {"question": "宠物零食这个品类", "session_id": "s1", "domain_hint": ""}
-    update = router_node.router_node(state)
-    assert update["route_mode"] == "clarify"
-    assert update["_clarify"]["options"]
-    # 预过滤原语义不破坏
-    assert try_travel_prefilter("帮我规划一份福州2天的旅游行程", state) is not None
-
 
 def test_route_selector_clarify_branch():
     from backend.orchestration.graph.router_node import route_selector

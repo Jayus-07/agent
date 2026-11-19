@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """shared 表 scope 行为测试（STOP B 决策 D2）。
 
-shared = 平台运营数据（product/inventory/crawler/customer.*），
+shared = 平台运营数据（product/inventory/customer.*），
 无个人/部门归属列：持 sql.read 的 all/department 用户皆可读，
 不虚构归属条件；self 用户只可读与自己关联的数据 → 无 self_column 即拒绝。
 """
@@ -9,6 +9,7 @@ import pytest
 
 from backend.sql.policy import SQLPolicyGuard, SQLPolicyError, SQL_TABLE_NOT_ALLOWED
 from backend.sql.schema_loader import schema_loader
+from backend.sql.sql_validator import ValidationError
 
 from tests.sql.conftest import make_ctx
 
@@ -19,18 +20,28 @@ SHARED_TABLES = [
     "inventory.inventory",
     "inventory.warehouses",
     "inventory.purchase_orders",
-    "crawler.competitor_products",
-    "crawler.competitor_price",
-    "crawler.product_reviews",
     "customer.customers",
     "customer.customer_behavior",
 ]
 
 
+@pytest.mark.parametrize("qname", [
+    "crawler.competitor_products",
+    "crawler.competitor_price",
+    "crawler.product_reviews",
+])
+def test_retired_crawler_tables_are_not_in_sql_allowlist(qname):
+    assert qname not in schema_loader.allowed_tables
+    with pytest.raises(ValidationError, match="禁止访问表"):
+        SQLPolicyGuard().validate_and_rewrite(
+            f"SELECT id FROM {qname}", make_ctx("all")
+        )
+
+
 class TestSharedReadableByDepartment:
     @pytest.mark.parametrize("qname", SHARED_TABLES)
     def test_department_scope_shared_tables_allowed(self, qname):
-        """editor/department 查 11 张 shared 表 → 全放行、零注入。"""
+        """editor/department 查 shared 表 → 全放行、零注入。"""
         ctx = make_ctx("department", department="hr")
         guarded = SQLPolicyGuard().validate_and_rewrite(
             f"SELECT id FROM {qname}", ctx)

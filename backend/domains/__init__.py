@@ -18,7 +18,6 @@ import sys
 _DOMAIN_MODULES = (
     "backend.customer_service.register",
     "backend.travel.register",
-    "backend.selection_funnel.register",  # 智能选品漏斗域（默认关，SELECTION_FUNNEL_ENABLED）
 )
 
 # 包级 import 触发注册（兼容测试/脚本直接 import backend.domains 的既有用法）

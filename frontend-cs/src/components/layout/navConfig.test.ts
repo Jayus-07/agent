@@ -51,7 +51,7 @@ describe('NAV — 导航配置完整性', () => {
       expect(
         p.startsWith('/knowledge') || p.startsWith('/observability') ||
         p.startsWith('/prompts') || p.startsWith('/approvals') ||
-        p.startsWith('/settings') || p.startsWith('/competitors') ||
+        p.startsWith('/settings') ||
         p.startsWith('/selection') || p.startsWith('/tasks') ||
         p.startsWith('/agent') || p.startsWith('/reports'),
         `管理端/用户端路由 ${p} 不应出现在客服端`,

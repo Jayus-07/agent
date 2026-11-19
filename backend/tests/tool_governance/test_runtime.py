@@ -183,13 +183,13 @@ def test_dynamic_operation_risk_requires_confirmation_only_for_write_action(
 
     read = runtime.prepare(
         ToolCallRequest(
-            capability="competitor_watchlist_tool",
+            capability="catalog_read_tool",
             arguments={"action": "list"},
         )
     )
     write = runtime.prepare(
         ToolCallRequest(
-            capability="competitor_watchlist_tool",
+            capability="catalog_read_tool",
             arguments={"action": "add", "url": "https://example.com/item"},
         )
     )

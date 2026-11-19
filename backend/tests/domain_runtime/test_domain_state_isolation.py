@@ -3,11 +3,11 @@
 
 锁定三层隔离事实：
 1. OrchestratorState：域上下文字段已全部登记（cs_context / travel_context /
-   funnel_context / cs_pending_action）——LangGraph updates 流会剥离 schema
+   cs_pending_action）——LangGraph updates 流会剥离 schema
    外键，未登记 = 静默丢；SQL/RAG 无平铺域上下文（SQL 走 step_results，
    RAG 产物不进图 state）。
-2. 域图私有 State 互不含他域字段：CSGraphState / TravelGraphState /
-   SelectionFunnelState 是独立 TypedDict，跨域字段一旦出现即失守。
+2. 域图私有 State 互不含他域字段：CSGraphState / TravelGraphState 是
+   独立 TypedDict，跨域字段一旦出现即失守。
 3. 域图输出契约（build_*_result / merge_cs_context / build_travel_context）
    是主图唯一入口：喂入被污染的 final_state，输出也不得携带他域键。
 """
@@ -17,7 +17,6 @@ from backend.customer_service.context import build_cs_context, merge_cs_context
 from backend.customer_service.graph_state import CSGraphState
 from backend.customer_service.models.graph_result import build_cs_graph_result
 from backend.orchestration.state import AgentState, OrchestratorState
-from backend.selection_funnel.graph_state import SelectionFunnelState
 from backend.travel.graph_state import TravelGraphState, build_travel_context
 from backend.travel.models.graph_result import build_travel_graph_result
 
@@ -28,14 +27,10 @@ _CS_ONLY = {"cs_context", "cs_route", "cs_action_result", "cs_audit_entries",
 # 独立 TypedDict 中不构成泄漏——泄漏判据是「他域命名空间」字段）
 _TRAVEL_ONLY = {"travel_context", "travel_route", "itinerary",
                 "brief_fingerprint", "day_plan"}
-_FUNNEL_ONLY = {"funnel_context", "pool", "run_id", "config_snapshot"}
-
-
 class TestSharedSchemaRegistration:
     def test_domain_contexts_registered_in_orchestrator_state(self):
         """域上下文 + pending 透传字段必须在主图 schema 内（剥离坑防线）。"""
-        for key in ("cs_context", "travel_context", "funnel_context",
-                    "cs_pending_action"):
+        for key in ("cs_context", "travel_context", "cs_pending_action"):
             assert key in OrchestratorState.__annotations__, key
 
     def test_identity_keys_registered(self):
@@ -44,10 +39,9 @@ class TestSharedSchemaRegistration:
                     "request_context", "routing_context"):
             assert key in AgentState.__annotations__, key
 
-    def test_sql_and_selection_have_no_flat_context(self):
-        """SQL/RAG 无平铺域上下文；选品域登记名是 funnel_context——
-        sql_context / selection_context 出现即说明有人绕开登记纪律。"""
-        for key in ("sql_context", "selection_context"):
+    def test_sql_has_no_flat_domain_context(self):
+        """SQL/RAG 不使用平铺域上下文，避免绕过会话上下文契约。"""
+        for key in ("sql_context",):
             assert key not in AgentState.__annotations__
             assert key not in OrchestratorState.__annotations__
 
@@ -56,19 +50,12 @@ class TestDomainGraphStatePrivacy:
     def test_cs_graph_state_has_no_foreign_fields(self):
         leaked = _CS_ONLY & (
             set(TravelGraphState.__annotations__)
-            | set(SelectionFunnelState.__annotations__))
+        )
         assert leaked == set()
 
     def test_travel_graph_state_has_no_foreign_fields(self):
         leaked = _TRAVEL_ONLY & (
-            set(CSGraphState.__annotations__)
-            | set(SelectionFunnelState.__annotations__))
-        assert leaked == set()
-
-    def test_funnel_graph_state_has_no_foreign_fields(self):
-        leaked = _FUNNEL_ONLY & (
-            set(CSGraphState.__annotations__)
-            | set(TravelGraphState.__annotations__))
+            set(CSGraphState.__annotations__))
         assert leaked == set()
 
 
@@ -131,9 +118,7 @@ class TestAdapterContractPurity:
             "confirmation_state": "pending",
             # result 里混入的他域键不得进入 cs_context
             "travel_context": {"brief": {"destination": "东京"}},
-            "funnel_context": {"category": "耳机"},
         })
         assert merged["conversation_id"] == "c2"
         assert merged["confirmation_state"] == "pending"
         assert "travel_context" not in merged
-        assert "funnel_context" not in merged

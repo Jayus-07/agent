@@ -278,8 +278,6 @@ def build_report_md(category: str, locked_groups: dict[str, dict[str, Any]],
     lines.append(f"- 本报告事实级结论 {len(high_claims)} 条、推断级 "
                  f"{len(downgrades) + sum(1 for g in locked_groups.values() for s in g.get('sections', []) for c in s.get('claims', []) if c.get('type') == 'inference')} 条；"
                  f"来源分级（官方>媒体>UGC）已参与置信度计算")
-    lines.append("- 如需 Go/No-Go 决策，请运行选品决策工作流（selection_decision），"
-                 "本报告证据可作为其输入")
     lines.append("- 注意：事实锁定只防编造、不防错误来源，关键数字请经 Source Index 回溯原文")
     lines.append("")
 

@@ -3,8 +3,8 @@
 /**
  * /login — 用户端登录页（统一门户视觉体系 · 分屏 + 毛玻璃卡）
  *
- * - 绿色主题，复用既有登录态逻辑：redirect 回跳、默认记住账号密码、
- *   会话过期标记（consumeExpiredFlag）。第三方登录为占位（禁用·敬请期待）。
+ * - 绿色主题，复用既有登录态逻辑：redirect 回跳、默认记住账号、
+ *   会话过期标记（consumeExpiredFlag），并展示企业扫码登录状态。
  * - 客服工作台登录由独立应用 frontend-cs（:3300）处理；用户选择智能客服助手时，
  *   仍复用此登录页，并在登录后跳转到独立的用户客服对话页。
  * - 注册入口移到独立 /register 页（见设计稿 02）。
@@ -16,10 +16,14 @@ import {
   clearSavedUsername,
   consumeExpiredFlag,
   consumePendingLoginCredentials,
+  getSsoProviders,
   getSavedUsername,
   login,
   safeRedirectPath,
   saveUsername,
+  startSsoLogin,
+  type SsoProvider,
+  type SsoProviderOption,
 } from "@/lib/auth";
 import AuthShell, { AuthNav } from "@/components/auth/AuthShell";
 import AuthInput from "@/components/auth/AuthInput";
@@ -37,6 +41,11 @@ const THEME = {
 
 // 仓库提供的三组演示订单账号；普通新账号仍使用 11 位数字登录。
 const DEMO_LOGIN_USERNAMES = new Set(["demo_fuzhou", "demo_li", "demo_wang"]);
+const SSO_PROVIDER_OPTIONS: SsoProviderOption[] = [
+  { provider: "feishu", name: "飞书" },
+  { provider: "wecom", name: "企业微信" },
+  { provider: "dingtalk", name: "钉钉" },
+];
 
 function LoginForm() {
   const router = useRouter();
@@ -58,6 +67,8 @@ function LoginForm() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [ssoProviders, setSsoProviders] = useState<SsoProviderOption[]>([]);
+  const [ssoStatus, setSsoStatus] = useState<"checking" | "ready" | "unavailable">("checking");
   const credentialsHydrated = useRef(false);
   const isDemoAccount = DEMO_LOGIN_USERNAMES.has(account.trim());
   const isNumericAccount = /^\d*$/.test(account.trim());
@@ -82,6 +93,24 @@ function LoginForm() {
       setNotice("注册成功，请核对账号密码后登录");
     }
   }, [registrationComplete]);
+
+  useEffect(() => {
+    let active = true;
+    getSsoProviders()
+      .then((providers) => {
+        if (active) {
+          setSsoProviders(providers);
+          setSsoStatus("ready");
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setSsoProviders([]);
+          setSsoStatus("unavailable");
+        }
+      });
+    return () => { active = false; };
+  }, []);
 
   const goNext = () => {
     router.replace(redirect.startsWith("/") ? redirect : "/agent");
@@ -116,6 +145,20 @@ function LoginForm() {
       goNext();
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败，请稍后重试");
+      setLoading(false);
+    }
+  };
+
+  const handleSsoLogin = async (provider: SsoProvider) => {
+    if (loading) return;
+    setError("");
+    setNotice("");
+    setLoading(true);
+    try {
+      const authorizationUrl = await startSsoLogin(provider, redirect);
+      window.location.assign(authorizationUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "暂时无法发起扫码登录");
       setLoading(false);
     }
   };
@@ -262,27 +305,43 @@ function LoginForm() {
           {loading ? "处理中…" : `进入${selectedAssistant}`}
         </button>
 
-        {/* 第三方登录占位：桌面保留（占位说明产品规划），移动端收掉——
-            三枚 disabled 按钮在窄屏既占掉首屏高度又点不动，是纯噪音 */}
-        <div className="hidden lg:block">
+        <div>
           <div className="my-5 flex items-center gap-3 text-[12px] text-[#98A29D]">
             <span className="h-px flex-1 bg-[#E4EAE6]" />
-            或使用以下方式登录
+            或使用企业账号扫码登录
             <span className="h-px flex-1 bg-[#E4EAE6]" />
           </div>
-          <div className="grid grid-cols-3 gap-2.5">
-            {["微信", "企业微信", "SSO"].map((name) => (
-              <button
-                key={name}
-                type="button"
-                disabled
-                title="敬请期待"
-                className="h-11 rounded-xl border border-[#E3E8E4] bg-white/85 text-[13px] text-[#3F4A46] opacity-60"
-              >
-                {name}
-              </button>
-            ))}
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+            {SSO_PROVIDER_OPTIONS.map(({ provider, name }) => {
+              const enabled = ssoStatus === "ready"
+                && ssoProviders.some((item) => item.provider === provider);
+              const label = ssoStatus === "checking"
+                ? `${name}（检查中）`
+                : ssoStatus === "unavailable"
+                  ? `${name}（暂不可用）`
+                  : enabled ? `${name}扫码登录` : `${name}（未配置）`;
+              return (
+                <button
+                  key={provider}
+                  type="button"
+                  disabled={loading || !enabled}
+                  onClick={() => handleSsoLogin(provider)}
+                  className="h-11 rounded-xl border border-[#D8E3DC] bg-white/90 text-[13px] font-medium text-[#31513F] transition-colors hover:border-[#1F7A4D] hover:bg-[#F5FAF6] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1F7A4D] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {loading && enabled ? "正在跳转…" : label}
+                </button>
+              );
+            })}
           </div>
+          <p className="mt-2 text-center text-[11px] leading-5 text-[#7A8480]">
+            {ssoStatus === "checking"
+              ? "正在检查企业登录入口"
+              : ssoStatus === "unavailable"
+                ? "企业登录状态暂不可用，请刷新页面或联系管理员"
+                : ssoProviders.length > 0
+                  ? "仅已绑定本平台账号的企业成员可以登录"
+                  : "管理员配置企业应用并绑定账号后，即可使用扫码登录"}
+          </p>
         </div>
         <p className="mt-5 text-center text-[12px] text-[#98A29D] lg:mt-5">
           登录即代表你同意《服务条款》与《隐私政策》

@@ -203,8 +203,7 @@ def _converge_candidates(candidates: list, domain: str = "",
                          limit: int | None = None) -> list[str]:
     """候选收敛：去重 + 当前域已注册 + 截断到上限（默认 MAX_FC_CANDIDATES）。
 
-    以 tool_registry 注册表为单一事实来源（ALL_CAPABILITIES 静态表缺
-    competitor.analyze，不可作为校验依据）。
+    以 tool_registry 注册表为单一事实来源，避免静态能力名单与运行时注册漂移。
     limit 供 Discovery 策略放宽（policy.top_k 仅在更大时放宽，B2）。
     """
     max_candidates = max(1, int(limit or MAX_FC_CANDIDATES))

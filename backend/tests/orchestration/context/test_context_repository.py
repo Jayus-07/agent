@@ -292,15 +292,6 @@ def test_apply_followup_resolution_overwrite_precedence(repo):
     assert r2.context.current_topic == "查预算"
 
 
-def test_funnel_candidates_roundtrip_and_cap(repo):
-    top = [{"product": f"p{i}"} for i in range(8)]
-    repo.mutate(T, U, C, _mut(MutationType.SET_FUNNEL_CANDIDATES,
-                              candidates=top, run_id="fn_1"))
-    ctx = repo.get(T, U, C)
-    assert len(ctx.funnel_candidates) == 5  # cap=5
-    assert ctx.funnel_candidates[0]["funnel_run_id"] == "fn_1"
-
-
 # ── missing / TTL / save CAS / delete ──
 
 

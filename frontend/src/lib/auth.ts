@@ -18,6 +18,7 @@ const TOKEN_KEY = "agent.access_token";
 const USER_KEY = "agent.user_info";
 const DEVICE_KEY = "agent.device_id";
 const EXPIRED_KEY = "agent.session_expired";
+const SSO_PENDING_KEY = "agent.sso.pending";
 const CLIENT_APP = "web";
 
 export interface LoginResult {
@@ -32,6 +33,13 @@ export interface LoginResult {
     phone?: string;
     [k: string]: unknown;
   } | null;
+}
+
+export type SsoProvider = "feishu" | "wecom" | "dingtalk";
+
+export interface SsoProviderOption {
+  provider: SsoProvider;
+  name: string;
 }
 
 let accessToken: string | null = null;
@@ -128,6 +136,106 @@ export async function login(username: string, password: string): Promise<LoginRe
     }
   }
   return data;
+}
+
+/** 读取当前租户启用的扫码登录入口；未配置时返回空列表。 */
+export async function getSsoProviders(): Promise<SsoProviderOption[]> {
+  const res = await fetch(`${API_BASE}/api/auth/sso/providers`, {
+    method: "GET",
+    headers: { "X-Client-App": CLIENT_APP },
+    credentials: "include",
+  });
+  const body = await res.json().catch(() => null);
+  const data = unwrapResult<SsoProviderOption[]>(body);
+  return Array.isArray(data)
+    ? data.filter((item) => ["feishu", "wecom", "dingtalk"].includes(item.provider))
+    : [];
+}
+
+function createSsoBrowserNonce(): string {
+  if (!isBrowser() || typeof window.crypto?.getRandomValues !== "function") {
+    throw new Error("当前浏览器无法安全发起扫码登录");
+  }
+  const bytes = window.crypto.getRandomValues(new Uint8Array(32));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function consumeSsoBrowserNonce(provider: SsoProvider): string | null {
+  if (!isBrowser()) return null;
+  try {
+    const raw = sessionStorage.getItem(SSO_PENDING_KEY);
+    sessionStorage.removeItem(SSO_PENDING_KEY);
+    if (!raw) return null;
+    const pending = JSON.parse(raw) as { provider?: unknown; nonce?: unknown };
+    return pending.provider === provider
+      && typeof pending.nonce === "string"
+      && /^[0-9a-f]{64}$/.test(pending.nonce)
+      ? pending.nonce
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 创建一次性扫码状态并取得平台授权地址。 */
+export async function startSsoLogin(
+  provider: SsoProvider,
+  redirectTo: string,
+): Promise<string> {
+  const browserNonce = createSsoBrowserNonce();
+  const res = await fetch(`${API_BASE}/api/auth/sso/${provider}/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Client-App": CLIENT_APP },
+    credentials: "include",
+    body: JSON.stringify({
+      redirect_to: redirectTo,
+      device_id: getDeviceId(),
+      browser_nonce: browserNonce,
+    }),
+  });
+  const body = await res.json().catch(() => null);
+  const data = unwrapResult<{ authorizationUrl?: string }>(body);
+  if (!data.authorizationUrl) throw new Error("登录链接缺少授权地址");
+  try {
+    sessionStorage.setItem(
+      SSO_PENDING_KEY,
+      JSON.stringify({ provider, nonce: browserNonce }),
+    );
+  } catch {
+    throw new Error("当前浏览器无法安全保存扫码状态，请检查浏览器存储设置");
+  }
+  return data.authorizationUrl;
+}
+
+/** 用回调的一次性 code/state 登录本地账号并保存本地 access token。 */
+export async function completeSsoLogin(
+  provider: SsoProvider,
+  code: string,
+  state: string,
+): Promise<{ redirectTo: string; login: LoginResult }> {
+  const browserNonce = consumeSsoBrowserNonce(provider);
+  if (!browserNonce) {
+    throw new Error("扫码登录请求与当前浏览器不匹配，请返回登录页重新扫码");
+  }
+  const res = await fetch(`${API_BASE}/api/auth/sso/${provider}/callback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Client-App": CLIENT_APP },
+    credentials: "include",
+    body: JSON.stringify({ code, state, browser_nonce: browserNonce }),
+  });
+  const body = await res.json().catch(() => null);
+  const data = unwrapResult<LoginResult & { redirectTo?: string }>(body);
+  if (!data.token) throw new Error("扫码登录响应缺少本地登录凭据");
+  setAccessToken(data.token);
+  if (isBrowser()) {
+    try {
+      sessionStorage.setItem(USER_KEY, JSON.stringify(data.userInfo ?? null));
+      sessionStorage.removeItem(EXPIRED_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+  return { redirectTo: data.redirectTo || "/agent", login: data };
 }
 
 /**

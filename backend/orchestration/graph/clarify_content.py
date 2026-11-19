@@ -1,17 +1,14 @@
 """clarify_content.py — 拒答转追问的内容生成（纯函数 + 防循环守卫）
 
 设计（2026-09-19）：把"本来要拒答"的输入转成业务化追问，分两层：
-  - L1 入口弱命中（build_entry_clarify）：Router 预过滤层，纯正则 ~1ms，
-    只对「差一个槽位就能进域」的输入追问（如 1 个旅游信号词但没说城市），
-    短路不进主 Router，TTFT 几乎为零。
   - L2 拒答兜底（build_refusal_clarify）：reporter/cs_graph_node 判定拒答后，
     给通用业务导航或定向选项。
 
 硬约束：
   - 选项文案 = 用户话术：前端点选项即原样重发该文案（ChatView onSelect →
     send(label)），因此每条选项必须能命中对应域的预过滤/规则，由单测保证。
-  - 判定全部复用既有 prefilter 信号件（travel_signal_hits / poi_seed 城市表 /
-    选品类目暗示），不新增抽取逻辑——预过滤"不越权抽取"的契约不破。
+    - 判定复用既有旅游信号件（travel_signal_hits / poi_seed 城市表），
+      不新增抽取逻辑——预过滤"不越权抽取"的契约不破。
   - 客服域锁（domain_hint=customer_service）下不做 L1 追问（客服窗口不被
     业务追问打断）；L2 客服语境给 CS 定向选项 + 转人工（handoff_available）。
   - 防循环（2026-10-03 企业口径重设计）：①同一问题原文去重——同问在窗口内
@@ -37,20 +34,13 @@ _TRAVEL_CITY_OPTIONS = tuple(
     f"规划{city}2天的行程" for city in ("福州", "厦门", "杭州")
 )
 
-# P0 无真实类目源，选品选项用种子示例；P1 接类目目录后替换
-_SELECTION_OPTIONS = (
-    "给宠物零食做一次智能选品",
-    "给数码配件做一次智能选品",
-)
-
-# 通用业务导航（无倾向兜底）：旅游 / 选品 / 数据查询
+# 通用业务导航（无倾向兜底）：旅游 / 数据查询
 _GENERIC_OPTIONS = (
     "帮我规划一份旅游行程",
-    "我想做商品智能选品",
     "查一下经营数据",
 )
 
-# AI 助手锁域（main）专属导航：域请求不在该页执行，不给旅游/选品倾向选项
+# AI 助手锁域（main）专属导航：保留当前入口可办理的请求
 _MAIN_GENERIC_OPTIONS = (
     "换个说法再描述一下需求",
     "查一下经营数据",
@@ -109,40 +99,6 @@ def clarify_standalone_text(card: Mapping[str, Any] | None) -> str:
 # L1：入口弱命中追问
 # =====================================================
 
-def build_entry_clarify(query: str, domain_hint: str) -> dict | None:
-    """Router 预过滤层的弱命中追问判定。
-
-    2026-09-22 路由入口重构：**移除旅游分支**——「帮我规划个行程」这类
-    缺目的地的请求现在直接进旅游域图，由 brief 节点（slot_filler）在域内
-    追问目的地/天数，不再被全局追问卡拦截（参数缺失由域内处理）。
-    仅保留选品类目暗示分支。
-
-    Returns:
-        需要追问 → {"source", "question", "options", "handoff_available"}；
-        不追问 → None（走原链路）。
-    """
-    if not REFUSAL_CLARIFY_ENABLED or not query:
-        return None
-    # 客服窗口锁域：不打断客服语境（强信号转出由 redirect_main 负责）
-    if (domain_hint or "").strip().lower() in ("customer_service", "cs"):
-        return None
-
-    from backend.orchestration.graph.selection_funnel_prefilter import (
-        selection_category_hint,
-    )
-
-    if selection_category_hint(query):
-        # 提到品类/类目但没有选品动词（选品预过滤不会命中）：差"意图"槽位
-        return {
-            "source": "entry_selection_category",
-            "question": "您想对这个品类做什么？可以先从智能选品开始。",
-            "options": list(_SELECTION_OPTIONS),
-            "handoff_available": False,
-        }
-
-    return None
-
-
 # =====================================================
 # L2：拒答后的兜底追问
 # =====================================================
@@ -165,7 +121,7 @@ def build_refusal_clarify(query: str, domain_hint: str) -> dict:
     from backend.orchestration.graph.routing.lock_domain import MAIN_HINTS
     from backend.orchestration.router.rule_router import sql_lean_hits
 
-    # AI 助手锁域：跳过旅游/选品定向卡（本页不执行域请求），保留 SQL
+    # AI 助手锁域：跳过旅游定向卡（本页不执行域请求），保留 SQL
     # 倾向（AI 助手有该能力）与通用导航（选项不含域倾向）。
     if (domain_hint or "").strip().lower() in MAIN_HINTS:
         if sql_lean_hits(query) >= 1:
@@ -177,10 +133,6 @@ def build_refusal_clarify(query: str, domain_hint: str) -> dict:
             "handoff_available": False,
         }
 
-    from backend.orchestration.graph.selection_funnel_prefilter import (
-        selection_category_hint,
-        selection_signal_hits,
-    )
     from backend.orchestration.graph.travel_prefilter import (
         travel_has_city,
         travel_signal_hits,
@@ -195,16 +147,8 @@ def build_refusal_clarify(query: str, domain_hint: str) -> dict:
             "handoff_available": False,
         }
 
-    if selection_signal_hits(query) or selection_category_hint(query):
-        return {
-            "source": "refusal_selection_lean",
-            "question": "目前知识库暂无相关资料。您是想做商品智能选品吗？",
-            "options": list(_SELECTION_OPTIONS),
-            "handoff_available": False,
-        }
-
     # SQL 倾向（2026-10-03 实机缺口修复）：有数据诉求词但缺指标/时间槽位，
-    # 与旅游/选品同层的定向追问——实机验证发现这类查询全新会话会被向量
+    # 实机验证发现这类查询全新会话会被向量
     # 路由拦成低置信 clarify，SQL 不执行，槽位卡必须挂在拒答兜底才触达。
     # 用宽词表（sql_lean_hits）不用路由窄词表：「查一下经营数据」窄表命中 0。
     if sql_lean_hits(query) >= 1:

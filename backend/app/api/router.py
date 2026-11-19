@@ -21,11 +21,11 @@ from backend.app.api.routes import (
     agent_chat_tasks,
     approvals,
     auth_local,
+    auth_sso,
     automations,
     capabilities,
     chat,
     consistency,
-    competitor,
     cs_admin,
     cs_agent_offers,
     cs_agent_ws,
@@ -63,9 +63,6 @@ from backend.app.api.routes import (
     report_files,
     reports,
     schedules,
-    selection,
-    selection_decision,
-    selection_funnel,
     budgets,
     cs_tickets,
     idempotency,
@@ -89,6 +86,8 @@ api_router = APIRouter()
 # ── 业务路由 ──────────────────────────────────
 api_router.include_router(auth_local.router)  # 自建认证（2026-09-15 拆分，替代 Java auth-service）
 api_router.include_router(auth_local.sys_router)  # 用户中心（register）
+api_router.include_router(auth_sso.public_router)  # 外部身份确认 + 本地会话签发
+api_router.include_router(auth_sso.admin_router)  # 本地管理员配置和身份显式绑定
 api_router.include_router(rbac.router)  # 管理端 RBAC、客服档案与会话撤销
 api_router.include_router(sys_config_admin.router)  # 灰度开关动态配置（2026-09-16 Lite，管理员闸）
 api_router.include_router(sys_providers.router)  # 模型供应商清单与分级探测
@@ -130,10 +129,6 @@ api_router.include_router(automations.webhook_router)  # Webhook 回调入口（
 api_router.include_router(automations.admin_router)  # 管理端自动任务总览与开关
 api_router.include_router(plan_revisions.router)  # 运行中任务多轮计划修订（决策 #29）
 api_router.include_router(feedback.router)  # 2026-08-11 P1 反馈循环
-api_router.include_router(competitor.router)  # 竞品监控
-api_router.include_router(selection.router)  # 智能选品
-api_router.include_router(selection_decision.router)  # 选品决策
-api_router.include_router(selection_funnel.router)  # 智能选品漏斗（导入通道 2026-09-17）
 api_router.include_router(prompts.router)  # Prompt 管理
 api_router.include_router(prompts.admin_runtime_router)  # Prompt Runtime 状态
 api_router.include_router(cs_admin.router)  # 客服会话管理

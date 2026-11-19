@@ -17,8 +17,8 @@ import pytest
 from backend.sql.sql_validator import ValidationError, sql_validator
 
 GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                      "..", "..", "evaluation", "datasets", "sql",
-                      "golden_v2.jsonl")
+                      "..", "..", "evaluation", "datasets", "sql_v6",
+                      "cases.jsonl")
 
 
 def _cases():

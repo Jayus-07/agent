@@ -9,6 +9,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 from backend.config import EVAL_DATASET_PATH
@@ -24,6 +25,42 @@ if EVAL_DATASET_PATH:
         )
 else:
     DATASET_DIR = Path(__file__).resolve().parent.parent / "datasets"
+
+
+def _reject_historical_dataset(directory: Path, filename: str) -> None:
+    """禁止把 manifest 明确归档的数据集当作当前评测输入。"""
+    manifest_path = directory / "manifest.json"
+    if not manifest_path.exists():
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if manifest.get("lifecycle") == "historical":
+        raise FileNotFoundError(
+            f"评测集 '{filename}' 已归档为历史版本，拒绝用于新评测。"
+        )
+
+
+def _reject_retired_sql_tables(cases: list[TestCase], source: str) -> None:
+    """任何 SQL 评测入口都不得重新引入已退役的 crawler 表。"""
+    retired_table = re.compile(
+        r"crawler\s*\.\s*(?:competitor_[a-z0-9_]+|product_reviews)", re.I
+    )
+    for case in cases:
+        if case.module != "sql":
+            continue
+        expected = json.dumps(case.expected, ensure_ascii=False, default=str)
+        normalized = re.sub(r'[\s"`]', "", expected)
+        normalized = normalized.casefold()
+        if (
+            retired_table.search(expected)
+            or "crawler.competitor_" in normalized
+            or "crawler.product_reviews" in normalized
+        ):
+            raise ValueError(
+                f"SQL 评测集 '{source}' 用例 {case.id} 引用了已退役的 crawler 表，拒绝加载。"
+            )
 
 
 def load_dataset(
@@ -53,6 +90,7 @@ def load_dataset(
 
     canonical = split_dir / "cases.jsonl"
     if canonical.exists():
+        _reject_historical_dataset(split_dir, f"{module}/cases.jsonl")
         # C6-1：manifest 声明 content_hash 时强制校验（原地改即 fail-fast）
         verify_dataset_integrity(module, split_dir)
         cases = _load_jsonl(canonical, default_module=module)
@@ -304,7 +342,9 @@ def load_dataset_file(filename: str, default_module: str = "rag") -> list[TestCa
     if filename.startswith("managed:"):
         from backend.evaluation.dataset.imports import normalized_cases
 
-        return normalized_cases(filename.removeprefix("managed:"))
+        cases = normalized_cases(filename.removeprefix("managed:"))
+        _reject_retired_sql_tables(cases, filename)
+        return cases
     if ".deprecated." in filename:
         raise FileNotFoundError(
             f"评测集 '{filename}' 已弃用，拒绝加载。请改用现行评测集（如 cases.jsonl）。"
@@ -312,6 +352,9 @@ def load_dataset_file(filename: str, default_module: str = "rag") -> list[TestCa
     file_path = DATASET_DIR / filename
     if not file_path.exists():
         raise FileNotFoundError(f"测试集文件不存在: {file_path}")
+    manifest_path = file_path.parent / "manifest.json"
+    if file_path.name == "cases.jsonl" and manifest_path.exists():
+        _reject_historical_dataset(file_path.parent, filename)
     # 版本化候选集显式传入 --dataset 时也必须遵守 canonical manifest 锁；
     # 否则从 load_dataset(module) 绕开 loader 会让内容漂移静默进入评测。
     if file_path.name == "cases.jsonl" and (file_path.parent / "manifest.json").exists():
@@ -351,6 +394,7 @@ def _load_from_path(file_path: Path, default_module: str = "rag") -> list[TestCa
             metadata=metadata,
         ))
 
+    _reject_retired_sql_tables(cases, str(file_path))
     return cases
 
 
@@ -395,6 +439,7 @@ def _load_jsonl(file_path: Path, default_module: str = "rag") -> list[TestCase]:
                 expected=expected,
                 metadata=metadata,
             ))
+    _reject_retired_sql_tables(cases, str(file_path))
     return cases
 
 

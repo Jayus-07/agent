@@ -13,7 +13,8 @@ from backend.security.authorization import build_tool_authorization_context
 from backend.sql.policy import SQLPolicyContext, SQLPolicyGuard
 from backend.sql.schema_loader import TablePolicy, schema_loader
 
-# fixture 表（tenant / department 注入能力位验证，真实 18 表均无这些列）
+# fixture 表验证 tenant / department 注入；旧核心表无 tenant 列，retail
+# 试点表显式带 tenant_id，详见 test_retail_erp_schema.py。
 FIXTURE_TENANT_TABLE = "demo.tenant_projects"
 FIXTURE_DEPT_TABLE = "demo.dept_projects"
 

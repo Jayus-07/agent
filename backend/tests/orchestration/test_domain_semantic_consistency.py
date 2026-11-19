@@ -57,13 +57,12 @@ from backend.orchestration.router.execution_mode import (
 
 # 三个顶级业务域（STOP E 口径）；子流域图 → (顶级域, subflow) 的期望归一。
 # 2026-11-01 收编重构：booking/commerce 子流域图壳删除，实注册子流清零。
-_TOP_LEVEL_DOMAINS = {"customer_service", "travel", "selection_funnel"}
+_TOP_LEVEL_DOMAINS = {"customer_service", "travel"}
 _SUBFLOW_GRAPHS: dict[str, tuple[str, str]] = {}
 # 决策层 subflow 展示位的**契约值**（trace/管理端展示口径，改这里=改对外展示）。
 _EXPECTED_DECISION_SUBFLOW = {
     "customer_service": None,
     "travel": "planning",
-    "selection_funnel": "funnel",
     "general_chat": None,
 }
 
@@ -121,8 +120,8 @@ def test_top_level_graphs_project_to_themselves():
 def test_decision_subflow_slot_is_derived_from_graph_metadata():
     """决策层的 subflow 展示位取自注册表声明，并锁定其**契约值**（非重算式）。
 
-    travel/selection_funnel 是顶级域但各有活动标签（planning/funnel），由
-    ``decision_subflow`` 承载；子流图回退 ``subflow``。
+    travel 是顶级域并有活动标签（planning），由 ``decision_subflow`` 承载；
+    子流图回退 ``subflow``。
 
     期望值刻意写成**字面量**：若改写成 ``graph.decision_subflow or graph.subflow``
     去比对 ``_PREFILTER_DOMAIN_MAP``，两边同源，改了注册表会一起变——恒真断言，
@@ -136,7 +135,6 @@ def test_decision_subflow_slot_is_derived_from_graph_metadata():
         )
     # 顶级域的活动标签必须在 decision_subflow 上，而不是塞进冻结的 subflow
     assert domain_graph_registry.get("travel").decision_subflow == "planning"
-    assert domain_graph_registry.get("selection_funnel").decision_subflow == "funnel"
 
 
 def test_subflow_graphs_consistent_between_router_and_registry():

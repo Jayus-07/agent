@@ -241,8 +241,7 @@ class RouteDecision(BaseModel):
 
 
 # ── Capability / Workflow 名单：由 capabilities.yaml 派生（唯一事实源）──
-# 手写清单已成历史：曾因 competitor.analyze 只在 rule_router 硬编码、
-# ALL_CAPABILITIES 缺失，被 LLM Router 拒绝（见 manifest.py 模块注释）。
+# 手写清单已成历史；路由能力由 manifest.py 派生，避免清单之间发生漂移。
 # 新增/修改 capability 一律改 capabilities.yaml，这里不许再手写。
 from backend.orchestration.router.manifest import load_manifest
 

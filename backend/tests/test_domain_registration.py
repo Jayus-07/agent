@@ -4,7 +4,7 @@
   - register_all_domains 幂等：重复调用零副作用（返回 0、registry 键集
     不变、无「重复注册」warning）
   - _DOMAIN_MODULES 清单卫生：每个模块路径真实可导入（防手写清单漂移）
-  - build_graph 显式接线：构建后 5 域全数在册
+  - build_graph 显式接线：构建后受支持的域全数在册
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def test_domain_modules_list_resolves():
 
     from backend.domains import _DOMAIN_MODULES
 
-    assert len(_DOMAIN_MODULES) == 3
+    assert len(_DOMAIN_MODULES) == 2
     for name in _DOMAIN_MODULES:
         assert importlib.util.find_spec(name) is not None, f"模块不存在: {name}"
 
@@ -42,14 +42,11 @@ def test_domain_modules_list_resolves():
 def test_build_graph_registers_all_domains():
     """builder 显式调用接线：注册全集精确匹配（双保险生效面）。
 
-    2026-11-01 收编重构：原商务域图壳删除——全集断言比子集断言更严，
-    已退役的注册键再出现（含误恢复）都会在此变红。
+    选品域已退役；全集断言确保它不会重新注册。
     """
     from backend.orchestration.domain_registry import domain_graph_registry
     from backend.orchestration.graph.builder import build_graph
 
     build_graph()
     names = set(domain_graph_registry.get_all())
-    assert names == {
-        "travel", "customer_service", "selection_funnel",
-    }
+    assert names == {"travel", "customer_service"}

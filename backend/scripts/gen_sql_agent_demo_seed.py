@@ -368,11 +368,11 @@ EXPENSE_TYPES = ["广告费", "物流费", "人工"]
     ],
     [
         "sql.query", "inventory.alert", "business.analyze", "business.analyze",
-        "finance.report", "sql.query", "competitor.monitor", "customer.insight",
+        "finance.report", "sql.query", "sql.query", "customer.insight",
         "business.analyze", "finance.report", "customer.insight", "inventory.alert",
         "customer.insight", "business.analyze", "crawler.review", "customer.insight",
         "sql.query", "inventory.alert", "business.analyze", "sql.query",
-        "competitor.monitor", "business.analyze", "customer.insight", "sql.query",
+        "sql.query", "business.analyze", "customer.insight", "sql.query",
         "finance.report", "business.analyze", "business.analyze", "customer.insight",
         "finance.report", "finance.report",
     ],

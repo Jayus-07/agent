@@ -165,6 +165,7 @@ jobs:
           # 门禁机制与路径过滤的定向回归（免费：无付费模型调用、不读
           # API Secrets；不扩大为全量 pytest）。
           python -m pytest tests/test_rag_smoke_path_filter.py \
+            backend/tests/api/test_auth_sso.py \
             backend/tests/api/test_admin_mcp_api.py::TestToolListPayload \
             tests/evaluation/test_seed_eval_bindings_verify.py \
             backend/tests/memory/test_golden_dataset_contract.py \
@@ -363,6 +364,8 @@ jobs:
             backend/tests/api/test_prompt_release_api.py \
             backend/tests/test_mcp_returnfix_acceptance.py \
             backend/tests/sql/test_sql_production_closure.py \
+            backend/tests/sql/test_retail_erp_schema.py \
+            backend/tests/sql/test_business_warehouse_schema.py \
             backend/tests/sql/test_sql_scope_subquery.py \
             backend/tests/sql/test_sql_router_examples.py \
             backend/tests/evaluation/test_sql_eval.py \
@@ -370,9 +373,6 @@ jobs:
             backend/tests/rag/test_lifecycle_publication_guard.py \
             backend/tests/api/test_cs_dashboard_knowledge.py \
             backend/tests/api/test_business_mock_failclosed.py \
-            backend/tests/selection_funnel/test_api_import.py \
-            backend/tests/selection_funnel/test_import_pool_pg.py \
-            backend/tests/selection_funnel/test_pool_sources.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope

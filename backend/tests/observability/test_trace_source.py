@@ -48,8 +48,8 @@ class TestClassify:
         for tags in ({"runtime_domain": "general"}, {"runtime_domain": "data"}, {}):
             assert classify_trace_source("agent", tags) == SOURCE_AI_ASSISTANT
 
-    def test_selection_funnel_not_masquerading_as_ai(self):
-        # 选品漏斗是独立域图，不在三分类内——不得冒充 AI 助手
+    def test_retired_selection_trace_not_masquerading_as_ai(self):
+        # 历史 Trace 中的退役域不得被误归为 AI 助手
         assert classify_trace_source("agent", {"runtime_domain": "selection_funnel"}) == SOURCE_UNKNOWN
 
     def test_non_agent_workflows_unclassified(self):

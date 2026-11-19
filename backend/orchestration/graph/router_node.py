@@ -104,12 +104,10 @@ def router_node(state: dict) -> dict:
 
     # ── 入口域锁（2026-09-18）：客服窗口（CSDrawer）每条消息带
     # domain_hint=customer_service，锁域强制走 CS 预过滤：跳过域检测门/
-    # 灰度判定/旅游与选品 prefilter；仅保留 CS_ENABLED 总闸（CS 关闭时降级
+    # 灰度判定/旅游 prefilter；仅保留 CS_ENABLED 总闸（CS 关闭时降级
     # 回主路由，与全局开关语义一致）。判定逻辑见 routing/lock_domain.py。
-    # 域锁非绝对：redirect_main 会把命中旅游/选品强信号的问法转出主路由，
+    # 域锁非绝对：redirect_main 会把命中旅游强信号的问法转出主路由，
     # 但该正则只认种子城市（福州/厦门/杭州）——"去大阪怎么玩"仍留守客服管线。
-    # domain_hint 规范化值保留在主函数：L1 追问判定（build_entry_clarify）
-    # 也消费它，与拆分前同源。
     domain_hint = (state.get("domain_hint") or "").strip().lower()
     cs_forced = (
         product_id == "customer_service"
@@ -225,60 +223,6 @@ def router_node(state: dict) -> dict:
             return _with_router_decisions(
                 state, update, query, existing_override=update,
             )
-
-    # ── L1 入口弱命中追问（2026-09-19 拒答转追问）────────────────
-    # 放在全部域预过滤与 CS 兜底之后：客服优先级不被追问抢夺。
-    # 只拦"差一个槽位就能进域"的输入（如 1 个旅游信号词没说城市），
-    # 短路不进主 Router，避免这类输入跑完链路后只换来一句拒答。
-    # _clarify 只活在节点原始输出里（stream_node_events 从这里发
-    # clarification 事件），不依赖 graph state 传递。
-    # 防循环（2026-10-03 企业口径）：同一问题窗口内不重复追问、会话封顶
-    # N 次（clarify_content 守卫）；守卫拦截则放行原链路，拒答后由 L2 兜底。
-    try:
-        from backend.orchestration.graph.clarify_content import (
-            build_entry_clarify,
-            clarify_allowed,
-            mark_clarified,
-        )
-        # main 锁域跳过 L1 追问：现有入口追问只有选品类目暗示分支，
-        # 引导语义与锁域页冲突（域请求不在该页执行）。
-        clarify = None if main_forced else build_entry_clarify(query, domain_hint)
-        clarify_session_id = (
-            state.get("product_session_id") or state.get("session_id", "")
-        )
-        if clarify is not None and not clarify_allowed(
-                clarify_session_id, query):
-            clarify = None
-        elif clarify is not None:
-            mark_clarified(
-                clarify_session_id, query,
-                options=clarify.get("options"),
-                source=clarify.get("source", ""),
-            )
-    except Exception as e:
-        logger.warning(f"[RouterNode] 入口追问判定失败，走原链路: {e}")
-        clarify = None
-    if clarify is not None:
-        logger.info(f"[RouterNode] L1 弱命中追问: source={clarify.get('source')}")
-        try:
-            from backend.orchestration.context.routing_context import (
-                set_pending_question,
-            )
-
-            set_pending_question(
-                state.get("tenant_id") or "", state.get("user_id") or "",
-                clarify_session_id,
-                clarify.get("question") or "",
-            )
-        except Exception:
-            logger.debug("[RouterNode] 待答问题记录失败（软降级）", exc_info=True)
-        update = route_update_for_mode(
-            "clarify",
-            extra={"route_decision": None, "_clarify": clarify},
-        )
-        return _with_router_decisions(
-            state, update, query, existing_override=update,
-        )
 
     try:
         # 路由引擎初始化单独成 span，避免索引/模型资源初始化成为不可见耗时。

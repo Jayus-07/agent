@@ -20,7 +20,7 @@ _DEFAULT_ARGS = {
     "data.export": {"question": "测试问题"},
     "web.crawl": {"url": "https://example.com", "mode": "markdown"},
     "data.collect": {
-        "source": "competitor_api", "target_table": "competitor_prices",
+        "source": "supplier_api", "target_table": "supplier_catalog",
         "fetcher_type": "http", "dedup_keys": "sku", "idempotency_key": "k1"},
     "business.analyze": {"sql_result": {"rows": []}},
 }
@@ -105,11 +105,11 @@ class TestLegalSelections:
             ["data.export", "sql.query"], 0.0)
         assert out["_tool_selection"]["capability"] == "data.export"
 
-    def test_collect_competitor(self, fc_env):
-        """采集竞品：data.collect 放行。"""
+    def test_collect_supplier_catalog(self, fc_env):
+        """采集供应商目录：data.collect 放行。"""
         fc_env["raw"] = _FakeRaw("data.collect")
         out = ts._fc_decide(
-            _state("采集竞品价格数据",
+            _state("采集供应商商品资料",
                    [("data.collect", 0.66), ("web.crawl", 0.61)]),
             ["data.collect", "web.crawl"], 0.0)
         assert out["_tool_selection"]["capability"] == "data.collect"

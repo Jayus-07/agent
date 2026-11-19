@@ -1,6 +1,6 @@
 """tests/test_observability_routes.py — 可观测性路由薄层测试
 
-2026-09-17 P1 余量：/traces 的 has_tag 服务端过滤（选品漏斗运行历史的取数口径）。
+2026-09-17 P1 余量：/traces 的 has_tag 服务端过滤（历史域运行记录的取数口径）。
 漏斗跑在主图内、workflow_name 仍是主图，历史页只能以 tags 键存在性为筛选口径。
 """
 import asyncio

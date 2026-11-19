@@ -34,7 +34,7 @@ class TestDataset:
     def test_ids_unique(self, sql_cases):
         ids = [c.id for c in sql_cases]
         assert len(ids) == len(set(ids))
-        assert all(i.startswith("SC-") for i in ids)
+        assert all(i.startswith(("SC-", "RE-")) for i in ids)
 
     def test_module_field(self, sql_cases):
         assert all(c.module == "sql" for c in sql_cases)
@@ -209,19 +209,70 @@ def test_gold_sql_failure_cannot_fall_back_to_router_pass(
     assert verdict.validity.value == expected_validity
 
 
-def test_sql_v5_candidate_is_loadable_and_schema_valid():
+def test_sql_v6_candidate_is_loadable_and_schema_valid():
     from backend.evaluation.dataset import load_dataset_file
     from backend.evaluation.preflight import run_schema_preflight
 
-    filename = "sql_v5/cases.jsonl"
+    filename = "sql_v6/cases.jsonl"
     cases = load_dataset_file(filename, default_module="sql")
     preflight = run_schema_preflight(["sql"], dataset_path=filename)
 
-    assert len(cases) == 45
+    assert len(cases) == 65
     assert {case.module for case in cases} == {"sql"}
-    assert {case.metadata["dataset_version"] for case in cases} == {"5.0"}
+    assert {case.metadata["dataset_version"] for case in cases} == {"6.0"}
     assert preflight.passed
-    assert preflight.identity["case_counts"] == {"sql": 45}
+    assert preflight.identity["case_counts"] == {"sql": 65}
+
+
+def test_retired_sql_datasets_cannot_be_loaded_as_current_candidates():
+    from backend.evaluation.dataset import load_dataset_file
+    from backend.evaluation.dataset import load_dataset
+
+    with pytest.raises(FileNotFoundError, match="已弃用"):
+        load_dataset_file("sql/golden_v2.deprecated.jsonl", default_module="sql")
+    for filename in (
+        "sql_v2/cases.jsonl",
+        "sql_v3/cases.jsonl",
+        "sql_v4/cases.jsonl",
+        "sql_v5/cases.jsonl",
+        "sql_retail_erp_v1/cases.jsonl",
+    ):
+        with pytest.raises(FileNotFoundError, match="历史版本"):
+            load_dataset_file(filename, default_module="sql")
+    with pytest.raises(FileNotFoundError, match="历史版本"):
+        load_dataset("sql_v5")
+
+
+def test_current_sql_datasets_do_not_allow_retired_crawler_tables():
+    from backend.evaluation.dataset import load_dataset_file
+
+    cases = load_dataset("sql") + load_dataset_file(
+        "sql_v6/cases.jsonl", default_module="sql"
+    )
+    for case in cases:
+        expected = case.expected
+        assert not any(
+            table.startswith("crawler.")
+            for table in expected.get("expected_tables", [])
+        ), case.id
+        assert "crawler.competitor_" not in (expected.get("gold_sql") or ""), case.id
+
+
+def test_sql_loader_rejects_retired_tables_in_arbitrary_dataset_files(
+    tmp_path, monkeypatch
+):
+    from backend.evaluation.dataset import loader
+
+    monkeypatch.setattr(loader, "DATASET_DIR", tmp_path)
+    (tmp_path / "legacy.jsonl").write_text(
+        '{"id":"OLD-1","module":"sql","question":"旧问题",'
+        '"expected":{"gold_sql":"SELECT * FROM crawler.competitor_price",'
+        '"expected_tables":["crawler.competitor_price"]}}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="已退役的 crawler 表"):
+        loader.load_dataset_file("legacy.jsonl", default_module="sql")
 
 
 def test_explicit_sql_dataset_uses_sql_runner_and_records_version(monkeypatch):
@@ -254,7 +305,7 @@ def test_explicit_sql_dataset_uses_sql_runner_and_records_version(monkeypatch):
     report = service.EvaluationService()._evaluate_cases(
         EvalConfig(
             module="sql",
-            dataset="sql_v5/cases.jsonl",
+            dataset="sql_v6/cases.jsonl",
             no_ragas=True,
         ),
         "sql-candidate-dispatch-test",
@@ -262,13 +313,13 @@ def test_explicit_sql_dataset_uses_sql_runner_and_records_version(monkeypatch):
     )
 
     assert dispatched["module"] == "sql"
-    assert len(dispatched["case_ids"]) == 45
+    assert len(dispatched["case_ids"]) == 65
     assert dispatched["live"] is False
     assert report.module == "sql"
-    assert report.metadata["dataset_file"] == "sql_v5/cases.jsonl"
-    assert report.metadata["dataset_version"] == "5.0"
+    assert report.metadata["dataset_file"] == "sql_v6/cases.jsonl"
+    assert report.metadata["dataset_version"] == "6.0"
     assert report.metadata["dataset_content_hash"] == file_content_hash(
-        DATASET_DIR / "sql_v5" / "cases.jsonl",
+        DATASET_DIR / "sql_v6" / "cases.jsonl",
     )
 
 

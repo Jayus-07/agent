@@ -15,8 +15,7 @@
   - BrowserConfig: enable_stealth=True（替代 magic=True，后者在 0.9.2 无限挂起）
   - BrowserConfig: 真实 User-Agent + 代理支持（CRAWLER_PROXY 环境变量）
   - CrawlerRunConfig: delay_before_return_html 单位是秒不是毫秒（原 3000=50分钟 → 3.0=3秒）
-  - Cookie 注入: BrowserConfig.cookies（浏览器上下文级，支持 HttpOnly）
-    + 保留 js_code_before_wait 作为运行时更新通道
+  - 通用网页抓取不读取业务账号 Cookie；保留 SSRF 防护与单例浏览器复用
 """
 import asyncio
 import os
@@ -87,13 +86,17 @@ class _CrawlerRuntime:
 
 # ── BrowserConfig 构建 ─────────────────────────────
 
-# UA/viewport 恒定化: 单账号无代理场景下，指纹一致性本身就是伪装，
-# 统一从 anti_ban.STABLE_UA 取值（与 qr_login 登录会话同源，禁止各自维护副本）
-from backend.competitor.anti_ban import STABLE_UA, STABLE_VIEWPORT
+# 通用网页抓取的浏览器标识；不再依赖竞品采集域的登录态配置。
+CRAWLER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+CRAWLER_VIEWPORT = {"width": 1280, "height": 800}
 
 
 def _build_browser_config() -> Any:
-    """构建 BrowserConfig: stealth + UA + proxy + cookies
+    """构建 BrowserConfig: stealth + UA + proxy
 
     enable_stealth=True 替代 CrawlerRunConfig.magic=True（后者在 crawl4ai 0.9.2 无限挂起）。
     stealth 在浏览器上下文级别注入反检测脚本，比 CrawlerRunConfig 级别的 magic 更稳定。
@@ -114,49 +117,13 @@ def _build_browser_config() -> Any:
     config = BrowserConfig(
         headless=True,
         enable_stealth=True,           # 反检测（替代 magic=True）
-        user_agent=STABLE_UA,          # 恒定真实 UA（与登录会话同源）
-        viewport=STABLE_VIEWPORT,      # 恒定 viewport，指纹成套保持一致
+        user_agent=CRAWLER_USER_AGENT,
+        viewport=CRAWLER_VIEWPORT,
         proxy_config=proxy_config,     # 代理（可选）
         ignore_https_errors=True,      # 忽略 SSL 错误（代理场景常见）
     )
 
-    # Cookie 注入: 如果 DB 中有 cookies，在浏览器上下文级别注入
-    # 优势: 支持 HttpOnly cookies，比 JS document.cookie 更可靠
-    # 局限: 需要知道 cookie 的 domain，此处用通配方式
-    cookies_list = _load_browser_cookies()
-    if cookies_list:
-        config.cookies = cookies_list
-        logger.info(f"[CrawlerRuntime] BrowserConfig 注入 {len(cookies_list)} 个 cookies")
-
     return config
-
-
-def _load_browser_cookies() -> list[dict]:
-    """从 DB 读取各平台 cookies，转为带 domain 的 Playwright cookie 格式
-
-    每个平台的 cookie 绑定到该平台域名，浏览器导航时仅向同域发送，
-    避免跨平台 Cookie 泄漏（淘宝 cookie 不会发给京东/抖音）。
-    """
-    from backend.competitor import cookie_manager
-
-    cookies_list = []
-    for platform, cookies_str in cookie_manager.all_platform_cookies().items():
-        domains = cookie_manager.PLATFORM_DOMAINS.get(platform, [])
-        if not domains:
-            continue
-        for pair in cookies_str.split(";"):
-            pair = pair.strip()
-            if "=" not in pair:
-                continue
-            k, v = pair.split("=", 1)
-            for domain in domains:
-                cookies_list.append({
-                    "name": k.strip(),
-                    "value": v.strip(),
-                    "domain": domain,
-                    "path": "/",
-                })
-    return cookies_list
 
 
 _runtime: _CrawlerRuntime | None = None
@@ -325,40 +292,19 @@ def crawl(url: str, mode: str = "markdown", timeout: float = 60.0,
         from crawl4ai import CrawlerRunConfig
 
         # 构建 crawl 配置：DOM 就绪即返回 + 额外延迟让 JS 渲染完成
-        # 注: networkidle 在电商页面会导致 30s 超时（页面有持续后台请求）
+        # 注: networkidle 在动态网页会导致超时（页面有持续后台请求）
         # 注: magic=True 在 crawl4ai 0.9.2 会导致无限挂起，改用 BrowserConfig.enable_stealth
         #     override_navigator 也由 enable_stealth 覆盖，此处不再重复设置
         config_kwargs = dict(
-            page_timeout=60_000,          # 60s 超时（亚马逊等加载慢）
+            page_timeout=60_000,
             magic=False,                  # 保持关闭，stealth 由 BrowserConfig 处理
             wait_until="domcontentloaded",  # DOM 就绪即返回，不等待网络空闲
             delay_before_return_html=3.0,  # 额外等 3s 让异步组件加载（单位: 秒）
         )
 
-        # Cookie 补充注入：按 URL 平台选择对应 Cookie（QR 登录/手动保存后即时生效）。
-        # JS 注入的局限: 无法设置 HttpOnly cookies（已在 BrowserConfig.cookies 中按域处理）
-        from backend.competitor import cookie_manager
-        from backend.competitor.adapters import detect_platform
-        cookies_str = cookie_manager.get_cookies_for_url(url)
-        if cookies_str:
-            # 转义单引号防止 JS 注入
-            safe_cookies = cookies_str.replace("'", "\\'")
-            config_kwargs["js_code_before_wait"] = (
-                f"document.cookie='{safe_cookies}; path=/';"
-            )
-            logger.info(f"[CrawlerRuntime] 运行时注入 {detect_platform(url)} cookies")
-
-        # 应用调用方覆盖项（平台差异化配置 / anti_ban.humanize 行为拟人）
-        # _humanize_js 与 Cookie 注入脚本合并而非覆盖，避免丢失登录态
+        # 应用调用方的通用 CrawlerRunConfig 覆盖项。
         if config_overrides:
-            overrides = dict(config_overrides)
-            humanize_js = overrides.pop("_humanize_js", None)
-            config_kwargs.update(overrides)
-            if humanize_js:
-                base_js = config_kwargs.get("js_code_before_wait", "")
-                config_kwargs["js_code_before_wait"] = (
-                    f"{base_js}\n{humanize_js}" if base_js else humanize_js
-                )
+            config_kwargs.update(config_overrides)
         config = CrawlerRunConfig(**config_kwargs)
         result = await crawler.arun(url, config=config)
         safe_target = _take_safe_redirect_target(url)
@@ -388,7 +334,6 @@ def _fallback_crawl(url: str, mode: str,
 
     async def _do():
         from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
-        from backend.competitor import cookie_manager
 
         bc = _build_browser_config()
         crawler = AsyncWebCrawler(config=bc)
@@ -398,20 +343,8 @@ def _fallback_crawl(url: str, mode: str,
             page_timeout=60_000, magic=False,
             wait_until="domcontentloaded", delay_before_return_html=3.0,
         )
-        cookies_str = cookie_manager.get_cookies_for_url(url)
-        if cookies_str:
-            run_kwargs["js_code_before_wait"] = (
-                f"document.cookie='{cookies_str.replace(chr(39), chr(92) + chr(39))}; path=/';"
-            )
         if config_overrides:
-            overrides = dict(config_overrides)
-            humanize_js = overrides.pop("_humanize_js", None)
-            run_kwargs.update(overrides)
-            if humanize_js:
-                base_js = run_kwargs.get("js_code_before_wait", "")
-                run_kwargs["js_code_before_wait"] = (
-                    f"{base_js}\n{humanize_js}" if base_js else humanize_js
-                )
+            run_kwargs.update(config_overrides)
         run_config = CrawlerRunConfig(**run_kwargs)
         result = await crawler.arun(url, config=run_config)
         safe_target = _take_safe_redirect_target(url)

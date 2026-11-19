@@ -176,10 +176,10 @@ def _static_bundle_granted(product_id: str, capability: str) -> bool | None:
 _DOMAIN_EXCLUSIVE_ROOTS: dict[str, frozenset[str]] = {
     "agent": frozenset({
         "travel",
-        "customer_service", "cs", "selection_funnel"}),
+        "customer_service", "cs"}),
     "customer_service": frozenset({
         "travel",
-        "selection_funnel"}),
+    }),
 }
 
 
@@ -193,13 +193,12 @@ def domain_exclusive_forbidden_roots(product_id: str) -> frozenset[str]:
 _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS: dict[str, frozenset[str]] = {
     "travel": frozenset({"travel"}),
     "cs": frozenset({"customer_service", "cs"}),
-    "selection": frozenset({"selection_funnel"}),
 }
 
 # 管理端业务域标签词汇表（工具治理 governance.domain / 能力包 domain
 # 共用；空值 = 未分类，不做域约束——兼容存量数据）。
 DOMAIN_LABELS = frozenset({
-    "general", "cs", "selection", "travel", "data",
+    "general", "cs", "travel", "data",
     "knowledge", "business", "report", "communication", "mcp",
 })
 

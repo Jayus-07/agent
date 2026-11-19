@@ -9,7 +9,7 @@ vi.mock('next/link', () => ({
 }))
 
 vi.mock('next/navigation', () => ({
-  usePathname: () => '/selection-workbench',
+  usePathname: () => '/data-explorer',
   useSearchParams: () => new URLSearchParams(''),
 }))
 
@@ -34,8 +34,7 @@ function mount(showSections = false, alwaysOpen = false) {
     alwaysOpen,
     items: [
       { label: '数据查询', path: '/data-explorer', section: '业务洞察' },
-      { label: '竞品监控', path: '/competitors', section: '业务洞察' },
-      { label: '选品工作台', path: '/selection-workbench', section: '选品运营' },
+      { label: '业务报告', path: '/reports', section: '业务洞察' },
     ],
   } as unknown as ComponentProps<typeof NavGroup>
   act(() => {
@@ -64,8 +63,8 @@ describe('NavGroup', () => {
 
   it('当前入口使用清晰的选中状态并标记当前页面', () => {
     const container = mount()
-    const current = container.querySelector<HTMLAnchorElement>('a[href="/selection-workbench"]')
-    const inactive = container.querySelector<HTMLAnchorElement>('a[href="/data-explorer"]')
+    const current = container.querySelector<HTMLAnchorElement>('a[href="/data-explorer"]')
+    const inactive = container.querySelector<HTMLAnchorElement>('a[href="/reports"]')
 
     expect(current?.getAttribute('aria-current')).toBe('page')
     expect(current?.className).toContain('bg-accent-soft')
@@ -77,7 +76,7 @@ describe('NavGroup', () => {
     const container = mount(true)
 
     expect(container.textContent).toContain('业务洞察')
-    expect(container.textContent).toContain('选品运营')
+    expect(container.textContent).not.toContain('选品运营')
     expect(container.querySelectorAll('a')).toHaveLength(3)
   })
 

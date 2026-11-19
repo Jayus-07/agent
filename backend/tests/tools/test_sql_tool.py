@@ -123,7 +123,6 @@ class TestToolRegistryBasic:
             'web_crawl_tool',
             'send_email_tool',
             'data_collection_tool',
-            'competitor_analyze_tool',
         ]
         
         for tool_name in expected_tools:

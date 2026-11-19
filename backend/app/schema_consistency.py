@@ -62,9 +62,8 @@ _BUSINESS_TABLES = [
     "product.products", "order.orders", "order.order_items",
     "inventory.inventory", "inventory.purchase_orders",
     "customer.customers", "finance.daily_profit",
-    "crawler.competitor_products",
     "ai.tool_approval_requests",
-    "public.selection_tasks", "public.feedback",
+    "public.feedback",
     "public.schema_migrations",
 ]
 

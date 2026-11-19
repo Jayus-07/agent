@@ -26,8 +26,8 @@ def register_all() -> list[str]:
 
     返回本次调用后 registry 中已知的 workflow 名列表。
 
-    延迟 import：market_research / selection_decision 会连带各自的业务模块
-    （market_research.pipeline / selection_decision.*），只在真正调用注册时加载，
+    延迟 import：market_research 会连带业务模块
+    （market_research.pipeline），只在真正调用注册时加载，
     避免导入 workflows 包就付出这份代价。
     """
     from backend.orchestration.workflow.meta import get_workflow_meta
@@ -35,10 +35,9 @@ def register_all() -> list[str]:
     from backend.orchestration.workflows.daily_report import DailyReport
     from backend.orchestration.workflows.inventory_alert import InventoryAlert
     from backend.orchestration.workflows.market_research import MarketResearch
-    from backend.orchestration.workflows.selection_decision import SelectionDecision
 
     # 全量注册清单（唯一事实源：新增 workflow 只改这里）
-    classes = (DailyReport, InventoryAlert, MarketResearch, SelectionDecision)
+    classes = (DailyReport, InventoryAlert, MarketResearch)
 
     reg = get_workflow_registry()
     names: list[str] = []

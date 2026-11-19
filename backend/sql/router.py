@@ -23,11 +23,22 @@ from backend.sql.schema_loader import schema_loader
 _KEYWORD_TABLE_MAP: dict[str, list[str]] = {}
 _map_lock = threading.Lock()
 
+# 竞品采集域已退役。即使某条旧问题没有对应关键词，也不能让它进入
+# LLM 兜底后被误路由到其他业务表。
+_RETIRED_SQL_DOMAIN_MARKERS = (
+    "竞品",
+    "竞对",
+    "竞争对手",
+    "对手品牌",
+    "crawler.",
+    "competitor_",
+)
+
 
 def _build_keyword_map() -> None:
     """构造关键词→表名映射（懒初始化）。
 
-    只记录强关联的关键词（单关键词命中 ≤3 张表），避免泛词如"商品"命中全部 product schema。
+    记录精确业务词和依赖表；命中 1-3 张可走快路径，4 张以上交给 LLM 细选。
     """
     global _KEYWORD_TABLE_MAP
     if _KEYWORD_TABLE_MAP:
@@ -35,8 +46,130 @@ def _build_keyword_map() -> None:
     with _map_lock:
         if _KEYWORD_TABLE_MAP:
             return
-        # 精确关键词映射（1 个关键词 → 1-3 张表）
+        # 精确关键词映射（复杂场景可映射 4 张以上以强制进入 LLM 细选）
         _precise = {
+            # 零售 ERP 单店试点：新旧商品、库存、采购和 POS 表并存，
+            # 使用业务短语明确落到 retail，避免泛词误选旧 demo 表。
+            "在售 SKU": ["retail.products"],
+            "在售商品": ["retail.products"],
+            "SKU": ["retail.products"],
+            "条码": ["retail.products"],
+            "仓库库存": [
+                "retail.inventory_balances", "retail.products",
+                "retail.warehouses", "retail.stores",
+            ],
+            "门店库存": [
+                "retail.inventory_balances", "retail.products",
+                "retail.stores",
+            ],
+            "库存低于安全线": [
+                "retail.inventory_balances", "retail.products",
+                "retail.warehouses", "retail.stores",
+            ],
+            "库存成本金额": [
+                "retail.inventory_balances", "retail.products",
+            ],
+            "库存流水": [
+                "retail.inventory_movements", "retail.stores",
+            ],
+            "采购申请": [
+                "retail.purchase_requests", "retail.purchase_request_lines",
+                "retail.products",
+            ],
+            "采购申请状态": ["retail.purchase_requests"],
+            "申请人": ["retail.purchase_requests", "retail.stores"],
+            "采购订单金额": [
+                "retail.purchase_orders", "retail.purchase_order_lines",
+                "retail.suppliers",
+            ],
+            "有效采购订单金额": [
+                "retail.purchase_orders", "retail.purchase_order_lines",
+                "retail.suppliers",
+            ],
+            "采购订单": [
+                "retail.purchase_orders", "retail.suppliers", "retail.stores",
+            ],
+            "预计到货": [
+                "retail.purchase_orders", "retail.suppliers", "retail.stores",
+            ],
+            "供应商": ["retail.suppliers"],
+            "收货日期": [
+                "retail.receipts", "retail.receipt_lines", "retail.stores",
+            ],
+            "实际收货": [
+                "retail.purchase_orders", "retail.purchase_order_lines",
+                "retail.products", "retail.receipts", "retail.receipt_lines",
+            ],
+            "验收合格率": [
+                "retail.suppliers", "retail.purchase_orders", "retail.receipts",
+                "retail.receipt_lines",
+            ],
+            "到货验收合格率": [
+                "retail.suppliers", "retail.purchase_orders", "retail.receipts",
+                "retail.receipt_lines",
+            ],
+            "收货": [
+                "retail.receipts", "retail.receipt_lines",
+                "retail.purchase_orders",
+            ],
+            "到货": [
+                "retail.purchase_orders", "retail.receipts",
+                "retail.receipt_lines",
+            ],
+            "调拨": [
+                "retail.stock_transfers", "retail.stock_transfer_lines",
+                "retail.products",
+            ],
+            "调拨单": [
+                "retail.stock_transfers", "retail.stock_transfer_lines",
+                "retail.products", "retail.warehouses",
+            ],
+            "发往哪个仓库": [
+                "retail.stock_transfers", "retail.stock_transfer_lines",
+                "retail.products", "retail.warehouses",
+            ],
+            "盘点差异": [
+                "retail.stock_counts", "retail.stock_count_lines",
+                "retail.products",
+            ],
+            "盘点": [
+                "retail.stock_counts", "retail.stock_count_lines",
+                "retail.products",
+            ],
+            "批次": [
+                "retail.product_batches", "retail.products",
+                "retail.warehouses",
+            ],
+            "到期": [
+                "retail.product_batches", "retail.products",
+                "retail.warehouses",
+            ],
+            "销售净额": [
+                "retail.pos_sales", "retail.pos_returns",
+                "retail.pos_return_lines", "retail.stores",
+            ],
+            "退款日扣减": [
+                "retail.pos_returns", "retail.pos_return_lines",
+                "retail.stores",
+            ],
+            "净销售额": [
+                "retail.pos_sales", "retail.pos_sale_lines",
+                "retail.pos_returns", "retail.pos_return_lines",
+                "retail.products", "retail.stores",
+            ],
+            "已完成退款": [
+                "retail.pos_returns", "retail.pos_return_lines",
+                "retail.products", "retail.stores",
+            ],
+            "退货原因": [
+                "retail.pos_returns", "retail.pos_return_lines",
+                "retail.products", "retail.stores",
+            ],
+            "取消销售": ["retail.pos_sales", "retail.stores"],
+            "取消销售单": ["retail.pos_sales", "retail.stores"],
+            "POS": [
+                "retail.pos_sales", "retail.pos_sale_lines", "retail.products",
+            ],
             # 高频示例的依赖表必须在快路径一次性补齐，不能只命中维表。
             "库存": [
                 "inventory.inventory", "inventory.warehouses",
@@ -54,16 +187,6 @@ def _build_keyword_map() -> None:
             "退货": ["order.refunds"],
             "利润": ["finance.daily_profit", "order.order_items", "product.products"],
             "财务": ["finance.expenses", "finance.daily_profit"],
-            "竞品": [
-                "crawler.competitor_products", "crawler.competitor_price",
-                "product.products",
-            ],
-            "爬虫": [
-                "crawler.competitor_products", "crawler.competitor_price",
-                "product.products",
-            ],
-            "评论": ["crawler.product_reviews"],
-            "评分": ["crawler.product_reviews"],
             "客户": ["customer.customers", "customer.customer_behavior"],
             "用户行为": ["customer.customer_behavior"],
             "会员": ["customer.customers"],
@@ -76,7 +199,7 @@ def _build_keyword_map() -> None:
             "销量": ["product.products", "order.order_items"],
             "订单": ["order.orders", "order.order_items"],
             "金额": ["order.orders", "order.order_items"],
-            "售价": ["product.products", "crawler.competitor_price"],
+            "售价": ["product.products"],
             "标签": ["product.product_tags"],
             "爆款": ["product.product_tags", "order.order_items"],
             "agent": ["ai.agent_tasks", "ai.agent_trace"],
@@ -93,17 +216,22 @@ def _keyword_match(question: str) -> list[str]:
     matched_keywords = [
         (kw, tables)
         for kw, tables in _KEYWORD_TABLE_MAP.items()
-        if kw in q_lower
+        if kw.lower() in q_lower
     ]
     for keyword, tables in matched_keywords:
         # 更具体的业务词（如“退款率”）覆盖其子串泛词（“退款”），
         # 避免泛词覆盖具体指标所需的完整候选表集合。
         if any(
-            keyword != specific_keyword and keyword in specific_keyword
+            keyword != specific_keyword
+            and keyword.lower() in specific_keyword.lower()
             for specific_keyword, _ in matched_keywords
         ):
             continue
         matched.update(tables)
+    # 新 ERP 业务词明确进入 retail 域时，不混入旧 demo 的同义泛词表，
+    # 例如“门店库存”不能同时带上 inventory.inventory。
+    if any(table.startswith("retail.") for table in matched):
+        matched = {table for table in matched if table.startswith("retail.")}
     return list(matched)
 
 
@@ -130,6 +258,12 @@ def select_tables(
       2. LRU 缓存：相同问题 5min 内复用
       3. 表数量 ≤ 2 → 直接返回
     """
+    normalized_question = question.casefold()
+    if any(marker.casefold() in normalized_question
+           for marker in _RETIRED_SQL_DOMAIN_MARKERS):
+        logger.info("[Router] 竞品采集数据域已退役，拒绝 SQL 路由")
+        return []
+
     all_tables = schema_loader.get_all_table_names()
     all_tables = _normalize_tables(allowed_tables, all_tables)
     if not all_tables:
@@ -142,7 +276,7 @@ def select_tables(
     # 「不过滤 = 全部表」（授权面用得上），把它当 remembered 会让下面的
     # fast_match 恒等于全表 → `1 <= len(fast_match) <= 3` 永不成立 →
     # 关键词快路径成死代码，每次选表都打 LLM（2026-10-08 实测：本机 LLM 网关
-    # 不可用时静默回退「全部 18 张表」，选表质量塌成「全给」）。
+    # 不可用时静默回退全部纳管表，选表质量塌成「全给」）。
     remembered = _normalize_tables(context_tables or [], all_tables)
     if len(all_tables) <= 2:
         logger.info(f"[Router] 表数量 ≤ 2，直接返回全部: {all_tables}")

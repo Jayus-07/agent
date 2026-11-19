@@ -503,70 +503,7 @@ class GraphRunner:
             else:
                 finish_guard_trace(product_session_id, guard_result)
                 yield {"event": "status", "data": {"node": "input_guard", "ts": time.time()}}
-                # ── L1 业务化追问接管（2026-09-19 拒答转追问）────────
-                # guard 的「模糊/看不懂→clarify」只会给数据查询示例的通用
-                # 提示；若弱命中业务域（如"帮我做个行程"差一个目的地槽位），
-                # 优先给业务定向追问卡片。未命中业务倾向则保持 guard 原话术。
-                clarify = None
-                try:
-                    from backend.orchestration.graph.clarify_content import (
-                        CLARIFY_STANDALONE_TEXT,
-                        build_entry_clarify,
-                        clarify_allowed,
-                        mark_clarified,
-                    )
-
-                    if clarify_allowed(product_session_id, question or ""):
-                        clarify = build_entry_clarify(question or "", domain_hint)
-                        if clarify is not None:
-                            mark_clarified(
-                                product_session_id, question or "",
-                                options=clarify.get("options"),
-                                source=clarify.get("source", ""),
-                            )
-                except Exception as e:
-                    logger.warning(f"[Runner] 入口追问判定失败，保持 guard 原话术: {e}")
-                    clarify = None
-                if clarify is not None:
-                    logger.info(
-                        "[Runner] guard clarify 接管为业务追问: "
-                        f"source={clarify.get('source')}"
-                    )
-                    try:
-                        from backend.orchestration.context.routing_context import (
-                            set_pending_question,
-                        )
-
-                        set_pending_question(
-                            tenant_id, user_id, product_session_id,
-                            clarify.get("question") or "",
-                        )
-                    except Exception:
-                        logger.debug("[Runner] 待答问题记录失败（软降级）",
-                                     exc_info=True)
-                    yield {"event": "clarification", "data": {
-                        "question": clarify["question"],
-                        "options": [
-                            {"id": f"option-{i}", "label": label}
-                            for i, label in enumerate(clarify["options"], start=1)
-                        ],
-                        "handoff_available": clarify["handoff_available"],
-                        "source": clarify.get("source", ""),
-                        "ts": time.time(),
-                    }}
-                    try:
-                        from backend.observability.clarify_funnel import (
-                            record_funnel_event,
-                        )
-
-                        record_funnel_event(
-                            "shown", source=str(clarify.get("source", "")),
-                            session_id=product_session_id)
-                    except Exception:  # noqa: BLE001 — 漏斗旁路
-                        pass
-                    message = CLARIFY_STANDALONE_TEXT
-                else:
-                    message = guard_result.message or "## 提示\n\n无法处理该问题。"
+                message = guard_result.message or "## 提示\n\n无法处理该问题。"
                 if fallback_deltas:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}

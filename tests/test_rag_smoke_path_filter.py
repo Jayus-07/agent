@@ -112,6 +112,7 @@ def test_unrelated_migrations_do_not_trigger_main_paid_smoke():
         "backend/sql/migrations/052_travel_booking.sql",
         "backend/sql/migrations/058_cs_case.sql",
         "backend/sql/migrations/098_cs_refund_order_unique.sql",
+        "backend/sql/migrations/150_retail_erp_pilot_schema.sql",
     ]
     assert _filter_import(paths) is False
     assert _filter_subprocess(paths) is False
@@ -174,6 +175,12 @@ def test_migration_classification_categories():
     ) == "non_ai"
     assert _mod.classify_migration(
         "backend/sql/migrations/099_model_price_source_monitor.sql"
+    ) == "non_ai"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/150_retail_erp_pilot_schema.sql"
+    ) == "non_ai"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/152_retire_crawler_read_access.sql"
     ) == "non_ai"
 
 
@@ -299,7 +306,7 @@ def test_context_budget_and_chat_surface_changes_run_free_pr_preflight():
 
 def test_non_rag_docs_and_backend_changes_skip_smoke():
     """main push 语义：以下路径不触发付费评测面（backend/tools/ 于 PR 上
-    走免费预检，见 test_tool_memory_funnel_changes_run_pr_static）。"""
+    走免费预检，见 test_tool_memory_changes_run_pr_static）。"""
     paths = [
         "docs/operations/ci-evaluation-environment.md",
         "README.md",
@@ -311,15 +318,13 @@ def test_non_rag_docs_and_backend_changes_skip_smoke():
     assert _filter_subprocess(paths) is False
 
 
-def test_tool_memory_funnel_changes_run_pr_static_but_not_main_paid_smoke():
-    """#437 评审缺口收口：tools/memory/selection_funnel 源码目录的变更
-    在 PR 上触发免费定向预检（清单已收录三个目录的测试），main push
+def test_tool_memory_changes_run_pr_static_but_not_main_paid_smoke():
+    """tools/memory 源码目录的变更在 PR 上触发免费定向预检，main push
     不触发付费评测面——与治理面（admin_*）同款语义。"""
     paths = [
         "backend/tools/map/route.py",
         "backend/tools/memory.py",
         "backend/memory/service.py",
-        "backend/selection_funnel/reporter.py",
     ]
     assert _filter_import(paths) is False
     assert _filter_subprocess(paths) is False
@@ -327,9 +332,8 @@ def test_tool_memory_funnel_changes_run_pr_static_but_not_main_paid_smoke():
     assert _filter_subprocess(paths, event="pull_request") is True
 
 
-def test_tool_memory_funnel_checklist_not_idle():
-    """清单守卫（防「过滤器说触发、清单没跑用例」空转）：三个目录前缀
-    触发 PR 免费预检的前提，是定向清单真的包含各自目录的测试。"""
+def test_tool_memory_checklist_not_idle():
+    """清单守卫：工具和记忆源码触发 PR 预检时，定向清单必须包含对应测试。"""
     root = Path(__file__).resolve().parents[1]
     smoke = yaml.safe_load(
         (root / ".github/workflows/rag_smoke.yml").read_text(encoding="utf-8")
@@ -342,7 +346,6 @@ def test_tool_memory_funnel_checklist_not_idle():
     for registered in (
         "backend/tests/tools/test_map_navigation_key.py",
         "backend/tests/memory/test_memory_store_tool_keying.py",
-        "backend/tests/selection_funnel/test_pool_sources.py",
     ):
         assert any(registered in step["run"] for step in run_steps), (
             f"rag_smoke 定向清单缺少 {registered}（触发面与清单脱节）"

@@ -1,10 +1,11 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "case_count": 15,
   "module": "sql",
-  "schema_description": "NL2SQL 评测集：每条正向用例携带可在业务仓库（PostgreSQL agent_business）执行的 gold_sql，用执行准确率（结果集一致性）评分；对抗用例校验拒绝语义（should_reject + expected_status）。",
+  "schema_description": "NL2SQL 默认评测集：保留通用业务 SQL 正向样例；已退役的竞品采集数据问题必须在无可用表时拒答。",
   "created": "2026-09-10",
-  "content_hash": "16eaf637f8ae18b0",
+  "content_hash": "5e7a793143911cab",
   "kb_id": "",
-  "kb_note": "非 RAG 模块：NL2SQL 直连业务库 agent_business，无知识库依赖"
+  "kb_note": "非 RAG 模块：NL2SQL 直连业务库 agent_business，无知识库依赖",
+  "notes": "2026-11-19 升为 v1.1：SC-006/007/015 转为 no_table 拒答样例，crawler 旧表不再是有效问数范围。旧版本保存在 cases.v1.0.deprecated.jsonl。"
 }

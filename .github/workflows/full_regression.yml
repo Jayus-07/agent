@@ -74,12 +74,8 @@ jobs:
       # 专用键族全部显式指向 *_test（批一同款家族收口）：缺省值全是无后缀
       # agent_business 兼容库——不显式设置时 store 单例与测试用例分属两库
       # （单例的 _init_db 重建与用例的 CREATE TRIGGER 打在不同库），xdist
-      # 下 UndefinedTable（SELECTION_DECISION v20 run 41340426306 gw2 实
-      # 证）；drop_pgtest_tables 按配置库扫描，兼容库不在清单则永不清。
-      SELECTION_PGDATABASE: agent_business_test
-      SELECTION_DECISION_PGDATABASE: agent_business_test
+      # 下 UndefinedTable；drop_pgtest_tables 按配置库扫描，兼容库不在清则永不清。
       MARKET_RESEARCH_PGDATABASE: agent_business_test
-      COMPETITOR_PGDATABASE: agent_business_test
       FEEDBACK_PGDATABASE: agent_business_test
       VECTOR_PGDATABASE: agent_memory_test
       RAG_STORES_PGDATABASE: agent_memory_test
@@ -118,7 +114,7 @@ jobs:
           - { name: tools-security-obs, paths: "backend/tests/tools backend/tests/security backend/tests/observability" }
           - { name: services-travelv2, paths: "backend/tests/services backend/tests/memory backend/tests/travel_v2" }
           # 2026-11-02 对差收口：7 个目录、209 个用例此前未进入全量。
-          - { name: misc, paths: "backend/tests/audit backend/tests/business_report backend/tests/config backend/tests/domain_runtime backend/tests/inventory backend/tests/mcp_registry backend/tests/messaging backend/tests/node_runtime backend/tests/runtime backend/tests/scripts backend/tests/skills backend/tests/tool_runtime backend/tests/workers backend/tests/agents backend/tests/eval backend/tests/router backend/tests/selection_decision backend/tests/selection_funnel backend/tests/tasks backend/tests/tool_governance" }
+          - { name: misc, paths: "backend/tests/audit backend/tests/business_report backend/tests/config backend/tests/domain_runtime backend/tests/inventory backend/tests/mcp_registry backend/tests/messaging backend/tests/node_runtime backend/tests/runtime backend/tests/scripts backend/tests/skills backend/tests/tool_runtime backend/tests/workers backend/tests/agents backend/tests/eval backend/tests/router backend/tests/tasks backend/tests/tool_governance" }
           - { name: backend-root, paths: "" } # backend/tests 根散文件，步骤内展开
           - { name: repo-tests, paths: "tests" }
     steps:

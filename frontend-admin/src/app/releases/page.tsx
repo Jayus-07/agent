@@ -403,7 +403,6 @@ const GATE_LABEL: Record<string, string> = {
   Gate6_SQL: '数据查询',
   Gate7_CS: '客服域',
   Gate8_Travel: '旅游域',
-  Gate9_Selection: '选品漏斗',
   Gate10_TaskRuntime: '任务运行时',
   Gate11_Model: '模型治理',
   Gate12_Observability: '可观测',

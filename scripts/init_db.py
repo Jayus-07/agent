@@ -90,6 +90,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "021_selection_funnel_pg.sql": "business",
     "022_feedback_review_candidates.sql": "business",
     "106_approval_tenant_isolation.sql": "business",
+    "150_retail_erp_pilot_schema.sql": "business",
     # ── agent_memory ──
     "002_agent_memory_schema.sql": "memory",
     "003_agent_memory_seed.sql": "memory",
@@ -384,6 +385,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 149 预算域额度轴：三表加 domain 列（任务 9，影响预算/费用闸门；
     # 原 147/148 号连续与并行会话碰撞，改 149——145×2 先例，编号纪律同前）
     "149_budget_domain_axis.sql": "memory",
+    "151_auth_sso.sql": "memory",
+    "152_retire_crawler_read_access.sql": "business",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
@@ -405,9 +408,10 @@ ORDER_LAST = [
     "097_llm_model_health_probe_source.sql",
     # Trip 创建时保存不可覆盖的原始规划会话关联。
     "101_travel_v2_trip_conversations.sql",
-    # 147/148 的 REVOKE 必须晚于 004 的 schema 级 GRANT（否则被重新授权覆盖）。
+    # 147/148/152 的 REVOKE 必须晚于 004 的 schema 级 GRANT（否则被重新授权覆盖）。
     "147_readonly_revoke_cs_business_tables.sql",
     "148_readonly_default_privileges_completion.sql",
+    "152_retire_crawler_read_access.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 MIGRATION_TARGETS["093_revoke_readonly_default_password.sql"] = "business"
@@ -424,6 +428,7 @@ RUNTIME_MANAGED_MIGRATIONS: dict[str, str] = {
 
 # 可选的额外种子（--demo-sandbox）
 DEMO_SANDBOX_SEED = "demo_sandbox.sql"
+RETAIL_ERP_PILOT_SEED = "retail_erp_pilot.sql"
 
 # 「已存在 / 已重复」类 SQLSTATE —— 幂等跳过，不算失败
 # 42P07 重复表 | 42710 重复对象 | 42P06 重复 schema | 42P04 重复库
@@ -1075,6 +1080,8 @@ def main() -> int:
                     help="忽略 public.schema_migrations 记录，全部重跑（仍靠 SQL 幂等，不删数据）")
     ap.add_argument("--demo-sandbox", action="store_true",
                     help="额外灌客服演示数据 backend/sql/seeds/demo_sandbox.sql")
+    ap.add_argument("--retail-erp-pilot", action="store_true",
+                    help="显式灌入单店零售 ERP 合成数据（仅开发/评测库）")
     ap.add_argument("--reset", action="store_true",
                     help="危险：DROP 两个库后重建（必须配合 --yes）")
     ap.add_argument("--yes", action="store_true", help="与 --reset 配合，确认删库")
@@ -1230,6 +1237,28 @@ def main() -> int:
                     else:
                         print(f"[init_db]   ✗ 演示数据文件不存在: {seed_path}")
                         rc = 1
+
+                if args.retail_erp_pilot and db_key == "business":
+                    seed_path = SEEDS_DIR / RETAIL_ERP_PILOT_SEED
+                    if not readonly_migrations_ready:
+                        print(
+                            "[init_db]   ✗ ERP 合成数据未导入：业务库前置迁移失败"
+                        )
+                        rc = 1
+                    elif not seed_path.exists():
+                        print(f"[init_db]   ✗ ERP 合成数据文件不存在: {seed_path}")
+                        rc = 1
+                    else:
+                        sql = seed_path.read_text(encoding="utf-8")
+                        status, detail = apply_migration(
+                            conn, f"seed:{RETAIL_ERP_PILOT_SEED}", sql, force=True
+                        )
+                        print(
+                            f"[init_db]   ✓ ERP 合成数据 {RETAIL_ERP_PILOT_SEED}: "
+                            f"{status} — {detail}"
+                        )
+                        if status == "error":
+                            rc = 1
 
                 print(f"[init_db]   {dbname} 表分布: {health_check(conn, dbname)}")
                 top = row_counts(conn)

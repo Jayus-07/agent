@@ -4,7 +4,7 @@
 
 1. **优雅降级**（`strict=False`）：解密失败返回原文。
    用于竞品 Cookie —— 历史数据里既有明文也有密文，密钥轮换后旧数据只能降级读，
-   硬失败会让存量配置全不可用。见 `competitor/crypto.py`。
+   硬失败会让存量配置全不可用；密钥派生与加密逻辑集中维护在本模块。
 
 2. **fail-loud**（`strict=True`，默认）：解密失败抛 `SecretDecryptError`。
    用于**出站** API Key（要发给第三方的那种）。静默返回原文会让密文
@@ -32,7 +32,7 @@ CIPHER_PREFIX = "enc:"
 
 # key_env → 已成功构造的 Fernet 实例。
 # 只缓存成功结果 —— 未配置/非法密钥不缓存，以便部署或测试期间 setenv 后立即生效
-# （沿用 competitor/crypto.py 原实现的语义）。
+# （迁移前该实现与竞品模块共用同一套语义）。
 _fernet_cache: dict[str, Any] = {}
 
 

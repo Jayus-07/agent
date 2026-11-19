@@ -20,7 +20,7 @@ MAIN_BUILTIN = {
 }
 DOMAIN_NODES = {"cs_graph_node", "travel_graph_node"}
 SKILL_NODES = {
-    "business_analysis_skill", "competitor_analysis_skill",
+    "business_analysis_skill",
     "data_collection_skill", "data_export_skill", "email_skill",
     "rag_skill", "report_skill", "sql_skill", "travel_poi_skill",
     "web_crawl_skill", "web_search_skill",

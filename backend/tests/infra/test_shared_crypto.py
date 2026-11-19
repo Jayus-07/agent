@@ -49,7 +49,7 @@ def test_decrypt_ciphertext_without_key_is_loud(monkeypatch):
     with pytest.raises(crypto.SecretKeyMissing):
         crypto.decrypt_secret("enc:gAAAAABmxxxx")
 
-    # 对照：Cookie 的优雅降级分支返回原文，与改造前 competitor/crypto.py 一致
+    # 对照：非严格模式保留历史兼容行为；密钥相关机密仍默认严格失败。
     assert crypto.decrypt_with(None, "enc:gAAAAABmxxxx", strict=False) == "enc:gAAAAABmxxxx"
 
 

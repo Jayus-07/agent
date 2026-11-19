@@ -505,9 +505,6 @@ _REPLY_SOURCE_BY_CAPABILITY: dict[str, str] = {
     # 数据库查询 / 业务与竞品分析 / 报告与统计产物
     "sql.query": "data_analysis",
     "business.analyze": "data_analysis",
-    "competitor.analyze": "data_analysis",
-    "competitor.watch": "data_analysis",
-    "competitor.history": "data_analysis",
     "report.generate": "data_analysis",
     "daily_report": "data_analysis",
     "data.collect": "data_analysis",
@@ -526,7 +523,7 @@ def infer_reply_source(step_results: dict) -> Optional[str]:
     """从 step_results 推断回复归因稳定码；无可信依据返回 None（前端不标）。
 
     只看 status=success 的步骤 capability；email.* 属内容复述、workflow
-    蛇形名属选品漏斗域、域图步骤无 capability —— 均不在白名单，不标注。
+    未注册的步骤名、域图步骤无 capability —— 均不在白名单，不标注。
     """
     sources: set[str] = set()
     for sr in step_results.values():

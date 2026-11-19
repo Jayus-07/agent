@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from backend.evaluation.dataset.loader import verify_dataset_integrity
 from backend.prompts.loader import load_defaults
 from backend.sql import router, sql_generator
@@ -47,7 +49,7 @@ def test_keyword_fast_path_skips_llm_without_context(monkeypatch):
     缺陷（2026-10-08 实测）：`_normalize_tables(None, all_tables)` 的语义是
     「不过滤 = 全部表」（授权面正需要这个语义），把它直接当 `remembered`
     会让 fast_match 恒等于全表，`1 <= len(fast_match) <= 3` 永不成立——
-    关键词快路径变死代码，每次选表都打 LLM；LLM 不可用时静默回退 18 张表。
+    关键词快路径变死代码，每次选表都打 LLM；LLM 不可用时静默回退全部表。
     """
     _disable_router_cache(monkeypatch)
 
@@ -66,6 +68,29 @@ def test_keyword_fast_path_skips_llm_without_context(monkeypatch):
     assert len(tables) == 2
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "查询竞品商品和价格",
+        "竞争对手的商品评论有哪些",
+        "查询 crawler.competitor_products",
+        "查 competitor_price 最近记录",
+    ],
+)
+def test_retired_competitor_questions_are_rejected_before_llm(
+    monkeypatch, question
+):
+    _disable_router_cache(monkeypatch)
+
+    class _NoLLM:
+        def invoke(self, *_args, **_kwargs):
+            raise AssertionError("退役竞品问题不能进入 LLM 选表")
+
+    monkeypatch.setattr(router, "llm", _NoLLM())
+
+    assert router.select_tables(question) == []
+
+
 def test_builtin_examples_have_their_fact_tables(monkeypatch):
     _disable_router_cache(monkeypatch)
     examples = {
@@ -76,14 +101,63 @@ def test_builtin_examples_have_their_fact_tables(monkeypatch):
             "product.categories", "product.products", "order.order_items",
         },
         "列出最近 10 个订单的金额": {"order.orders"},
-        "对比竞品价格与我们售价的差异": {
-            "crawler.competitor_products", "crawler.competitor_price",
-            "product.products",
-        },
+        "对比商品售价": {"product.products"},
     }
 
     for question, required_tables in examples.items():
         assert required_tables <= set(router.select_tables(question))
+
+
+def test_retail_candidate_routes_all_twenty_questions_without_legacy_tables():
+    dataset = (
+        Path(__file__).resolve().parents[2]
+        / "evaluation" / "datasets" / "sql_retail_erp_v1" / "cases.jsonl"
+    )
+
+    for line in dataset.read_text(encoding="utf-8").splitlines():
+        case = json.loads(line)
+        matched = set(router._keyword_match(case["question"]))
+        expected = set(case["expected"]["expected_tables"])
+
+        assert matched, case["id"]
+        assert all(table.startswith("retail.") for table in matched), case["id"]
+        if len(expected) <= 3:
+            # 会绕过 LLM 的问题，关键词映射必须覆盖 gold SQL 的全部表。
+            assert len(matched) <= 3, case["id"]
+            assert expected <= matched, case["id"]
+        else:
+            # 复杂问题必须交给 LLM 选表，不能因不完整的快路径提前返回。
+            assert len(matched) > 3, case["id"]
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_tables"),
+    [
+        ("试点门店现在一共有多少个在售 SKU？", {"retail.products"}),
+        ("各采购申请状态分别有多少单？", {"retail.purchase_requests"}),
+        (
+            "11 月以来各类库存流水分别入库、出库和净变化多少？",
+            {"retail.inventory_movements", "retail.stores"},
+        ),
+        ("取消销售单金额多少？", {"retail.pos_sales", "retail.stores"}),
+    ],
+)
+def test_retail_precise_routes_skip_llm(
+    monkeypatch, question, expected_tables
+):
+    _disable_router_cache(monkeypatch)
+
+    class _NoLLM:
+        def invoke(self, *_args, **_kwargs):
+            raise AssertionError("精确 ERP 关键词命中时不应调用 LLM")
+
+    monkeypatch.setattr(router, "llm", _NoLLM())
+
+    tables = set(router.select_tables(question))
+
+    assert expected_tables <= tables
+    assert all(table.startswith("retail.") for table in tables)
+    assert len(tables) <= 3
 
 
 def test_query_examples_match_chinese_aliases_within_selected_tables():

@@ -1,19 +1,12 @@
 """test_business_stores_pg.py — 迁移计划 2026-09-17 Batch C/D：编排族 + 业务族 PG 连接层测试。
 
 覆盖：
-  1. 工厂分发（WORKFLOW_DB_BACKEND / INVENTORY_DB_BACKEND / SELECTION_BACKEND /
-     SELECTION_DECISION_BACKEND / MARKET_RESEARCH_BACKEND / COMPETITOR_BACKEND /
-     FEEDBACK_BACKEND = postgres → PG 子类；默认 sqlite 不受影响）
+  1. 工厂分发（workflow / inventory / market research / feedback → PG 子类）
   2. PostgresWorkflowRunStore：save/list/get 往返（outputs JSON 反序列化）
   3. PostgresInventoryStore：threshold 保存/更新、case upsert、event 插入与
      case_id 回填、policy 保存/列表、list_all_cases 过滤、get_stats
-  4. PostgresSelectionStore：score 往返、weights 更新清缓存
-  5. PostgresSelectionDecisionStore：task 生命周期、decision_log 留痕/拍板/反馈、
-     快照不可变触发器（017 迁移语义，测试内显式建触发器验证）
-  6. PostgresMarketResearchStore：task + evidence 往返
-  7. PostgresCompetitorStore：watchlist upsert、snapshot latest/history、
-     config 读写删、event 记录
-  8. feedback PG：add_feedback/stats、非法 vote 拒绝
+  4. PostgresMarketResearchStore：task + evidence 往返
+  5. feedback PG：add_feedback/stats、非法 vote 拒绝
 
 前置：本机 PostgreSQL 可达（config 默认 agent_memory / agent_business 双库）。
 不可达时整文件 skip；unit-only 运行用 -m "not pg"。
@@ -41,16 +34,8 @@ _BUSINESS_TABLES = [
     f"{PG_PREFIX}inventory_alert_cases",
     f"{PG_PREFIX}inventory_alert_events",
     f"{PG_PREFIX}notification_policies",
-    f"{PG_PREFIX}selection_scores",
-    f"{PG_PREFIX}selection_weights",
-    f"{PG_PREFIX}selection_tasks",
-    f"{PG_PREFIX}decision_log",
     f"{PG_PREFIX}mr_tasks",
     f"{PG_PREFIX}mr_evidence",
-    f"{PG_PREFIX}competitor_watchlist",
-    f"{PG_PREFIX}competitor_snapshots",
-    f"{PG_PREFIX}competitor_config",
-    f"{PG_PREFIX}competitor_events",
     PG_FB_TABLE,
 ]
 
@@ -88,18 +73,12 @@ def _reset_singletons(monkeypatch):
     """重置全部工厂单例（缓存实例不会因删表而重建，见 Batch A/B 测试注释）。"""
     # 表名常量在 store_pg 模块导入时烘焙，setenv 后必须 pop 强制重载
     _pop_store_modules()
-    import backend.competitor.store as comp_mod
     import backend.market_research.store as mr_mod
     import backend.orchestration.inventory.store as inv_mod
     import backend.orchestration.workflow.persistence as wf_mod
-    import backend.selection.store as sel_mod
-    import backend.selection_decision.store as sd_mod
     monkeypatch.setattr(wf_mod, "_store", None)
     monkeypatch.setattr(inv_mod, "_store", None)
-    monkeypatch.setattr(sel_mod, "_store", None)
-    monkeypatch.setattr(sd_mod, "_store", None)
     monkeypatch.setattr(mr_mod, "_store", None)
-    monkeypatch.setattr(comp_mod, "_store", None)
 
 
 @pytest.fixture()
@@ -109,14 +88,8 @@ def pg_env(monkeypatch):
     monkeypatch.setenv("WORKFLOW_DB_PG_TABLE", PG_WF_TABLE)
     monkeypatch.setenv("INVENTORY_DB_BACKEND", "postgres")
     monkeypatch.setenv("INVENTORY_DB_PG_TABLE_PREFIX", PG_PREFIX)
-    monkeypatch.setenv("SELECTION_BACKEND", "postgres")
-    monkeypatch.setenv("SELECTION_PG_TABLE_PREFIX", PG_PREFIX)
-    monkeypatch.setenv("SELECTION_DECISION_BACKEND", "postgres")
-    monkeypatch.setenv("SELECTION_DECISION_PG_TABLE_PREFIX", PG_PREFIX)
     monkeypatch.setenv("MARKET_RESEARCH_BACKEND", "postgres")
     monkeypatch.setenv("MARKET_RESEARCH_PG_TABLE_PREFIX", PG_PREFIX)
-    monkeypatch.setenv("COMPETITOR_BACKEND", "postgres")
-    monkeypatch.setenv("COMPETITOR_PG_TABLE_PREFIX", PG_PREFIX)
     monkeypatch.setenv("FEEDBACK_BACKEND", "postgres")
     monkeypatch.setenv("FEEDBACK_PG_TABLE", PG_FB_TABLE)
     _reset_singletons(monkeypatch)
@@ -139,49 +112,29 @@ class TestFactoryDispatch:
     def test_default_also_pg(self, clean_tables):
         """2026-09-17 SQLite 轨删除：无 BACKEND 开关，工厂一律直连 PG 实现
         （clean_tables 提供测试表前缀隔离，不触生产表）。"""
-        import backend.competitor.store as comp_mod
         import backend.market_research.store as mr_mod
         import backend.orchestration.inventory.store as inv_mod
         import backend.orchestration.workflow.persistence as wf_mod
-        import backend.selection.store as sel_mod
-        import backend.selection_decision.store as sd_mod
-        from backend.competitor.store_pg import PostgresCompetitorStore
         from backend.market_research.store_pg import PostgresMarketResearchStore
         from backend.orchestration.inventory.store_pg import PostgresInventoryStore
         from backend.orchestration.workflow.persistence_pg import PostgresWorkflowRunStore
-        from backend.selection.store_pg import PostgresSelectionStore
-        from backend.selection_decision.store_pg import PostgresSelectionDecisionStore
         assert isinstance(wf_mod.get_workflow_run_store(), PostgresWorkflowRunStore)
         assert isinstance(inv_mod.get_inventory_store(), PostgresInventoryStore)
-        assert isinstance(sel_mod.get_selection_store(), PostgresSelectionStore)
-        assert isinstance(sd_mod.get_selection_decision_store(), PostgresSelectionDecisionStore)
         assert isinstance(mr_mod.get_market_research_store(), PostgresMarketResearchStore)
-        assert isinstance(comp_mod.get_store(), PostgresCompetitorStore)
 
     def test_postgres_dispatch(self, clean_tables):
-        import backend.competitor.store as comp_mod
         import backend.market_research.store as mr_mod
         import backend.orchestration.inventory.store as inv_mod
         import backend.orchestration.workflow.persistence as wf_mod
-        import backend.selection.store as sel_mod
-        import backend.selection_decision.store as sd_mod
-        from backend.competitor.store_pg import PostgresCompetitorStore
         from backend.market_research.store_pg import PostgresMarketResearchStore
         from backend.orchestration.inventory.store_pg import PostgresInventoryStore
         from backend.orchestration.workflow.persistence_pg import (
             PostgresWorkflowRunStore,
         )
-        from backend.selection.store_pg import PostgresSelectionStore
-        from backend.selection_decision.store_pg import PostgresSelectionDecisionStore
 
         assert isinstance(wf_mod.get_workflow_run_store(), PostgresWorkflowRunStore)
         assert isinstance(inv_mod.get_inventory_store(), PostgresInventoryStore)
-        assert isinstance(sel_mod.get_selection_store(), PostgresSelectionStore)
-        assert isinstance(
-            sd_mod.get_selection_decision_store(), PostgresSelectionDecisionStore
-        )
         assert isinstance(mr_mod.get_market_research_store(), PostgresMarketResearchStore)
-        assert isinstance(comp_mod.get_store(), PostgresCompetitorStore)
 
 
 # ── workflow_runs（Batch C，agent_memory）────────────────────────────
@@ -326,164 +279,6 @@ class TestInventoryStore:
         assert {p["policy_name"] for p in matched2} == {"all"}
 
 
-# ── selection（Batch D，agent_business）──────────────────────────────
-
-
-class TestSelectionStore:
-    def test_score_roundtrip(self, clean_tables):
-        from backend.selection.store import get_selection_store
-
-        store = get_selection_store()
-        score = {"total": 0.87, "breakdown": {"heat": 0.9, "price": 0.8}}
-        store.save_score("https://item.jd.com/1.html", score, snapshot_id=42)
-        got = store.get_score("https://item.jd.com/1.html")
-        assert got["score_json"] == score
-        assert got["snapshot_id"] == 42
-
-        # UPSERT 覆盖
-        store.save_score("https://item.jd.com/1.html", {"total": 0.1}, snapshot_id=43)
-        assert store.get_score("https://item.jd.com/1.html")["score_json"] == {"total": 0.1}
-
-        assert len(store.all_scores()) == 1
-
-    def test_weights_update_clears_cache(self, clean_tables):
-        from backend.selection.store import DEFAULT_WEIGHTS, get_selection_store
-
-        store = get_selection_store()
-        assert store.get_weights() == DEFAULT_WEIGHTS
-        store.save_score("https://x", {"total": 1}, snapshot_id=None)
-        store.set_weights({"reputation": 0.5, "unknown_key": 9.9})
-        w = store.get_weights()
-        assert w["reputation"] == 0.5
-        assert "unknown_key" not in w
-        # 权重变更清空评分缓存
-        assert store.all_scores() == []
-
-
-# ── selection_decision（Batch D，agent_business）─────────────────────
-
-
-class TestSelectionDecisionStore:
-    def test_task_lifecycle(self, clean_tables):
-        from backend.selection_decision.store import get_selection_decision_store
-
-        store = get_selection_decision_store()
-        task_id = store.create({"category": "宠物"})
-        store.update_result(task_id, status="success", verdict="GO",
-                            report_md="# 报告", trace_id="t1")
-        got = store.get(task_id)
-        assert got["status"] == "success" and got["verdict"] == "GO"
-        assert got["inputs"] == {"category": "宠物"}
-        assert got["report_md"] == "# 报告"
-
-        # 列表不含 report_md
-        rows = store.list()
-        assert len(rows) == 1 and "report_md" not in rows[0]
-
-        # ensure_task 幂等（直跑补建）
-        store.ensure_task("direct0001", {"category": "x"})
-        store.ensure_task("direct0001", {"category": "y"})  # 已存在不覆盖
-        assert store.get("direct0001")["inputs"] == {"category": "x"}
-
-        # mark_stale_running_failed
-        n = store.mark_stale_running_failed(older_than_sec=0)
-        assert n == 1  # direct0001 仍是 running
-        assert store.get("direct0001")["status"] == "failed"
-
-    def test_decision_log_flow(self, clean_tables):
-        from backend.selection_decision.store import get_selection_decision_store
-
-        store = get_selection_decision_store()
-        d1 = store.record_decision(
-            task_id=None, candidate_id="C1", category="宠物",
-            evidence_snapshot={"price": 99}, score_snapshot={"total": 0.9},
-            recommendation="GO",
-        )
-        d2 = store.record_decision(
-            task_id=None, candidate_id="C1", category="宠物",
-            evidence_snapshot={"price": 89}, score_snapshot={"total": 0.8},
-            recommendation="HOLD",
-        )
-        # 同 candidate 版本递增
-        rows = store.list_decisions(candidate_id="C1")
-        assert [r["decision_version"] for r in rows] == [2, 1]
-
-        # 拍板 + 反馈（快照列不被触碰）
-        assert store.set_user_decision(d2, "adopted") is True
-        assert store.set_feedback(d2, {"sales_30d": 120}) is True
-        got = store.get_decision(d2)
-        assert got["user_decision"] == "adopted"
-        assert got["actual_metrics"] == {"sales_30d": 120}
-        assert got["feedback_at"] is not None
-        assert got["evidence_snapshot"] == {"price": 89}
-        assert store.set_user_decision("nope", "adopted") is False
-
-        # by_task 查询
-        d3 = store.record_decision(
-            task_id="task9", candidate_id="C2", category=None,
-            evidence_snapshot={}, score_snapshot={}, recommendation="GO",
-        )
-        assert [r["decision_id"] for r in store.list_decisions_by_task("task9")] == [d3]
-
-    def test_snapshot_immutable_trigger(self, clean_tables):
-        """017 迁移的不可变触发器语义：快照列 UPDATE 必须被拒"""
-        # 先让 store _init_db 建表，再挂触发器（触发器依赖表存在）
-        from backend.selection_decision.store import get_selection_decision_store
-        store = get_selection_decision_store()
-        # clean_tables setup 会 drop 本 worker 的测试表，而单例的 _init_db
-        # 只在构造时跑过一次（IF NOT EXISTS 幂等）——CI 同 worker 前序用例
-        # 已建单例时本用例会在已 drop 的表上挂触发器/写入 UndefinedTable
-        # （v19 run 41329142940 gw2 实证）。显式重建被 drop 的表。
-        store._init_db()
-
-        conn = psycopg2.connect(**BUSINESS_DB_CONFIG)
-        try:
-            cur = conn.cursor()
-            cur.execute("""
-                CREATE OR REPLACE FUNCTION trg_decision_log_snapshot_immutable_fn()
-                RETURNS trigger AS $$
-                BEGIN
-                    IF OLD.evidence_snapshot IS DISTINCT FROM NEW.evidence_snapshot
-                       OR OLD.score_snapshot IS DISTINCT FROM NEW.score_snapshot THEN
-                        RAISE EXCEPTION 'decision_log 快照不可变';
-                    END IF;
-                    RETURN NEW;
-                END;
-                $$ LANGUAGE plpgsql;
-            """)
-            cur.execute(f"""
-                DROP TRIGGER IF EXISTS trg_decision_log_snapshot_immutable
-                ON {PG_PREFIX}decision_log;
-                CREATE TRIGGER trg_decision_log_snapshot_immutable
-                BEFORE UPDATE ON {PG_PREFIX}decision_log
-                FOR EACH ROW EXECUTE FUNCTION
-                    trg_decision_log_snapshot_immutable_fn();
-            """)
-            conn.commit()
-        finally:
-            conn.close()
-
-        d1 = store.record_decision(
-            task_id=None, candidate_id="CX", category=None,
-            evidence_snapshot={"v": 1}, score_snapshot={"s": 1}, recommendation="GO",
-        )
-        # 合法更新（非快照列）通过
-        assert store.set_user_decision(d1, "rejected") is True
-        # 非法更新（快照列）被触发器拒绝
-        conn = psycopg2.connect(**BUSINESS_DB_CONFIG)
-        try:
-            cur = conn.cursor()
-            with pytest.raises(psycopg2.errors.RaiseException):
-                cur.execute(
-                    f"UPDATE {PG_PREFIX}decision_log "
-                    "SET evidence_snapshot = %s WHERE decision_id = %s",
-                    ('{"v": 999}', d1),
-                )
-        finally:
-            conn.rollback()
-            conn.close()
-
-
 # ── market_research（Batch D，agent_business）────────────────────────
 
 
@@ -517,59 +312,6 @@ class TestMarketResearchStore:
         assert got["status"] == "success" and got["report_md"] == "# 调研"
         rows = store.list()
         assert len(rows) == 1 and "report_md" not in rows[0]
-
-
-# ── competitor（Batch D，agent_business）─────────────────────────────
-
-
-class TestCompetitorStore:
-    def test_watchlist_and_snapshots(self, clean_tables):
-        from backend.competitor.store import get_store
-
-        store = get_store()
-        w = store.add_watch("竞品A", "https://p1", platform="jd", my_sku="SKU1")
-        assert w["name"] == "竞品A"
-        # upsert：同 URL 更新
-        store.add_watch("竞品A-v2", "https://p1", platform="jd")
-        assert store.get_watch_by_url("https://p1")["name"] == "竞品A-v2"
-        assert len(store.list_watch()) == 1
-
-        sid1 = store.save_snapshot({"watchlist_id": w["id"], "url": "https://p1",
-                                    "title": "A", "price": 99.9})
-        sid2 = store.save_snapshot({"url": "https://p1", "title": "A",
-                                    "price": 89.9, "raw_excerpt": "raw"})
-        assert sid2 != sid1
-        latest = store.latest_snapshot("https://p1")
-        assert latest["price"] == 89.9
-        prev = store.latest_snapshot("https://p1", before_id=sid2)
-        assert prev["id"] == sid1
-        assert len(store.history("https://p1")) == 2
-        assert len(store.list_snapshots()) == 2
-        full = store.all_snapshots_full()
-        assert "raw_excerpt" not in full[0]
-
-        # toggle / remove
-        store.toggle_watch("https://p1", enabled=False)
-        assert store.list_watch(enabled_only=True) == []
-        assert store.remove_watch("https://p1") is True
-        assert store.remove_watch("https://p1") is False
-
-    def test_config_and_events(self, clean_tables):
-        from backend.competitor.store import get_store
-
-        store = get_store()
-        store.set_config("cookie_jd", "SECRET=1")
-        assert store.get_config("cookie_jd") == "SECRET=1"
-        store.set_config("cookie_jd", "SECRET=2")  # UPSERT
-        assert store.get_config("cookie_jd") == "SECRET=2"
-        assert store.delete_config("cookie_jd") is True
-        assert store.get_config("cookie_jd") is None
-        assert store.delete_config("cookie_jd") is False
-
-        eid = store.log_event("jd", "https://p1", "blocked", "触发验证码")
-        assert eid >= 1
-        evs = store.recent_events()
-        assert len(evs) == 1 and evs[0]["event_type"] == "blocked"
 
 
 # ── feedback（Batch D，agent_business）───────────────────────────────

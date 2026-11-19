@@ -30,11 +30,9 @@ class DomainGraph:
             commerce/booking）。语义严格限于「独立生命周期的子流」，**不承载**顶级域
             自身的活动标签（见下 decision_subflow）——这是 STOP E §6.2 的既定取舍，
             勿再往里塞标签。
-        decision_subflow: 决策层归一的 subflow 展示位。None 时回退 ``subflow``。
-            只为**顶级域自身的活动标签**而存在（travel→"planning"、
-            selection_funnel→"funnel"）——STOP E §6.2 原先把它们只放在 Router
-            归一里，2026-09-30 归属单一事实源化后随图注册声明，避免决策层再留手写
-            标签表。纯展示/对账字段，不参与调度选图。
+            decision_subflow: 决策层归一的 subflow 展示位。None 时回退 ``subflow``。
+            仅用于顶级域自身的活动标签，避免决策层另维护手写标签表。
+            纯展示/对账字段，不参与调度选图。
     """
 
     name: str

@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "case_count": 20,
+  "module": "sql",
+  "schema_description": "默认租户单店零售 ERP 合成试点；覆盖采购、收货差异、库存/调拨/盘点、批次效期及 POS 销售退款。候选集，仅用于离线契约与后续结果级评测。",
+  "created": "2026-11-19",
+  "parent_dataset": "sql_v5",
+  "content_hash": "db66bde4357e75f1",
+  "notes": "所有数据均为合成数据。门店 ACL 尚未实现；真实门店隔离和业务库运行结果仍需后续验收。 历史组成集：20 条零售 ERP 合成样例已并入 sql_v6，不再作为独立当前候选。",
+  "lifecycle": "historical"
+}

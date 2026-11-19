@@ -1,6 +1,6 @@
 """tests/tools/conftest.py — 工具层测试公共夹具
 
-写操作工具（email/export/data_collection/competitor）已接入审批门
+写操作工具（email/export/data_collection）已接入审批门
 （TOOL_APPROVAL_MODE=required 时返回待审批提示而非执行）。工具层测试
 关注的是工具本身的行为，统一切换 auto 审批模式放行；
 审批门自身的行为测试在 tests/security/test_tool_approval.py。

@@ -16,8 +16,6 @@ FORBIDDEN_PREFIXES = (
     "backend.rag",
     "backend.sql",
     "backend.orchestration",
-    "backend.competitor",
-    "backend.selection_decision",
     "backend.business_report",
     "backend.evaluation",
     "backend.memory",

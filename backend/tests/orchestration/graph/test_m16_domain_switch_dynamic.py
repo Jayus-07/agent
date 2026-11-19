@@ -1,9 +1,9 @@
 """test_m16_domain_switch_dynamic.py — 域开关迁 sys_config 动态读（M16/D16）
 
-锁：三个 prefilter 总闸与 CS 灰度判定读 sys_config（DB 覆盖免重启生效），
+锁：受支持域 prefilter 总闸与 CS 灰度判定读 sys_config（DB 覆盖免重启生效），
 而非 config 模块导入期常量。DB 覆盖 > env 默认；总闸关闭恒 None（降级主路由）。
 
-旅游/选品 prefilter 命中链是纯规则（零 IO），可端到端翻转断言；CS 灰度
+旅游 prefilter 命中链是纯规则（零 IO），可端到端翻转断言；CS 灰度
 用 _in_rollout 直测（百分比动态读），CS 总闸用「env 开 + DB 关 → 恒 None」
 验证覆盖方向（None 仅可能来自总闸——同问句在 DB 未覆盖时进入灰度链路）。
 """
@@ -28,7 +28,6 @@ def _db_override(key: str, value: str) -> None:
 
 
 TRAVEL_QUERY = "帮我规划厦门两天的行程"
-SELECTION_QUERY = "给宠物零食做一次智能选品"
 CS_QUERY = "帮我查一下订单1001的物流进度"
 
 
@@ -49,27 +48,6 @@ class TestTravelPrefilterDynamic:
         result = try_travel_prefilter(TRAVEL_QUERY, {})
         assert result is not None
         assert result.get("route_mode") == "travel"
-
-
-class TestSelectionPrefilterDynamic:
-    def test_default_closed(self, monkeypatch):
-        # 根 .env 可能开着该开关：测试基线显式 delenv（env 未设置=default false）
-        monkeypatch.delenv("SELECTION_FUNNEL_ENABLED", raising=False)
-        from backend.orchestration.graph.selection_funnel_prefilter import (
-            try_selection_funnel_prefilter,
-        )
-
-        assert try_selection_funnel_prefilter(SELECTION_QUERY, {}) is None
-
-    def test_db_on_opens_without_restart(self):
-        _db_override("SELECTION_FUNNEL_ENABLED", "true")
-        from backend.orchestration.graph.selection_funnel_prefilter import (
-            try_selection_funnel_prefilter,
-        )
-
-        result = try_selection_funnel_prefilter(SELECTION_QUERY, {})
-        assert result is not None
-        assert result.get("route_mode") == "selection_funnel"
 
 
 class TestCsGateAndRolloutDynamic:

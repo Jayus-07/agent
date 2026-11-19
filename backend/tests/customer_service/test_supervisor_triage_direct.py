@@ -133,11 +133,15 @@ class TestTriageDirectExits:
         d = make_supervisor_decision(_state("今天天气怎么样"))
         assert "不在本窗口的服务范围内" in d.get("direct_reply", "")
 
-    def test_out_of_scope_guide_selection(self, _stub_llm, monkeypatch):
-        """选品话题 → 指路选品工作台。"""
+    def test_unsupported_retail_operation_uses_service_boundary_message(
+        self, _stub_llm, monkeypatch,
+    ):
+        """已退役的选品/竞品功能不再引导到旧工作台。"""
         monkeypatch.setattr(cs_config, "CS_TRIAGE_GUIDE_ENABLED", True)
         d = make_supervisor_decision(_state("帮我做一下竞品分析"))
-        assert "选品工作台" in d.get("direct_reply", "")
+        reply = d.get("direct_reply", "")
+        assert "不在本窗口的服务范围内" in reply
+        assert "选品工作台" not in reply
 
     def test_cs_signal_beats_out_of_scope(self):
         """顺序铁律：客服规则信号命中 → 出域词表不截胡，落业务漏斗。"""

@@ -54,23 +54,22 @@ def test_travel_output_keeps_structured_itinerary_in_ui_payload():
     assert update["travel_context"]["itinerary"]["days"][0]["day"] == 1
 
 
-def test_selection_output_keeps_report_and_metadata():
+def test_runtime_output_keeps_report_and_metadata():
     update = attach_runtime_result(
         {
-            "final_answer": "选品报告",
-            "funnel_context": {"top": [{"title": "商品 A"}]},
+            "final_answer": "工作流报告",
         },
-        runtime_id="selection_funnel",
-        ui_payload={"funnel_context": {"top": [{"title": "商品 A"}]}},
-        metadata={"run_id": "sel-1"},
+        runtime_id="sample_workflow",
+        ui_payload={"summary": "done"},
+        metadata={"run_id": "run-1"},
     )
 
     result = update["runtime_result"]
-    assert result["answer"] == "选品报告"
-    assert result["ui_payload"]["funnel_context"]["top"][0]["title"] == "商品 A"
+    assert result["answer"] == "工作流报告"
+    assert result["ui_payload"]["summary"] == "done"
     assert result["metadata"] == {
-        "run_id": "sel-1",
-        "runtime_id": "selection_funnel",
+        "run_id": "run-1",
+        "runtime_id": "sample_workflow",
     }
 
 

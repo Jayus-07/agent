@@ -210,7 +210,7 @@ def _record_queue_wait(record) -> None:
 def _bind_task_identity(record):
     """任务体绑定租户/操作者上下文（Phase2 Step6）。
 
-    side-effect 类 Tool（email/export/data_collection/competitor）的全局
+    side-effect 类 Tool（email/export/data_collection）的全局
     幂等以 (tenant, actor) 为隔离身份：此前任务运行时不绑定身份，工具在
     Celery 上下文里一律走无租户兼容直调路径——工作流邮件等真实副作用
     只受进程内指纹保护，跨 Worker 的 retry/recovery 重入即重复发送。

@@ -19,7 +19,6 @@ from backend.skills.web_search.skill import WebSearchSkill
 from backend.skills.web_crawl.skill import WebCrawlSkill
 from backend.skills.data_collection.skill import DataCollectionSkill
 from backend.skills.business_analysis.skill import BusinessAnalysisSkill
-from backend.skills.competitor_analysis.skill import CompetitorAnalysisSkill
 from backend.skills.travel_poi.skill import TravelPoiSkill
 from backend.skills.travel_food.skill import FoodSearchSkill
 from backend.skills.travel_hotel.skill import HotelSearchSkill
@@ -41,7 +40,6 @@ _instances: list = [
     WebCrawlSkill(),
     DataCollectionSkill(),
     BusinessAnalysisSkill(),
-    CompetitorAnalysisSkill(),
     TravelPoiSkill(),
     FoodSearchSkill(),
     HotelSearchSkill(),

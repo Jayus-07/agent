@@ -3,7 +3,7 @@ schema_config.py — 业务数据仓库 Schema 配置（按业务域拆分）
 
 设计原则：
   - 不建"大而全"电商库，而是企业级**业务数据仓库 Demo**
-  - PostgreSQL 一库多 schema（product/order/inventory/customer/crawler/finance/ai）
+  - PostgreSQL 一库多 schema（含 retail 零售 ERP 试点域）
   - 每个 schema 对应一个业务域，便于权限隔离 + 物理逻辑分离
   - 表名用 schema-qualified 形式（`product.products`），避免跨域重名
 
@@ -11,9 +11,8 @@ schema_config.py — 业务数据仓库 Schema 配置（按业务域拆分）
   - 销售日报 Agent    → order.orders + order.order_items
   - 库存预警 Agent    → inventory.inventory + inventory.warehouses
   - 商品分析 Agent    → product.products + product.categories + order.order_items
-  - 竞品分析 Agent    → crawler.competitor_products + crawler.competitor_price + crawler.product_reviews
   - 财务分析 Agent    → finance.expenses + finance.daily_profit
-  - NL2SQL 评测       → 10 张核心表规模匹配 DeepSeek/Qwen 上下文窗口
+  - NL2SQL 评测       → 核心表规模可控；按业务域选表，减少无关上下文
 
 修改时机：新业务表接入 / 敏感列调整 / 行级安全策略变更
 """
@@ -32,9 +31,9 @@ SCHEMA_CONFIG: Dict[str, Any] = {
         "order",        # 订单域
         "inventory",    # 库存域
         "customer",     # 用户域
-        "crawler",      # 爬虫竞品域（⭐ Agent 区别于普通 SQL Agent 的核心数据）
         "finance",      # 财务域
         "ai",           # Agent 运行数据域
+        "retail",       # 零售 ERP 试点域
     },
 
     # ── 表定义 ─────────────────────────────────────────
@@ -165,40 +164,6 @@ SCHEMA_CONFIG: Dict[str, Any] = {
             "description": "用户行为流水。Agent: 漏斗转化/意向商品。",
         },
 
-        # ═══ 爬虫竞品域 crawler（⭐差异化数据）═══
-        "crawler.competitor_products": {
-            "columns": {
-                "id":          "PK",
-                "platform":    "电商平台 (Amazon/TikTok Shop/淘宝)",
-                "brand":       "竞品品牌 (VARCHAR)",
-                "product_name":"竞品商品名称 (VARCHAR)",
-                "category":    "类目 (VARCHAR)",
-                "url":         "商品链接 (VARCHAR)",
-            },
-            "description": "竞品商品字典。Agent: 竞品监控/市场份额分析。",
-        },
-        "crawler.competitor_price": {
-            "columns": {
-                "id":         "PK",
-                "product_id": "竞品商品ID (FK → crawler.competitor_products.id)",
-                "price":      "当前价格 (NUMERIC)",
-                "discount":   "折扣 (NUMERIC, 0-1)",
-                "crawl_time": "抓取时间 (TIMESTAMP)",
-            },
-            "description": "竞品价格时序。Agent: 价格走势/降价预警。",
-        },
-        "crawler.product_reviews": {
-            "columns": {
-                "id":          "PK",
-                "product_id":  "商品ID (FK → product.products.id 或 crawler.competitor_products.id)",
-                "rating":      "评分 (1-5 INTEGER)",
-                "review_text": "评论正文 (TEXT)",
-                "sentiment":   "情感 (positive/negative/neutral)",
-                "created_at":  "评论时间 (TIMESTAMP)",
-            },
-            "description": "商品评论（含竞品）。Agent: 口碑/痛点分析。",
-        },
-
         # ═══ 财务域 finance ═══
         "finance.expenses": {
             "columns": {
@@ -270,9 +235,9 @@ SCHEMA_CONFIG: Dict[str, Any] = {
     #               参数化注入；department 无部门列可表达 → fail-closed 拒绝
     #   internal  — 财务/Agent 运行内部数据（含他人会话内容/商业成本）
     #               → 仅 data_scope=all 可读（决策 D4）
-    # tenant_column：当前 18 表均无租户列（单租户仓库，结构隔离，决策 D1）；
-    #   该列保留为 Guard 注入能力位——未来表真带租户列时在此登记即可生效，
-    #   all 也不例外（tenant 永远优先）。
+    # tenant_column：现有 18 张旧表无租户列；retail 试点表真实带 tenant_id，
+    #   并由 Guard 参数化注入（all 也不例外，tenant 永远优先）。
+    #   retail 暂归 internal，未实现门店 ACL 前仅全域权限账号可查询。
     # department_column：当前无表声明；声明后 department scope 自动注入
     #   （principal.department 为空 → fail-closed，决策 D2）。
     # self_column：与当前用户关联的列。order_items/refunds/customer_behavior
@@ -286,9 +251,6 @@ SCHEMA_CONFIG: Dict[str, Any] = {
         "inventory.inventory":            {"data_domain": "shared"},
         "inventory.warehouses":           {"data_domain": "shared"},
         "inventory.purchase_orders":      {"data_domain": "shared"},
-        "crawler.competitor_products":    {"data_domain": "shared"},
-        "crawler.competitor_price":       {"data_domain": "shared"},
-        "crawler.product_reviews":        {"data_domain": "shared"},
         "customer.customers":             {"data_domain": "shared"},
         "customer.customer_behavior":     {"data_domain": "shared"},
         # ═══ personal（3 表）═══
@@ -347,3 +309,182 @@ SCHEMA_CONFIG: Dict[str, Any] = {
     # 在此显式批准后放行，不给「黑名单外 = 安全」的默认。
     "allowed_functions": [],
 }
+
+
+def _retail_table(description: str, **columns: str) -> dict[str, Any]:
+    """声明零售 ERP 表结构，供 SQL 白名单、提示和列校验共用。"""
+    return {"columns": columns, "description": description}
+
+
+_RETAIL_TABLES = {
+    "retail.stores": _retail_table(
+        "门店主数据；当前只有 default 租户的虚构试点门店。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="门店编码，租户内唯一", store_name="门店名称",
+        timezone="门店时区", currency_code="门店币种",
+        status="门店状态：active/inactive", created_at="创建时间",
+    ),
+    "retail.warehouses": _retail_table(
+        "门店下属仓库、后仓和卖场区域；试点用仓库间调拨模拟补货。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        warehouse_id="仓库编码", store_id="所属门店编码",
+        warehouse_name="仓库名称",
+        warehouse_type="类型：distribution_center/store/backroom",
+        status="仓库状态",
+    ),
+    "retail.products": _retail_table(
+        "SKU 商品主数据，含条码、售价、成本和补货阈值。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        sku="库存单位 SKU，租户内唯一", barcode="商品条码，租户内唯一",
+        product_name="商品名称", category="商品类别", brand="品牌",
+        unit="计量单位", sale_price="标价（USD）", unit_cost="单位成本（USD）",
+        reorder_point="补货点", batch_tracked="是否按批次追踪",
+        status="商品状态：active/inactive",
+    ),
+    "retail.suppliers": _retail_table(
+        "供应商主数据及国家、预计交期。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        supplier_id="供应商编码", supplier_name="供应商名称",
+        country_code="国家代码", lead_time_days="预计交货天数",
+        status="供应商状态",
+    ),
+    "retail.purchase_requests": _retail_table(
+        "门店采购申请及审批状态；converted 表示已转采购订单。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="申请所属门店", request_id="采购申请单号",
+        requested_by="申请人（合成数据）",
+        status="draft/submitted/approved/rejected/converted",
+        created_at="申请时间", decided_at="审批时间", note="申请备注",
+    ),
+    "retail.purchase_request_lines": _retail_table(
+        "采购申请商品行及申请、批准数量。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="申请所属门店", request_id="采购申请单号", line_no="行号",
+        sku="商品 SKU", requested_qty="申请数量",
+        approved_qty="批准数量；未审批时为空",
+    ),
+    "retail.purchase_orders": _retail_table(
+        "采购订单主表；取消订单不计入有效采购金额。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="采购所属门店", po_id="采购订单号", supplier_id="供应商编码",
+        warehouse_id="计划收货仓库", source_request_id="来源采购申请号",
+        status=(
+            "draft/pending_approval/approved/sent/"
+            "partially_received/received/cancelled"
+        ),
+        ordered_at="下单时间", expected_at="预计到货时间", currency_code="订单币种",
+    ),
+    "retail.purchase_order_lines": _retail_table(
+        "采购订单商品行；金额按 ordered_qty × unit_cost 计算。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="采购所属门店", po_id="采购订单号", line_no="行号",
+        sku="商品 SKU", ordered_qty="订购数量", unit_cost="订单单位成本（USD）",
+    ),
+    "retail.receipts": _retail_table(
+        "到货/收货单；只将 posted/partial 的验收数量计为有效收货。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="收货所属门店", receipt_id="收货单号", po_id="采购订单号",
+        warehouse_id="实际收货仓库", received_at="收货时间",
+        status="posted/partial/void", reference_no="供应商送货单号",
+    ),
+    "retail.receipt_lines": _retail_table(
+        "收货明细；received_qty = accepted_qty + rejected_qty，拒收不入库存。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="收货所属门店", receipt_id="收货单号", line_no="行号",
+        po_id="采购订单号", po_line_no="采购订单行号", sku="商品 SKU",
+        received_qty="实收数量（含拒收）", accepted_qty="验收合格数量",
+        rejected_qty="拒收数量",
+    ),
+    "retail.inventory_balances": _retail_table(
+        "仓库库存快照；缺货按 on_hand_qty < safety_stock，等于阈值不算缺货。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="库存所属门店", warehouse_id="仓库编码", sku="商品 SKU",
+        on_hand_qty="当前实物库存", reserved_qty="预留数量",
+        safety_stock="安全库存线", updated_at="快照更新时间",
+    ),
+    "retail.inventory_movements": _retail_table(
+        "库存流水；quantity_delta 有正负，opening_balance 为期初合成流水。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="库存所属门店", movement_id="库存流水号", warehouse_id="仓库编码",
+        sku="商品 SKU",
+        movement_type=(
+            "receipt/sale/transfer_in/transfer_out/stock_count/return"
+        ),
+        quantity_delta="库存变化量：入库为正、出库为负",
+        source_type="来源类型；opening_balance 为期初库存",
+        source_id="来源单据号", occurred_at="流水发生时间",
+    ),
+    "retail.product_batches": _retail_table(
+        "批次库存与到期日期；临期查询需过滤 quantity_on_hand > 0。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="批次所属门店", batch_id="批次号", warehouse_id="所在仓库",
+        sku="商品 SKU", received_at="入库日期", expiry_date="到期日期",
+        quantity_on_hand="该批次现存数量",
+        status="available/quarantined/expired",
+    ),
+    "retail.stock_transfers": _retail_table(
+        "试点店内仓库调拨单；当前数据只覆盖后仓与卖场，不代表跨店权限。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="调拨所属门店", transfer_id="调拨单号",
+        from_warehouse_id="调出仓库", to_warehouse_id="调入仓库",
+        status="draft/approved/in_transit/received/cancelled",
+        created_at="创建时间", shipped_at="发出时间", received_at="签收时间",
+    ),
+    "retail.stock_transfer_lines": _retail_table(
+        "调拨商品行；完成差异按 sent_qty 与 received_qty 比较。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="调拨所属门店", transfer_id="调拨单号", line_no="行号",
+        sku="商品 SKU", sent_qty="发出数量", received_qty="实收数量；未签收时为空",
+    ),
+    "retail.stock_counts": _retail_table(
+        "门店盘点单；只有 posted 状态的差异计入已过账盘点。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="盘点所属门店", count_id="盘点单号", warehouse_id="盘点仓库",
+        status="draft/counting/submitted/approved/posted/rejected",
+        planned_at="计划时间", counted_at="实盘完成时间", posted_at="差异过账时间",
+    ),
+    "retail.stock_count_lines": _retail_table(
+        "盘点明细；差异 = counted_qty - system_qty，金额差异按 unit_cost 计算。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="盘点所属门店", count_id="盘点单号", line_no="行号",
+        sku="商品 SKU", system_qty="盘点前系统数量", counted_qty="实盘数量",
+        unit_cost="盘点成本价（USD）",
+    ),
+    "retail.pos_sales": _retail_table(
+        "POS 销售单；净销售排除 cancelled，含税总额减已退款金额。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="销售所属门店", sale_id="销售单号", receipt_no="POS 小票号",
+        sold_at="销售时间", status="completed/cancelled", currency_code="销售币种",
+        subtotal="商品净销售额，不含税", tax_amount="税额",
+        total_amount="含税成交总额；subtotal + tax_amount",
+    ),
+    "retail.pos_sale_lines": _retail_table(
+        "POS 销售明细；line_net_amount = quantity × unit_price - discount_amount，不含税。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="销售所属门店", sale_id="销售单号", line_no="行号",
+        sku="商品 SKU", quantity="销售数量", unit_price="成交单价（USD）",
+        unit_cost="销售时成本（USD）", discount_amount="行折扣金额",
+        tax_amount="该销售行税额", line_net_amount="该行不含税净额",
+    ),
+    "retail.pos_returns": _retail_table(
+        "POS 退货退款单；只将 refunded 状态视为已退款，requested 不计退款。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="退货所属门店", return_id="退货单号", sale_id="原销售单号",
+        status="requested/approved/refunded/rejected", requested_at="申请时间",
+        refunded_at="退款完成时间", reason="退货原因",
+    ),
+    "retail.pos_return_lines": _retail_table(
+        "POS 退货商品行；refund_amount 是实际退款金额，含本样例退款税额。",
+        tenant_id="租户 ID，由服务端 SQL 策略自动过滤",
+        store_id="退货所属门店", return_id="退货单号", line_no="行号",
+        sale_id="原销售单号", sale_line_no="原销售行号", sku="商品 SKU",
+        return_qty="退货数量", refund_amount="实际退款金额（USD）",
+    ),
+}
+
+SCHEMA_CONFIG["schemas"].add("retail")
+SCHEMA_CONFIG["tables"].update(_RETAIL_TABLES)
+SCHEMA_CONFIG["table_policies"].update({
+    table_name: {"data_domain": "internal", "tenant_column": "tenant_id"}
+    for table_name in _RETAIL_TABLES
+})

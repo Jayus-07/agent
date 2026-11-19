@@ -127,7 +127,6 @@ def test_c4_side_effect_tools_wired_to_global_idempotency():
         ("backend.tools.email", "run_idempotent_operation"),
         ("backend.tools.export", "run_idempotent_operation"),
         ("backend.tools.data_collection", "run_idempotent_operation"),
-        ("backend.tools.competitor", "run_idempotent_operation"),
     ):
         mod = __import__(module, fromlist=["x"])
         src = inspect.getsource(mod)

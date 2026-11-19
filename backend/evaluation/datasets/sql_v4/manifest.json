@@ -6,5 +6,6 @@
   "created": "2026-11-15",
   "parent_dataset": "sql_v3",
   "content_hash": "39c0b4e9fe86f513",
-  "notes": "候选集，不覆盖默认 SQL 数据集。需通过共享业务库上的结果级评测后再决定是否准入。"
+  "notes": "候选集，不覆盖默认 SQL 数据集。需通过共享业务库上的结果级评测后再决定是否准入。 历史锁版：包含已退役 crawler 采集数据查询，只保留审计对照；load_dataset_file 拒绝作为新评测输入。",
+  "lifecycle": "historical"
 }

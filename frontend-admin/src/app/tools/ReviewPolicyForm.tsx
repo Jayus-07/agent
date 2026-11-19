@@ -13,7 +13,6 @@ const DOMAIN_OPTIONS: { value: string; label: string }[] = [
   { value: '', label: '未分类（不设限）' },
   { value: 'general', label: 'general 通用' },
   { value: 'cs', label: 'cs 客服' },
-  { value: 'selection', label: 'selection 选品' },
   { value: 'travel', label: 'travel 旅游' },
   { value: 'data', label: 'data 数据' },
   { value: 'knowledge', label: 'knowledge 知识' },

@@ -1,7 +1,7 @@
 """tool_approval.py — 写操作工具审批门（human-in-the-loop）
 
 问题背景:
-  send_email / export_csv / data_collection / competitor(write) 等工具会
+  send_email / export_csv / data_collection 等工具会
   产生对外副作用（发邮件/写库/改监控列表），但此前 LLM 传参即可直接执行，
   无权限校验、无审批 —— 企业环境不可接受。
 

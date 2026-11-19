@@ -40,19 +40,6 @@ export async function listAgentTraces(): Promise<TraceRecord[]> {
   }
 }
 
-/** 列出选品漏斗运行历史（tags 含 funnel_run_id 的 trace）。
- *  漏斗域图跑在主图内，workflow_name 仍是主图，口径只能用标签：
- *  服务端 has_tag=funnel_run_id 过滤（适配器正常/异常路径都会打该标签）。 */
-export async function listFunnelTraces(): Promise<TraceRecord[]> {
-  if (!isClient()) return [];
-  try {
-    return await realApi.listTraces(100, undefined, "funnel_run_id");
-  } catch (e) {
-    console.warn("[observability] listFunnelTraces failed:", (e as Error).message);
-    return [];
-  }
-}
-
 /** Agent 链路时间窗聚合统计（StatsBar 后端下沉；失败返回 null 由页面降级自算） */
 export interface AgentTraceStats {
   total_24h: number;

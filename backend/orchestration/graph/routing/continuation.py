@@ -15,7 +15,7 @@ from backend.shared.logger import logger
 def _try_continuation(state: dict, query: str, routing_context: dict) -> dict | None:
     """ContinuationResolver 命中 → 直接回活跃域（复用既有域图入口）。
 
-    仅处理有状态域图（travel/customer_service/selection_funnel）；工具域
+    仅处理有状态域图（travel/customer_service）；工具域
     （data/knowledge/...）无跨轮图状态可回，交正常路由。任何异常都返回
     None 走原有链路，绝不阻断。
     """
@@ -73,17 +73,6 @@ def _try_continuation(state: dict, query: str, routing_context: dict) -> dict | 
         except Exception as e:
             logger.warning(f"[RouterNode] 延续回客服域失败，走正常路由: {e}")
         return None
-    if domain == "selection_funnel":
-        try:
-            from backend.orchestration.graph.selection_funnel_prefilter import (
-                try_selection_funnel_prefilter,
-            )
-
-            update = try_selection_funnel_prefilter(query, state)
-            if update is not None:
-                return update
-        except Exception as e:
-            logger.warning(f"[RouterNode] 延续回选品域失败，走正常路由: {e}")
     return None
 
 

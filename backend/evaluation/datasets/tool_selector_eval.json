@@ -132,7 +132,7 @@
     {
       "id": "TS-032", "category": "typed_param",
       "query": "搜索竞品 Anker 最近的新品发布信息，返回 5 条",
-      "candidates": [{"name": "web.search", "score": 0.74}, {"name": "competitor.analyze", "score": 0.66}],
+      "candidates": [{"name": "web.search", "score": 0.74}, {"name": "sql.query", "score": 0.66}],
       "expected": {"capability": "web.search", "params": {"num_results": 5}, "params_free_keys": ["query"]}
     },
     {
@@ -194,30 +194,6 @@
       "query": "把商品数据导入到 ods_products 表，数据源是 static://datasets/products.json",
       "candidates": [{"name": "data.collect", "score": 0.7}, {"name": "data.export", "score": 0.58}],
       "expected": {"capability": "data.collect", "params": {"source": "static://datasets/products.json", "target_table": "ods_products"}}
-    },
-    {
-      "id": "TS-060", "category": "enum_param",
-      "query": "分析一下 https://www.amazon.com/dp/B0XXXX 竞品链接的详情",
-      "candidates": [{"name": "competitor.analyze", "score": 0.74}, {"name": "web.crawl", "score": 0.65}],
-      "expected": {"capability": "competitor.analyze", "params": {"action": "analyze", "url": "https://www.amazon.com/dp/B0XXXX"}}
-    },
-    {
-      "id": "TS-061", "category": "enum_param",
-      "query": "把 https://competitor.com/item/1 加到竞品监控列表，名字叫竞品A",
-      "candidates": [{"name": "competitor.analyze", "score": 0.75}, {"name": "web.crawl", "score": 0.6}],
-      "expected": {"capability": "competitor.analyze", "params": {"action": "add", "url": "https://competitor.com/item/1", "name": "竞品A"}}
-    },
-    {
-      "id": "TS-062", "category": "enum_param",
-      "query": "查一下竞品 https://competitor.com/item/2 的历史价格",
-      "candidates": [{"name": "competitor.analyze", "score": 0.73}, {"name": "web.search", "score": 0.62}],
-      "expected": {"capability": "competitor.analyze", "params": {"action": "history", "url": "https://competitor.com/item/2"}}
-    },
-    {
-      "id": "TS-063", "category": "enum_param",
-      "query": "看看我现在监控了哪些竞品",
-      "candidates": [{"name": "competitor.analyze", "score": 0.71}, {"name": "sql.query", "score": 0.6}],
-      "expected": {"capability": "competitor.analyze", "params": {"action": "list"}}
     },
     {
       "id": "TS-070", "category": "grey_zone",
@@ -313,8 +289,8 @@
     },
     {
       "id": "TS-104", "category": "ambiguous",
-      "query": "竞品上周降价了，分析下我们要不要跟",
-      "candidates": [{"name": "business.analyze", "score": 0.71}, {"name": "competitor.analyze", "score": 0.7}],
+      "query": "SKU001 上周销量下降，分析下是否需要调整售价",
+      "candidates": [{"name": "business.analyze", "score": 0.71}, {"name": "sql.query", "score": 0.7}],
       "expected": {"capability": "business.analyze"}
     },
     {

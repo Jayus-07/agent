@@ -454,6 +454,54 @@ def _login_lockout_reset(tenant_id: str, username: str) -> None:
         logger.debug("[local-auth] 防爆破计数清零失败", exc_info=True)
 
 
+async def _issue_login_session(row, request: Request, response: Response, *,
+                               device_id: str, client_app: str) -> dict:
+    """为已通过本地准入的账号签发原有本地会话、JWT 与刷新 Cookie。"""
+    user_agent = (request.headers.get("user-agent") or "")[:256]
+    ip = _client_ip(request)
+    async with _db() as session:
+        # 同设备替换：同一 user + device_id 的活跃会话先撤销再创建。
+        old = (await session.execute(text(
+            "SELECT id FROM auth.sessions "
+            "WHERE user_id = :uid AND device_id = :dev AND client_id = :client_id "
+            "AND revoked_at IS NULL"),
+            {"uid": row["id"], "dev": device_id,
+             "client_id": client_app})).mappings().first()
+        if old:
+            await _revoke_session_row(session, session_id=str(old["id"]),
+                                      reason=_REVOKE_REASON_REPLACED)
+            _delete_session_redis_keys(row["id"], str(old["id"]))
+        sid = await _create_session(
+            session, user_id=row["id"], device_id=device_id,
+            user_agent=user_agent, ip=ip, client_app=client_app,
+            ttl_seconds=_REFRESH_TTL_SECONDS,
+        )
+        raw_refresh, token_hash = new_refresh_token()
+        await session.execute(text(
+            "INSERT INTO auth.refresh_tokens "
+            "(user_id, token_hash, device_id, expires_at, session_id) "
+            "VALUES (:uid, :th, :dev, now() + make_interval(secs => :ttl), :sid)"),
+            {"uid": row["id"], "th": token_hash, "dev": device_id,
+             "ttl": _REFRESH_TTL_SECONDS, "sid": sid})
+        await session.commit()
+
+    issued = issue_access_token(
+        user_id=row["id"], username=row["username"], dept=row["dept"],
+        device_id=device_id, roles=_jwt_roles(row),
+        tenant_id=row["tenant_id"], session_id=sid, client_id=client_app,
+        must_change_password=bool(row.get("must_change_password", False)),
+    )
+    _write_session(issued)
+    _set_refresh_cookie(response, raw_refresh, client_app)
+    return {
+        "token": issued["token"],
+        "refreshToken": None,
+        "tokenType": "Bearer",
+        "expiresIn": issued["expiresIn"],
+        "userInfo": _user_info(row),
+    }
+
+
 @router.post("/login")
 async def login(request: Request, response: Response):
     body = await request.json()
@@ -461,8 +509,6 @@ async def login(request: Request, response: Response):
     password = body.get("password") or ""
     device_id = (body.get("deviceId") or "")[:64]
     client_app = _resolve_client_app(request, body=body)
-    user_agent = (request.headers.get("user-agent") or "")[:256]
-    ip = _client_ip(request)
     if not username or not password:
         return _fail("用户名或密码不能为空", code=400)
     username_error = _login_username_error(username)
@@ -493,47 +539,9 @@ async def login(request: Request, response: Response):
     if portal_error:
         return _fail(portal_error, code=403)
 
-    async with _db() as session:
-        # 同设备替换（2026-09-19 会话实体改造）：同一 user + device_id 的活跃
-        # 会话先撤销再建新会话，不留多条同设备活跃会话。旧标签页的 access
-        # token 在剩余 TTL 内仍有效，refresh 即 401（业务已接受该语义）。
-        old = (await session.execute(text(
-            "SELECT id FROM auth.sessions "
-            "WHERE user_id = :uid AND device_id = :dev AND client_id = :client_id "
-            "AND revoked_at IS NULL"),
-            {"uid": row["id"], "dev": device_id, "client_id": client_app})).mappings().first()
-        if old:
-            await _revoke_session_row(session, session_id=str(old["id"]),
-                                      reason=_REVOKE_REASON_REPLACED)
-            _delete_session_redis_keys(row["id"], str(old["id"]))
-        sid = await _create_session(session, user_id=row["id"], device_id=device_id,
-                                    user_agent=user_agent, ip=ip,
-                                    client_app=client_app,
-                                    ttl_seconds=_REFRESH_TTL_SECONDS)
-        raw_refresh, token_hash = new_refresh_token()
-        await session.execute(text(
-            "INSERT INTO auth.refresh_tokens (user_id, token_hash, device_id, expires_at, session_id) "
-            "VALUES (:uid, :th, :dev, now() + make_interval(secs => :ttl), :sid)"),
-            {"uid": row["id"], "th": token_hash, "dev": device_id,
-             "ttl": _REFRESH_TTL_SECONDS, "sid": sid})
-        await session.commit()
-
-    issued = issue_access_token(user_id=row["id"], username=row["username"],
-                                dept=row["dept"], device_id=device_id,
-                                roles=_jwt_roles(row),
-                                tenant_id=row["tenant_id"],
-                                session_id=sid,
-                                client_id=client_app,
-                                must_change_password=bool(row.get("must_change_password", False)))
-    _write_session(issued)
-    _set_refresh_cookie(response, raw_refresh, client_app)
-    return _result({
-        "token": issued["token"],
-        "refreshToken": None,          # 契约：改走 HttpOnly Cookie
-        "tokenType": "Bearer",
-        "expiresIn": issued["expiresIn"],
-        "userInfo": _user_info(row),
-    })
+    return _result(await _issue_login_session(
+        row, request, response, device_id=device_id, client_app=client_app,
+    ))
 
 
 # ── /auth/refresh（轮换）─────────────────────────────────────

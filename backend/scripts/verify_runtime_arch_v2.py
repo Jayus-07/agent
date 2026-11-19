@@ -35,7 +35,6 @@ GLOBAL_REGRESSION_TESTS = [
     "backend/tests/orchestration/test_supervisor.py",
     "backend/tests/orchestration/graph/test_cs_graph_wiring.py",
     "backend/tests/travel/test_travel_graph.py",
-    "backend/tests/selection_funnel/test_selection_funnel_graph.py",
     "backend/tests/orchestration/graph/test_clarify_flow.py",
     "backend/tests/orchestration/graph/test_entry_mode_handoff.py",
     "backend/tests/orchestration/router/test_routing_engine.py",
@@ -54,7 +53,6 @@ COMPATIBILITY_GATE_KEYS = (
     "PLAN_PATH_PASS",
     "CS_DOMAIN_PASS",
     "TRAVEL_DOMAIN_PASS",
-    "SELECTION_DOMAIN_PASS",
     "CLARIFY_PASS",
     "HANDOFF_PASS",
     "GENERAL_CHAT_PASS",
@@ -111,10 +109,8 @@ def _stage_paths(stage: str) -> list[str]:
         ],
         "D": [
             "backend/tests/orchestration/graph/test_runtime_result_adapters.py",
-            "backend/tests/orchestration/graph/test_domain_output_regression.py",
             "backend/tests/orchestration/graph/test_cs_graph_node_contract.py",
             "backend/tests/travel/test_travel_graph.py",
-            "backend/tests/selection_funnel/test_selection_funnel_graph.py",
         ],
         "E": [
             "backend/tests/orchestration/test_state_canonicalization.py",

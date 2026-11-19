@@ -122,16 +122,6 @@ def _has_foreign_strong_signal(query: str, active_domain: str) -> bool:
                 return True
         except Exception:  # noqa: BLE001
             pass
-    # 选品强信号
-    if active_domain != "selection_funnel":
-        try:
-            from backend.orchestration.graph.selection_funnel_prefilter import (
-                is_selection_funnel_request,
-            )
-            if is_selection_funnel_request(query):
-                return True
-        except Exception:  # noqa: BLE001
-            pass
     # 数据/SQL 强意图（活跃域本身是数据/分析类时不算外部信号）
     if active_domain not in ("data", "business", "report", "knowledge",
                              "communication"):

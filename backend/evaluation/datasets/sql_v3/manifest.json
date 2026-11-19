@@ -6,5 +6,6 @@
   "created": "2026-11-15",
   "parent_dataset": "sql_v2",
   "content_hash": "84c9822e0bf23956",
-  "notes": "这是 sql_v2 的新版本候选，未覆盖 v2。SC-117修正退款率排名的零分母语义；默认 sql 模块仍使用 sql/cases.jsonl，候选需经SQL结果级评测后再决定是否接入。"
+  "notes": "这是 sql_v2 的新版本候选，未覆盖 v2。SC-117修正退款率排名的零分母语义；默认 sql 模块仍使用 sql/cases.jsonl，候选需经SQL结果级评测后再决定是否接入。 历史锁版：包含已退役 crawler 采集数据查询，只保留审计对照；load_dataset_file 拒绝作为新评测输入。",
+  "lifecycle": "historical"
 }

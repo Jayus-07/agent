@@ -28,7 +28,6 @@ def _step(capability: str, status: str = "success") -> dict:
     ("rag.search", "knowledge_base"),
     ("sql.query", "data_analysis"),
     ("business.analyze", "data_analysis"),
-    ("competitor.analyze", "data_analysis"),
     ("report.generate", "data_analysis"),
     ("map.lookup", "realtime_query"),
     ("web.search", "realtime_query"),

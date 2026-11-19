@@ -224,11 +224,11 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
     expect(body.detail).toContain("请求体超过上限");
   });
 
-  it("非上传路径沿用默认 64MB 上限，51MB JSON 请求不被拦（同批次回归）", async () => {
+  it("非上传 API 沿用默认 64MB 上限，51MB JSON 请求不被拦", async () => {
     const fetchSpy = upstream();
 
     await POST(
-      makeProxyRequest("http://localhost:3000/api/selection-funnel/import", {
+      makeProxyRequest("http://localhost:3000/api/custom-json", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -237,7 +237,7 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
         },
         body: "{}",
       }),
-      ctx(["selection-funnel", "import"]),
+      ctx(["custom-json"]),
     );
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -486,6 +486,51 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
       ctx(["sys", "users", "captcha"]),
     );
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("仅允许固定的扫码登录入口匿名转发，管理配置仍需 Bearer", async () => {
+    const fetchSpy = upstream();
+    await GET(
+      makeProxyRequest("http://localhost:3000/api/auth/sso/providers", {
+        method: "GET",
+      }),
+      ctx(["auth", "sso", "providers"]),
+    );
+    await POST(
+      makeProxyRequest("http://localhost:3000/api/auth/sso/feishu/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ redirect_to: "/agent" }),
+      }),
+      ctx(["auth", "sso", "feishu", "start"]),
+    );
+    await POST(
+      makeProxyRequest("http://localhost:3000/api/auth/sso/dingtalk/callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: "code", state: "state" }),
+      }),
+      ctx(["auth", "sso", "dingtalk", "callback"]),
+    );
+
+    const denied = await POST(
+      makeProxyRequest("http://localhost:3000/api/sys/sso/providers", {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+      ctx(["sys", "sso", "providers"]),
+    );
+    const unsupported = await POST(
+      makeProxyRequest("http://localhost:3000/api/auth/sso/unknown/start", {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+      ctx(["auth", "sso", "unknown", "start"]),
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(denied.status).toBe(401);
+    expect(unsupported.status).toBe(401);
   });
 
   it("登录路径的额外后缀不会获得匿名白名单", async () => {

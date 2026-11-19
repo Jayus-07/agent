@@ -3,8 +3,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 const navigation = vi.hoisted(() => ({
-  pathname: '/selection-workbench',
-  query: 'tab=decision&has_tool=true',
+  pathname: '/example-workbench',
+  query: 'tab=history&has_tool=true',
   push: vi.fn(),
 }))
 
@@ -22,17 +22,17 @@ beforeAll(() => {
 
 afterEach(() => {
   document.body.innerHTML = ''
-  navigation.query = 'tab=decision&has_tool=true'
+  navigation.query = 'tab=history&has_tool=true'
   navigation.push.mockClear()
 })
 
 function Probe() {
-  const { tab, selectTab } = useWorkbenchTab(['funnel', 'decision'] as const, 'funnel')
+  const { tab, selectTab } = useWorkbenchTab(['overview', 'history'] as const, 'overview')
 
   return (
     <div>
       <span data-tab={tab}>{tab}</span>
-      <button type="button" onClick={() => selectTab('funnel')}>切换</button>
+      <button type="button" onClick={() => selectTab('overview')}>切换</button>
     </div>
   )
 }
@@ -49,10 +49,10 @@ describe('useWorkbenchTab', () => {
   it('从 URL 读取合法 Tab，并通过 push 保留其它查询参数', () => {
     const { root, container } = mount()
 
-    expect(container.querySelector('[data-tab]')?.textContent).toBe('decision')
+    expect(container.querySelector('[data-tab]')?.textContent).toBe('history')
     act(() => container.querySelector('button')?.click())
     expect(navigation.push).toHaveBeenCalledWith(
-      '/selection-workbench?tab=funnel&has_tool=true',
+      '/example-workbench?tab=overview&has_tool=true',
     )
 
     act(() => root.unmount())
@@ -61,12 +61,12 @@ describe('useWorkbenchTab', () => {
   it('URL 缺失或非法 Tab 时使用默认 Tab', () => {
     navigation.query = 'has_tool=false'
     const first = mount()
-    expect(first.container.querySelector('[data-tab]')?.textContent).toBe('funnel')
+    expect(first.container.querySelector('[data-tab]')?.textContent).toBe('overview')
     act(() => first.root.unmount())
 
     navigation.query = 'tab=invalid'
     const second = mount()
-    expect(second.container.querySelector('[data-tab]')?.textContent).toBe('funnel')
+    expect(second.container.querySelector('[data-tab]')?.textContent).toBe('overview')
     act(() => second.root.unmount())
   })
 })

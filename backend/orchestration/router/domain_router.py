@@ -160,7 +160,7 @@ class DomainRouter:
     @staticmethod
     def _main_exclusive_domain(domain: Any) -> bool:
         return str(domain or "").strip().lower() in {
-            "travel", "customer_service", "selection_funnel", "booking", "commerce",
+            "travel", "customer_service", "booking", "commerce",
         }
 
     @staticmethod

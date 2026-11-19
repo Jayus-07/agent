@@ -11,7 +11,6 @@ Skill → Tool → Infrastructure (RAG / SQL / Report)
 - email.py:            send_email_tool
 - export.py:           export_csv_tool
 - data_collection.py:  data_collection_tool
-- competitor.py:       competitor_analyze_tool
 - memory.py:           memory_search_tool, memory_store_tool, memory_forget_tool
 - calculator.py:       calculate_tool
 - travel/:             travel_poi_search_tool + 距离/费用估算纯函数（旅游域）
@@ -33,10 +32,6 @@ from backend.tools.export import export_csv_tool  # noqa: F401
 from backend.tools.web import web_search_tool, web_crawl_tool  # noqa: F401
 from backend.tools.email import send_email_tool  # noqa: F401
 from backend.tools.data_collection import data_collection_tool  # noqa: F401
-from backend.tools.competitor import (  # noqa: F401
-    competitor_analyze_tool, competitor_watch_tool,
-    competitor_history_tool, competitor_watchlist_tool,
-)
 from backend.tools.memory import (  # noqa: F401
     memory_search_tool, memory_store_tool, memory_forget_tool,
 )
@@ -75,10 +70,6 @@ __all__ = [
     'web_crawl_tool',
     'send_email_tool',
     'data_collection_tool',
-    'competitor_analyze_tool',
-    'competitor_watch_tool',
-    'competitor_history_tool',
-    'competitor_watchlist_tool',
     'memory_search_tool',
     'memory_store_tool',
     'memory_forget_tool',

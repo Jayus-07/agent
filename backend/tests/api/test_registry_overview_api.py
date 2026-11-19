@@ -110,7 +110,7 @@ def test_agents_attribution_contract_values_locked(client):
     # 2026-11-01 收编重构：商务/预订子流随域图壳删除，子流域图清零。
     assert nodes["travel"]["domain"] is None
     assert nodes["customer_service"]["domain"] is None
-    assert nodes["selection_funnel"]["domain"] is None
+    assert "selection_funnel" not in nodes
     # 当前已无子流域图
     assert [a["route_mode"] for a in nodes.values() if a["domain"]] == []
 

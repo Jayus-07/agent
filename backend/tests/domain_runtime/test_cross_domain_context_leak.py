@@ -6,8 +6,8 @@
    键，CS 上下文（含订单）不得混入（FakeGraph 捕获真实 invoke 入参）。
 2. Travel destination → 切 CS：cs_graph_node 构造的输入不含 travel/itinerary
    任何字段（同样捕获真实入参）。
-3. Selection category / Travel destination → General：general_chat 不读任何
-   域上下文（模块源不含域上下文引用， tripwire）。
+3. Travel destination → General：general_chat 不读任何域上下文（模块源不含
+   域上下文引用， tripwire）。
 4. SQL 不自动继承旅游实体：SQL skill 模块源不含域上下文引用（无注入通道
    的结构性证明；行为面由 sql.read 权限门 + 六层校验兜底）。
 """
@@ -18,7 +18,6 @@ import inspect
 import backend.orchestration.graph.cs_graph_node as cs_adapter
 import backend.orchestration.graph.travel_graph_node as travel_adapter
 from backend.customer_service.graph_state import new_cs_graph_input
-from backend.selection_funnel.graph_state import new_selection_funnel_graph_input
 from backend.travel.graph_state import new_travel_graph_input
 
 _TRAVEL_INPUT_KEYS = {"user_message", "user_id", "session_id",
@@ -149,10 +148,10 @@ class TestTravelDestinationDoesNotLeakIntoCS:
 
 class TestGeneralAndSQLHaveNoDomainContextChannel:
     def test_general_chat_never_reads_domain_contexts(self):
-        """B8：Selection category → General 不成为 system-level state。"""
+        """B8：Travel destination 不成为 general_chat 的 system-level state。"""
         from backend.orchestration.graph import general_chat_node
         src = inspect.getsource(general_chat_node)
-        for key in ("cs_context", "travel_context", "funnel_context"):
+        for key in ("cs_context", "travel_context"):
             assert key not in src, key
 
     def test_sql_skill_never_reads_domain_contexts(self):
@@ -160,16 +159,8 @@ class TestGeneralAndSQLHaveNoDomainContextChannel:
         证明（SQL 只吃 question/plan 产物；行为面另有权限门兜底）。"""
         from backend.skills.sql import skill as sql_skill
         src = inspect.getsource(sql_skill)
-        for key in ("travel_context", "cs_context", "funnel_context"):
+        for key in ("travel_context", "cs_context"):
             assert key not in src, key
-
-    def test_funnel_input_keys_are_whitelisted(self):
-        out = new_selection_funnel_graph_input(
-            user_message="q", user_id="u", session_id="s",
-            conversation_id="c", funnel_context={"category": "耳机"},
-            run_id="r1")
-        assert set(out) == {"user_message", "user_id", "session_id",
-                            "conversation_id", "funnel_context", "run_id"}
 
     def test_travel_input_builder_keys_exact(self):
         out = new_travel_graph_input(

@@ -27,11 +27,6 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "memory_search_tool": "记忆检索",
     "memory_store_tool": "记忆写入",
     "memory_forget_tool": "记忆删除",
-    # ── 竞品 ──
-    "competitor_analyze_tool": "竞品分析",
-    "competitor_history_tool": "竞品价格历史",
-    "competitor_watch_tool": "竞品巡检",
-    "competitor_watchlist_tool": "竞品监控清单管理",
     # ── 地图（腾讯 LBS）──
     "map_geocode_tool": "地理编码",
     "map_reverse_geocode_tool": "逆地理编码",
@@ -160,10 +155,6 @@ TOOL_DATA_SOURCES: dict[str, dict[str, str]] = {
     "memory_search_tool": {"type": "internal"},
     "memory_store_tool": {"type": "internal"},
     "memory_forget_tool": {"type": "internal"},
-    "competitor_analyze_tool": {"type": "internal"},
-    "competitor_history_tool": {"type": "internal"},
-    "competitor_watch_tool": {"type": "internal"},
-    "competitor_watchlist_tool": {"type": "internal"},
     "travel_poi_search_tool": {"type": "internal"},
     # ── 收编重构 U4 三件（booking/food/hotel）──
     "booking_quote_tool": {"type": "internal"},

@@ -1,7 +1,7 @@
 """test_business_warehouse_schema.py — 业务数据仓库 schema 验证
 
 覆盖：
-- schema_loader 加载 7 个业务域
+- schema_loader 加载 7 个可问数业务域
 - allowed_tables 用 schema-qualified 全限定名
 - 反向索引：schema → tables
 - validator 接受 `product.products` 形式
@@ -22,15 +22,19 @@ from backend.sql.sql_validator import sql_validator, ValidationError
 # ─────────────────────────────────────────────────────────────
 
 class TestSchemaLoaderBusinessDomains:
-    """业务数据仓库：7 个 schema 域全部加载，19 张表按域分组。"""
+    """业务数据仓库：7 个可问数 schema 域加载，36 张表按域分组。"""
 
-    def test_seven_business_domains_loaded(self):
-        expected = {"product", "order", "inventory", "customer", "crawler", "finance", "ai"}
+    def test_seven_queryable_business_domains_loaded(self):
+        expected = {
+            "product", "order", "inventory", "customer", "finance",
+            "ai", "retail",
+        }
         assert schema_loader.allowed_schemas == expected
 
-    def test_eighteen_tables_loaded(self):
-        """核心 + 扩展共 18 张表，每张都是 schema-qualified 名。"""
-        assert len(schema_loader.allowed_tables) == 18
+    def test_thirty_six_tables_loaded(self):
+        """旧可问数业务表与零售 ERP 试点表共 36 张；crawler 域已退役。"""
+        assert len(schema_loader.allowed_tables) == 36
+        assert not any(table.startswith("crawler.") for table in schema_loader.allowed_tables)
         for t in schema_loader.allowed_tables:
             assert "." in t, f"表名 {t} 必须 schema-qualified"
 
@@ -40,9 +44,20 @@ class TestSchemaLoaderBusinessDomains:
             "order":   {"order.orders", "order.order_items", "order.refunds"},
             "inventory": {"inventory.inventory", "inventory.warehouses", "inventory.purchase_orders"},
             "customer": {"customer.customers", "customer.customer_behavior"},
-            "crawler": {"crawler.competitor_products", "crawler.competitor_price", "crawler.product_reviews"},
             "finance": {"finance.expenses", "finance.daily_profit"},
             "ai":      {"ai.agent_tasks", "ai.agent_trace"},
+            "retail": {
+                "retail.stores", "retail.warehouses", "retail.products",
+                "retail.suppliers", "retail.purchase_requests",
+                "retail.purchase_request_lines", "retail.purchase_orders",
+                "retail.purchase_order_lines", "retail.receipts",
+                "retail.receipt_lines", "retail.inventory_balances",
+                "retail.inventory_movements", "retail.product_batches",
+                "retail.stock_transfers", "retail.stock_transfer_lines",
+                "retail.stock_counts", "retail.stock_count_lines",
+                "retail.pos_sales", "retail.pos_sale_lines",
+                "retail.pos_returns", "retail.pos_return_lines",
+            },
         }
         for schema_name, expected_tables in by_schema.items():
             assert set(schema_loader.get_tables_in_schema(schema_name)) == expected_tables

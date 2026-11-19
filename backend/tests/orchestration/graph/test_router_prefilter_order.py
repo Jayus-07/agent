@@ -288,18 +288,6 @@ class TestCsRedirectMain:
         })
         assert out.get("route_mode") == "customer_service"
 
-    def test_funnel_query_redirects_out_of_locked_cs(
-        self, fake_detector, cs_on, monkeypatch,
-    ):
-        from backend.services import sys_config
-        sys_config._values["SELECTION_FUNNEL_ENABLED"] = "true"
-        out = rn.router_node({
-            "question": "给宠物零食做一次智能选品",
-            "session_id": "s-redirect-funnel",
-            "domain_hint": "customer_service",
-        })
-        assert out.get("route_mode") == "selection_funnel"
-
     def test_plain_cs_query_stays_locked(self, fake_detector, cs_on):
         """无他域信号的客服问题维持锁域（不被误转出）。"""
         out = rn.router_node({
@@ -410,19 +398,6 @@ class TestCsWindowStandalone:
         out = rn.router_node({
             "question": "下周去大阪旅游，帮我做一份攻略",
             "session_id": "s-standalone-travel",
-            "domain_hint": "customer_service",
-        })
-        assert out.get("route_mode") == "customer_service"
-
-    def test_funnel_query_stays_in_cs_window(
-        self, fake_detector, cs_on, monkeypatch,
-    ):
-        """独立窗口内问选品：不转出，放行进 CS 域图。"""
-        import backend.config.selection_funnel as sf
-        monkeypatch.setattr(sf, "SELECTION_FUNNEL_ENABLED", True)
-        out = rn.router_node({
-            "question": "给宠物零食做一次智能选品",
-            "session_id": "s-standalone-funnel",
             "domain_hint": "customer_service",
         })
         assert out.get("route_mode") == "customer_service"

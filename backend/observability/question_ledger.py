@@ -32,7 +32,7 @@ DOMAINS = ("travel", "sql", "planner", "cs", "rag", "ai_assistant")
 
 STATUS_VALUES = ("pending", "accepted", "dismissed")
 
-#: trace 三分类 → 台账域（None = 不收：rag 独立链 P2、selection_funnel 出域）
+#: trace 三分类 → 台账域（None = 不收：rag 独立链尚未接入台账）
 _SOURCE_TO_DOMAIN = {
     "travel": "travel",
     "cs": "cs",
@@ -131,7 +131,7 @@ def record_question_from_trace(
 ) -> bool:
     """trace 收口处的台账适配器（runner/travel 挂点共用）。
 
-    - domain 缺省时由 #12 的三分类推导（selection_funnel/rag_agent 不收）；
+    - domain 缺省时由 #12 的三分类推导；
     - 主图 plan 支线细分为 planner（runtime_execution_mode=plan）；
     - 合成问题（守卫拦截的占位文本 `[xxx]`）不收——那不是用户原话；
     - question/answer_summary 覆盖参数给**入口未掩码**的挂点用（主图

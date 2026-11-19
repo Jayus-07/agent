@@ -27,7 +27,6 @@ const PARTICIPANTS = {
   participants: [
     { route_mode: 'travel', display_name: '行程规划师', label: '旅游规划', tools: ['travel.poi_search'] },
     { route_mode: 'customer_service', display_name: '客服专员', label: '智能客服', tools: ['rag.search'] },
-    { route_mode: 'selection_funnel', display_name: '选品分析师', label: '智能选品', tools: ['web.search'] },
   ],
 }
 
@@ -86,11 +85,11 @@ describe('Agent 圆桌页面', () => {
     expect(container.textContent).toContain('讨论话题')
     expect(container.textContent).toContain('行程规划师')
     expect(container.textContent).toContain('客服专员')
-    expect(container.textContent).toContain('选品分析师')
+    expect(container.textContent).not.toContain('选品分析师')
     expect(container.textContent).toContain('开始圆桌')
     const checkboxes = container.querySelectorAll('input[type="checkbox"]')
-    expect(checkboxes.length).toBe(3)
-    // 默认预选前 3 个角色
+    expect(checkboxes.length).toBe(PARTICIPANTS.participants.length)
+    // 默认预选当前清单中的全部角色
     expect([...checkboxes].every((c) => (c as HTMLInputElement).checked)).toBe(true)
   })
 

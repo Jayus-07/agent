@@ -149,26 +149,23 @@ def test_override_removed_falls_back_to_env(fresh, monkeypatch):
 
 def test_get_config_lists_registered_switches(client, monkeypatch):
     # M16 域开关默认值断言须排除根 .env 的真实取值（测试基线=env 未设置）
-    for k in ("CS_ENABLED", "TRAVEL_ENABLED", "SELECTION_FUNNEL_ENABLED",
-              "CS_ROLLOUT_PERCENT"):
+    for k in ("CS_ENABLED", "TRAVEL_ENABLED", "CS_ROLLOUT_PERCENT"):
         monkeypatch.delenv(k, raising=False)
     r = client.get("/api/sys/config", headers=ADMIN_HEADERS)
     assert r.status_code == 200
     items = {i["key"]: i for i in r.json()["items"]}
-    # M16：+4 域开关（三总闸 + CS 灰度），GET /sys/config 即全量开关视图
+    # GET /sys/config 返回当前受支持业务域与守卫开关的完整视图。
     assert set(items) == {
         "JWT_SESSION_GUARD_MODE", "SENSITIVE_API_GUARD_MODE",
         "CS_DISPATCH_ROLLOUT_PERCENT",
-        "CS_ENABLED", "TRAVEL_ENABLED", "SELECTION_FUNNEL_ENABLED",
+        "CS_ENABLED", "TRAVEL_ENABLED",
         "CS_ROLLOUT_PERCENT",
-        # 多域隔离 M2（2026-10-06）：域入口模式三开关
+        # 多域隔离 M2（2026-10-06）：仍受支持域的入口模式
         "CS_GLOBAL_ENTRY_MODE", "TRAVEL_GLOBAL_ENTRY_MODE",
-        "SELECTION_GLOBAL_ENTRY_MODE",
     }
     # 入口模式默认 execute（行为零变化）
     assert items["CS_GLOBAL_ENTRY_MODE"]["mode"] == "execute"
     assert items["TRAVEL_GLOBAL_ENTRY_MODE"]["mode"] == "execute"
-    assert items["SELECTION_GLOBAL_ENTRY_MODE"]["mode"] == "execute"
     assert items["JWT_SESSION_GUARD_MODE"]["allowed"] == ["off", "audit", "enforce"]
     assert items["SENSITIVE_API_GUARD_MODE"]["source"] == "env-default"
     assert items["CS_DISPATCH_ROLLOUT_PERCENT"]["mode"] == "100"
@@ -176,7 +173,6 @@ def test_get_config_lists_registered_switches(client, monkeypatch):
     # 域开关默认关（env 未设置时），布尔归一合法集展示为空（validator 项）
     assert items["CS_ENABLED"]["mode"] == "false"
     assert items["TRAVEL_ENABLED"]["mode"] == "false"
-    assert items["SELECTION_FUNNEL_ENABLED"]["mode"] == "false"
     assert items["CS_ROLLOUT_PERCENT"]["mode"] == "100"
 
 

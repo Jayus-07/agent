@@ -99,10 +99,6 @@ _USER_CAP_LABELS = {
     "data.collect": "数据采集",
     "web.search": "网络搜索",
     "web.crawl": "网页抓取",
-    "competitor.analyze": "竞品分析",
-    "competitor.watch": "竞品监控",
-    "competitor.history": "竞品历史",
-    "selection_funnel": "智能选品漏斗",
     "travel.poi_search": "地点检索",
     "map.lookup": "地图查询",
     "email.send": "邮件发送",
@@ -407,34 +403,11 @@ def _coerce_final_answer(step: dict) -> str:
 
 
 def _build_workflow_inputs(wf_name: str, state: dict) -> dict:
-    """workflow 输入组装（纯函数，P2 选项 A：漏斗 Top-N → selection_decision）。
-
-    同会话先跑过漏斗时，主图状态 funnel_context.top 还在——把它作为
-    funnel_candidates 注入 selection_decision 输入，决策工作流优先吃
-    漏斗推荐单（candidates_from_funnel 为空时自动回落 watchlist）。
-    其他 workflow 维持原 {question, session_id} 契约不变。
-    """
+    """组装 workflow 输入。"""
     inputs = {
         "question": state.get("question", ""),
         "session_id": state.get("session_id", ""),
     }
-    if wf_name == "selection_decision":
-        # E1（2026-09-23）读取优先级：显式请求候选 > 当前 graph state
-        # funnel_context > ConversationContext（跨聊天轮载体，主图
-        # thread_id 每轮唯一，state 里的漏斗产出活不过本轮）。显式用户
-        # 输入永远高于历史缓存。
-        top = (state.get("funnel_context") or {}).get("top") or []
-        if not top:
-            from backend.orchestration.context.conversation_context import (
-                read_funnel_candidates_from_context,
-            )
-            top = read_funnel_candidates_from_context(
-                tenant_id=state.get("tenant_id", ""),
-                user_id=state.get("user_id", ""),
-                conversation_id=state.get("session_id", ""),
-            )
-        if top:
-            inputs["funnel_candidates"] = top
     return inputs
 
 

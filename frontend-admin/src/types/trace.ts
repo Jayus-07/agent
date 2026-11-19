@@ -294,7 +294,7 @@ export interface TraceFilter {
 }
 
 /** 来源三分类显示名（2026-10-08 #12，与后端 trace_source.SOURCE_LABELS 同口径；
- *  2026-10-30 补空串「其他」桶对齐 stats.by_domain，selection_funnel/rag
+ *  2026-10-30 补空串「其他」桶对齐 stats.by_domain，rag
  *  等未归类来源归入其他） */
 export const TRACE_SOURCE_LABELS: Record<string, string> = {
   travel: "旅游域",

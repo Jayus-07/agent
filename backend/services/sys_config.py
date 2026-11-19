@@ -97,11 +97,6 @@ _SWITCHES: dict[str, dict[str, Any]] = {
         "default": "false",
         "desc": "旅游域总闸（false=旅游预过滤不命中，走主 Router）",
     },
-    "SELECTION_FUNNEL_ENABLED": {
-        "validator": _bool_norm,
-        "default": "false",
-        "desc": "选品漏斗域总闸（false=选品预过滤不命中，走主 Router）",
-    },
     "CS_ROLLOUT_PERCENT": {
         "validator": lambda v: v if v.isdigit() and 0 <= int(v) <= 100 else None,
         "default": "100",
@@ -121,11 +116,6 @@ _SWITCHES: dict[str, dict[str, Any]] = {
         "allowed": ("execute", "guide"),
         "default": "execute",
         "desc": "旅游域全局入口模式（覆盖 travel/booking/commerce 三域图；guide=引导卡送旅游页，一次性景点/地点查询仍主图直答）",
-    },
-    "SELECTION_GLOBAL_ENTRY_MODE": {
-        "allowed": ("execute", "guide"),
-        "default": "execute",
-        "desc": "选品漏斗域全局入口模式（guide=引导卡送选品专属页）",
     },
 }
 
@@ -210,7 +200,7 @@ def _normalize(env_key: str, raw: Any) -> str | None:
 
 
 async def _ensure_tables(session) -> None:
-    """自建表（同 competitor/store.py 约定：CREATE TABLE IF NOT EXISTS 幂等）。"""
+    """自建表，使用 CREATE TABLE IF NOT EXISTS 保证幂等。"""
     await session.execute(text(
         "CREATE TABLE IF NOT EXISTS sys_config ("
         " key VARCHAR(64) PRIMARY KEY,"
