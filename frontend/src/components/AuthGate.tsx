@@ -21,10 +21,13 @@ import { getAccessToken, tryRefreshOnce } from "@/lib/auth";
 
 export default function AuthGate({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "/";
-  // 公开页：登录、注册、统一门户主页（/）均无需登录即可访问
+  // 公开页：登录、注册、统一门户主页（/）、SSO 回调页均无需登录即可访问。
+  // 回调页要用 code 换 token，此时必然还没有 token；若被守卫拦截会在
+  // completeSsoLogin 之前被弹回门户，扫码登录闭环直接断裂。
   const isPublic =
     pathname === "/login" ||
     pathname === "/register" ||
+    pathname === "/login/sso/callback" ||
     pathname === "/";
   const [state, setState] = useState<"checking" | "ok">("checking");
 

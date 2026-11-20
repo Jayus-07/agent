@@ -498,3 +498,12 @@
 - 合并冲突保留了 main 的 ERP 专属表路由和竞品退役规则，也接入订单域取消订单过滤。另加回归防止 POS 排名混入旧 demo 的订单表。
 - 定向验证：后端 9 个文件 189 passed；前端结果卡、值展示和回答呈现 3 个文件 64 passed。`git diff --check` 和 v7 manifest hash 检查通过。这些是离线验证，不等于真实页面和真实业务结果验收。
 - 尚未对重建后的 65 条 v7 执行隔离库结果级评测；未用版本一致的真实后端复测 SQL、RAG、Conversation-first 或回复文案；共享服务未重建、重启。该分支尚未提交或合并。
+
+## 2026-11-20：P1 扫码回调守卫与 P2 存量库补齐修复
+
+- P1（登录扫码回调拦截）：`AuthGate.tsx` 公开页清单缺 `/login/sso/callback`；回调页要用 code 换 token、加载时必然无 token，未登录用户扫码回来会在 `completeSsoLogin` 之前被弹回统一门户，扫码闭环断裂。已放行该路径，`AuthGate.test.tsx` 补回调页公开与续期失败不弹回两组用例（9 passed）。
+- P2（旧数据库补齐）：隔离旧库副本两阶段验证发现比"漏 008"更深的两层问题：① `MEMORY_MIGRATIONS` 手工清单与 `init_db.MIGRATION_TARGETS` 唯一事实源漂移——151 的 `auth.users` schema 是 008→131 一串迁移演化的，只补 008 后 151 仍因缺 `tenant_id` 列失败（已复现）；② `ensure_dbs._apply_migration` 简化裸执行路径不登记跟踪表，存量库重跑 003/031 因 ON CONFLICT 约束重建/引用列变更而报错（幂等重跑复现）。
+- 修复：memory 清单改为从 `discover_migrations()` 动态派生（134 个，排除运行时托管 049），应用统一委托 `init_db.apply_migration`（跟踪表 checksum、冻结校验、逐语句降级继承），memory 循环前建 `public.schema_migrations`；business 权限链清单与 NOLOGIN 门控不变。
+- 隔离验证（本机 PG 5432 临时库，全程未触碰现有库，已清理）：阶段一只跑 151 复现 `auth` schema 缺失失败；阶段二派生清单建齐 134/134 applied、auth 系 11 表与 151 唯一索引全部建出；第二遍存量重跑 134/134 skipped 零 error。
+- 定向测试：`test_auth_sso_migration.py` + `test_startup_validation.py` 63 passed；前端 AuthGate 9 passed。Docker Desktop 未预启动，本机验证未动共享栈；共享栈由 Docker Desktop 自恢复拉起，本轮未重建、未写入。
+- 修复尚未提交；P1/P2 改动与既有 26 个暂存文件同工作树未提交状态共存，等待用户确认提交。

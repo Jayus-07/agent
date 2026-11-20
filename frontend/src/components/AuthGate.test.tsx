@@ -69,9 +69,20 @@ async function flush() {
 }
 
 describe('AuthGate 公开页', () => {
-  it.each(['/', '/login', '/register'])('%s 直接放行且不触发跳转', (pathname) => {
+  // /login/sso/callback 必须公开：回调页加载时还没有 token（要靠 code 换），
+  // 若被守卫拦截会在 completeSsoLogin 之前被弹回门户，扫码登录闭环断裂。
+  it.each(['/', '/login', '/register', '/login/sso/callback'])('%s 直接放行且不触发跳转', (pathname) => {
     nav.pathname = pathname
     const container = mount()
+    expect(container.querySelector('#guarded')).not.toBeNull()
+    expect(assignSpy).not.toHaveBeenCalled()
+    expect(auth.tryRefreshOnce).not.toHaveBeenCalled()
+  })
+
+  it('SSO 回调页在续期失败时也不弹回门户（回归：扫码闭环）', async () => {
+    nav.pathname = '/login/sso/callback'
+    const container = mount()
+    await flush()
     expect(container.querySelector('#guarded')).not.toBeNull()
     expect(assignSpy).not.toHaveBeenCalled()
     expect(auth.tryRefreshOnce).not.toHaveBeenCalled()
