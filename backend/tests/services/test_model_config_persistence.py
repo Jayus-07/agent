@@ -130,6 +130,8 @@ async def test_create_provider_registers_model_and_encrypts_key(monkeypatch):
             "baseUrl": "https://provider.example/v1",
             "apiKey": "sk-secret-value",
             "modelName": "custom-model",
+            "inputPricePer1m": "0.002",
+            "outputPricePer1m": "0.006",
         },
         "user:test-admin",
     )
@@ -232,6 +234,80 @@ async def test_update_provider_invalidates_manual_health_after_credential_rotati
     )
     assert session.commit_count == 1
     refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_provider_new_model_without_price_is_rejected(monkeypatch):
+    """2026-11-20 收口：编辑抽屉追加未登记模型名（= 新增登记）时，
+    metered 缺价且该模型无生效价 → 拒绝，防止经「改名」绕过创建校验。"""
+    provider_row = {
+        "id": "custom-provider",
+        "display_name": "Custom",
+        "driver": "openai",
+        "base_url": "https://provider.example/v1",
+        "network_scope": "public",
+        "extra_headers": {},
+        "extra_body": {},
+        "billing": "metered",
+        "enabled": True,
+        "is_builtin": False,
+    }
+    credential_row = {
+        "key_fingerprint": "old-fingerprint",
+        "key_last4": "1234",
+        "key_version": 1,
+        "updated_at": None,
+        "updated_by": "user:old-admin",
+    }
+
+    class _UpdateResult:
+        def __init__(self, row):
+            self.row = row
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self.row
+
+    class _UpdateSession:
+        def __init__(self):
+            self.statements = []
+            self.commit_count = 0
+
+        async def execute(self, statement, _params=None):
+            sql = str(statement)
+            self.statements.append(sql)
+            if "SELECT * FROM llm_providers WHERE id" in sql:
+                return _UpdateResult(provider_row)
+            if "SELECT key_fingerprint, key_last4, key_version" in sql:
+                return _UpdateResult(credential_row)
+            # 其余查询（含 llm_models 是否已登记、_has_effective_price）一律无行
+            return _UpdateResult(None)
+
+        async def commit(self):
+            self.commit_count += 1
+
+    session = _UpdateSession()
+    monkeypatch.setattr(model_config, "get_session", lambda: _session_stream(session))
+
+    with pytest.raises(ValueError, match="尚未配置生效单价"):
+        await model_config.ModelConfigService().update_provider(
+            "custom-provider",
+            {
+                "displayName": "Custom",
+                "driver": "openai",
+                "baseUrl": "https://provider.example/v1",
+                "networkScope": "public",
+                "billing": "metered",
+                "enabled": True,
+                "modelName": "brand-new-model",
+            },
+            "user:test-admin",
+        )
+
+    assert not any("INSERT INTO llm_models" in s for s in session.statements)
+    assert session.commit_count == 0
 
 
 @pytest.mark.parametrize(
@@ -389,6 +465,8 @@ async def test_create_provider_does_not_persist_when_probe_fails(monkeypatch):
                 "baseUrl": "https://provider.example/v1",
                 "apiKey": "sk-secret-value",
                 "modelName": "bad-model",
+                "inputPricePer1m": "0.002",
+                "outputPricePer1m": "0.006",
                 "probe": True,
             },
             "user:test-admin",
@@ -402,6 +480,11 @@ async def test_create_provider_without_probe_saves_directly(monkeypatch):
         raise AssertionError("缺省保存不得探测")
 
     monkeypatch.setattr(model_config.provider_probe, "probe_provider", _no_probe)
+    # 价格校验前移后带价创建会走 _apply_model_pricing；本测试只关心
+    # 「缺省保存不探测」，价格落库细节由 with_prices 测试覆盖。
+    monkeypatch.setattr(
+        model_config, "_apply_model_pricing", AsyncMock(return_value=None)
+    )
 
     class _SaveSession:
         def __init__(self):
@@ -437,6 +520,8 @@ async def test_create_provider_without_probe_saves_directly(monkeypatch):
             "baseUrl": "https://provider.example/v1",
             "apiKey": "sk-secret-value",
             "modelName": "qwen3.7-flash",
+            "inputPricePer1m": "0.002",
+            "outputPricePer1m": "0.006",
         },
         "user:test-admin",
     )
@@ -518,6 +603,7 @@ async def test_create_provider_claims_same_model_from_legacy_specialized_provide
             "apiKey": "sk-new-placeholder",
             "modelName": "qwen3.7-text-embedding",
             "modelKind": "embedding",
+            "inputPricePer1m": "0.0005",
         },
         "user:test-admin",
     )
@@ -736,24 +822,46 @@ def _create_provider_env(monkeypatch, session):
 
 
 @pytest.mark.asyncio
-async def test_create_provider_metered_without_price_flags_needs_pricing(monkeypatch):
-    """1.2 同堵（评审 P3-2）：metered 创建缺价仍可建（先建后补价的既有
-    流程），响应标 needs_pricing 提示补价；不落任何 model_price 行。"""
+async def test_create_provider_metered_without_price_is_rejected(monkeypatch):
+    """2026-11-20 收口：metered 创建缺价直接拒绝（「先建后补价」流程退役
+    ——缺价模型在 enforce 预算下被 price_unavailable 全量拒调用），且
+    不落任何供应商/模型/价格行。"""
     session = _CreateSession()
     _create_provider_env(monkeypatch, session)
 
-    result = await model_config.ModelConfigService().create_provider(
-        {
-            "baseUrl": "https://provider.example/v1",
-            "apiKey": "sk-secret-value",
-            "modelName": "custom-model",
-        },
-        "user:test-admin",
-    )
+    with pytest.raises(ValueError, match="需同时填写输入与输出单价"):
+        await model_config.ModelConfigService().create_provider(
+            {
+                "baseUrl": "https://provider.example/v1",
+                "apiKey": "sk-secret-value",
+                "modelName": "custom-model",
+            },
+            "user:test-admin",
+        )
 
-    assert result["modelName"] == "custom-model"
-    assert result.get("needs_pricing") is True
+    assert not any("INSERT INTO llm_providers" in s for s in session.statements)
+    assert not any("INSERT INTO llm_models" in s for s in session.statements)
     assert not any("INSERT INTO model_price" in s for s in session.statements)
+
+
+@pytest.mark.asyncio
+async def test_create_provider_embedding_metered_without_price_is_rejected(monkeypatch):
+    """同口径：metered embedding 缺输入单价同样拒绝。"""
+    session = _CreateSession()
+    _create_provider_env(monkeypatch, session)
+
+    with pytest.raises(ValueError, match="需填写输入单价"):
+        await model_config.ModelConfigService().create_provider(
+            {
+                "baseUrl": "https://provider.example/v1",
+                "apiKey": "sk-secret-value",
+                "modelName": "custom-embedding",
+                "modelKind": "embedding",
+            },
+            "user:test-admin",
+        )
+
+    assert not any("INSERT INTO llm_providers" in s for s in session.statements)
 
 
 @pytest.mark.asyncio

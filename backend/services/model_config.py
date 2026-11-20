@@ -173,6 +173,31 @@ def _validate_model_pricing(
     return component
 
 
+async def _has_effective_price(session: Any, model_name: str, component: str) -> bool:
+    """该模型组件当前是否存在可见生效价（在线计费同一可见性谓词）。
+
+    与 pricing.current_price_eligibility_sql 对齐：active 治理版本行，或
+    provider-page 直登价（且该模型组件无 active 治理版本）。
+    """
+    from backend.infra.llm.pricing import current_price_eligibility_sql
+
+    row = (
+        await session.execute(
+            text(
+                "SELECT 1 FROM model_price p "
+                "LEFT JOIN model_price_versions v "
+                "ON v.version = p.price_table_version AND v.source = p.source "
+                "WHERE p.model_name = :model_name AND p.component = :component "
+                "AND p.approval_status = 'approved' AND p.effective_to IS NULL "
+                "AND " + current_price_eligibility_sql("model_price", "model_price_versions") +
+                " LIMIT 1"
+            ),
+            {"model_name": model_name, "component": component},
+        )
+    ).first()
+    return row is not None
+
+
 async def _apply_model_pricing(
     session: Any,
     *,
@@ -1691,6 +1716,29 @@ class ModelConfigService:
                     "rotatedBy": operator,
                 }
             if model_name is not None:
+                # 2026-11-20 收口（与 create_provider 同口径）：编辑抽屉里
+                # 填一个未登记过的模型名 = 新增登记；metered 且未带价时，
+                # 若该模型也不存在生效价则拒绝——避免经「改名」绕过创建
+                # 校验产生无价模型（enforce 预算下会全量拒调用）。
+                # 已登记模型不带价 = 仅改供应商信息/顺带补价，不做强制。
+                component = _COMPONENT_BY_MODEL_KIND.get(model_kind, "llm")
+                if billing == "metered" and input_price is None and output_price is None:
+                    existing_model = (
+                        await session.execute(
+                            text(
+                                "SELECT 1 FROM llm_models "
+                                "WHERE provider_id = :provider_id AND name = :model_name"
+                            ),
+                            {"provider_id": provider_id, "model_name": model_name},
+                        )
+                    ).first()
+                    if existing_model is None and not await _has_effective_price(
+                        session, model_name, component
+                    ):
+                        raise ValueError(
+                            f"按量计费模型「{model_name}」尚未配置生效单价："
+                            "请同时填写输入与输出单价（每 1M tokens）后保存"
+                        )
                 model_kind = await self._upsert_model(
                     session,
                     provider_id=provider_id,
@@ -2355,10 +2403,21 @@ class ModelConfigService:
         if billing not in {"metered", "subscription", "local"}:
             raise ValueError("billing 只能是 metered、subscription 或 local")
         # 1.2 同堵（2026-11-10 独立评审 P3-2）：创建供应商允许直接带模型
-        # 单价，与 add_provider_model 同口径校验+落价；metered 未带价仍可
-        # 创建（先建后补价的既有流程），响应标 needs_pricing 提示补价。
+        # 单价，与 add_provider_model 同口径校验+落价。
+        # 2026-11-20 收口：metered 未带价不再放行——缺价模型在 enforce
+        # 预算下会被 price_unavailable 全量拒调用（共享栈实测事故：
+        # glm-5.3-flash 无生效价格导致所有对话 BUDGET_EXCEEDED），故与
+        # add_provider_model 同口径硬校验，「先建后补价」流程退役。
         input_price, output_price, cached_input_price, price_currency = (
             _parse_model_price(payload)
+        )
+        _validate_model_pricing(
+            provider_row={"billing": billing},
+            model_name=model_name,
+            model_kind=model_kind,
+            input_price=input_price,
+            output_price=output_price,
+            cached_input_price=cached_input_price,
         )
         extra_headers = _normalize_extra_headers(payload.get("extraHeaders"))
         extra_body = _normalize_extra_body(payload.get("extraBody"))
