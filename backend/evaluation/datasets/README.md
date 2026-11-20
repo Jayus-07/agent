@@ -23,7 +23,7 @@
 - `cs.v1.deprecated.json`：旧 cs 集（ID CS001~020），与新集零交集，2026-09-15 标记弃用。
 - `cs/v2.deprecated/`：cs-v2 生成中间分片归档（2026-11-02 治理定案，由 `cs/v2/` 改名）。304 条 = 与锁版逐字段一致的 300 条 + 4 条候选（t_balance_query×2 / t_order_cancel×2；P2 评审规则层无覆盖暂不收编，P3 词表扩圈后回放全绿并已按锁版流程收编进 v2.2，本目录仅存历史归档）。锁版 `cs/cases.jsonl` 是唯一事实源，分片不再维护；后续增补一律走锁版升版流程（升版本号 + 重算 sha256）。
 - `planner.v1.deprecated.json`：迁移前的顶层 planner.json 原件留档。
-- `sql_v2/` 至 `sql_v5/` 是不可变历史快照，不再接受新评测加载；当前 SQL 候选为 `sql_v6/cases.jsonl`（65 条），在 sql_v5 业务问数修正上将 4 条退役 crawler 来源题改为拒答，并并入 20 条零售 ERP 合成业务用例。`sql_retail_erp_v1/` 是已并入 v6 的历史组成集。结果级 live 评测命令为 `--module sql --dataset sql_v6/cases.jsonl --live --no-ragas`，会调用真实 SQL Agent 和数据库；共享环境空闲、服务健康且获准运行时再执行。
+- `sql_v2/` 至 `sql_v5/` 是不可变历史快照，不再接受新评测加载。`sql_v6/cases.jsonl` 是 65 条 SQL 候选基线，含已退役 crawler 来源题拒答用例和 20 条零售 ERP 合成用例；`sql_retail_erp_v1/` 是已并入 v6 的历史组成集。`sql_v7/cases.jsonl` 在 v6 上修正 SC-002、SC-107、SC-112、SC-125，仍保留 65 条，并验证销量/销售额排名过滤已取消订单；该候选不进入默认 SQL 集。结果级 live 评测可用 `--module sql --dataset sql_v7/cases.jsonl --live --no-ragas`，需在共享环境空闲、服务健康且获准时运行。
 - `sql/cases.v1.0.deprecated.jsonl` 与 `sql/manifest.v1.0.deprecated.json` 只用于历史审计；当前有效默认 SQL 集为 v1.1，竞品采集域问题仅作为 `no_table` 拒答样例，不允许生成或评测 `crawler.competitor_*` 查询。
 - `sql/golden_v2.deprecated.jsonl` 是旧 SQL Golden 的重复归档副本；loader 会拒绝 `.deprecated.` 文件，所有 SQL 用例加载入口也会拒绝 gold SQL/目标表引用已退役 crawler 表。
 - `GROUND_TRUTH_ENRICHMENT_PLAN.md`：数据集增强计划文档（历史）。

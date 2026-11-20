@@ -7,7 +7,9 @@
   3. 离线 runner 全部 pass/skip（对抗用例无 gold SQL）
   4. runner 的表提取与结果集比对辅助函数
 """
+import json
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -248,7 +250,7 @@ def test_current_sql_datasets_do_not_allow_retired_crawler_tables():
 
     cases = load_dataset("sql") + load_dataset_file(
         "sql_v6/cases.jsonl", default_module="sql"
-    )
+    ) + load_dataset_file("sql_v7/cases.jsonl", default_module="sql")
     for case in cases:
         expected = case.expected
         assert not any(
@@ -273,6 +275,34 @@ def test_sql_loader_rejects_retired_tables_in_arbitrary_dataset_files(
 
     with pytest.raises(ValueError, match="已退役的 crawler 表"):
         loader.load_dataset_file("legacy.jsonl", default_module="sql")
+
+
+def test_sql_v7_candidate_is_loadable_and_schema_valid():
+    from backend.evaluation.dataset import load_dataset_file
+    from backend.evaluation.preflight import run_schema_preflight
+
+    filename = "sql_v7/cases.jsonl"
+    cases = load_dataset_file(filename, default_module="sql")
+    preflight = run_schema_preflight(["sql"], dataset_path=filename)
+
+    assert len(cases) == 65
+    assert {case.module for case in cases} == {"sql"}
+    assert {case.metadata["dataset_version"] for case in cases} == {"7.0"}
+    assert preflight.passed
+    assert preflight.identity["case_counts"] == {"sql": 65}
+
+    from backend.evaluation.dataset.loader import file_content_hash
+
+    manifest = json.loads(
+        (Path(__file__).resolve().parents[2]
+         / "evaluation" / "datasets" / "sql_v7" / "manifest.json")
+        .read_text(encoding="utf-8")
+    )
+    assert manifest["parent_dataset"] == "sql_v6"
+    assert manifest["content_hash"] == file_content_hash(
+        Path(__file__).resolve().parents[2]
+        / "evaluation" / "datasets" / "sql_v7" / "cases.jsonl"
+    )
 
 
 def test_explicit_sql_dataset_uses_sql_runner_and_records_version(monkeypatch):

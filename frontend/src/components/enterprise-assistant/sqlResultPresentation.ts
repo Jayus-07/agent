@@ -12,6 +12,43 @@ const DATE_COLUMN = /(日期|时间|年月|月份|(?:^|[^a-z])(?:period|date|dat
 const DATE_VALUE = /^(?:\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?(?:[ T]\d{1,2}:\d{2})?|\d{4}年\d{1,2}月(?:\d{1,2}日?)?(?:[ T]\d{1,2}:\d{2})?)$/
 const COMPACT_DATE_VALUE = /^\d{6}(?:\d{2})?$/
 const NUMERIC_VALUE = /^[+-]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?%?$/
+const EXPLICIT_PERCENT_COLUMN = /(?:^|[_\s])(?:percent(?:age)?|pct)(?:$|[_\s])|[%％]|百分比/i
+const FRACTION_RATE_COLUMN = /(?:^|[_\s])(?:rate|ratio)(?:$|[_\s])|率|占比|比例|比率/i
+const SQL_COLUMN_LABELS: Record<string, string> = {
+  active_product_count: '在售商品数',
+  average_order_value: '客单价',
+  category_name: '商品分类',
+  current_month_sales: '本月累计销售额',
+  current_stock: '当前库存',
+  customer_count: '客户数',
+  customer_id: '客户 ID',
+  month: '月份',
+  mom_growth_percent: '增长百分比',
+  order_count: '订单数',
+  order_id: '订单号',
+  previous_period_sales: '上月同期销售额',
+  product_count: '商品数',
+  product_id: '商品 ID',
+  product_name: '商品',
+  refund_amount: '退款金额',
+  refund_count: '退款单数',
+  refund_date: '退款日期',
+  refund_order_count: '退款单数',
+  refund_rate: '退款率',
+  region: '地区',
+  safety_stock: '安全库存',
+  sales_amount: '销售额',
+  sales_volume: '销量',
+  total_qty: '销量',
+  total_sales: '销售额',
+  warehouse_name: '所在仓库',
+}
+
+/** 将常见 SQL 别名映射为用户能读懂的列名；未知别名保留原样。 */
+export function displaySQLColumnLabel(column: string): string {
+  const normalized = column.trim().toLowerCase().replace(/\s+/g, '_')
+  return SQL_COLUMN_LABELS[normalized] || column.trim()
+}
 
 export function isUnsafeSQLInteger(value: unknown): value is number {
   return typeof value === 'number'
@@ -99,15 +136,66 @@ function numericIndexes(result: SQLResultSet): number[] {
 
 export function isPercentageSQLColumn(result: SQLResultSet, index: number): boolean {
   const values = result.rows.map((row) => row[index])
+  const column = (result.columns[index] || '').replace(/([a-z])([A-Z])/g, '$1 $2')
   return values.length > 0
-    && values.every((value) => typeof value === 'string' && value.trim().endsWith('%'))
+    && (values.every((value) => typeof value === 'string' && value.trim().endsWith('%'))
+      || EXPLICIT_PERCENT_COLUMN.test(column)
+      || FRACTION_RATE_COLUMN.test(column))
+}
+
+function shiftDecimalRight(value: string, places: number): string | null {
+  const normalized = value.trim().replaceAll(',', '')
+  const parts = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(normalized)
+  if (!parts) return null
+
+  const sign = parts[1]
+  const integer = parts[2]
+  const fraction = parts[3] || ''
+  const digits = `${integer}${fraction}`
+  const point = integer.length + places
+  const whole = point >= digits.length
+    ? `${digits}${'0'.repeat(point - digits.length)}`
+    : digits.slice(0, point)
+  const decimal = point >= digits.length ? '' : digits.slice(point)
+  const normalizedWhole = whole.replace(/^0+(?=\d)/, '') || '0'
+  const normalizedDecimal = decimal.replace(/0+$/, '')
+  const isZero = /^0+$/.test(normalizedWhole) && !normalizedDecimal
+  return `${sign === '-' && !isZero ? '-' : ''}${normalizedWhole}${normalizedDecimal ? `.${normalizedDecimal}` : ''}`
+}
+
+/** 按列名约定把比例转成百分数展示，原始查询值仍保留在结果载荷中。 */
+export function formatSQLResultValue(
+  value: string | number | boolean | null | undefined,
+  result: SQLResultSet,
+  index: number,
+): string {
+  if (value == null) return '—'
+  const raw = String(value).trim()
+  if (!isPercentageSQLColumn(result, index) || raw.endsWith('%')) return String(value)
+
+  const column = (result.columns[index] || '').replace(/([a-z])([A-Z])/g, '$1 $2')
+  if (EXPLICIT_PERCENT_COLUMN.test(column)) return `${raw}%`
+
+  const shifted = shiftDecimalRight(raw, 2)
+  if (shifted != null) return `${shifted}%`
+  const parsed = parseSQLChartNumber(value)
+  return parsed == null ? String(value) : `${formatSQLChartNumber(parsed * 100)}%`
 }
 
 /** 只在字段含义足够明确时画图；不确定时回退明细表。 */
 export function chooseSQLChartPresentation(result: SQLResultSet): SQLChartPresentation {
   const values = numericIndexes(result)
-  if (result.rows.length === 1 && values.length > 0) {
-    return { kind: values.length === 1 ? 'metric' : 'metrics', valueIndexes: values }
+  if (result.rows.length === 1) {
+    const unavailablePercentIndexes = result.columns.flatMap((_, index) => (
+      result.rows[0]?.[index] == null && isPercentageSQLColumn(result, index) ? [index] : []
+    ))
+    const metricIndexes = [...values, ...unavailablePercentIndexes]
+    if (metricIndexes.length > 0) {
+      return {
+        kind: metricIndexes.length === 1 ? 'metric' : 'metrics',
+        valueIndexes: metricIndexes,
+      }
+    }
   }
 
   const dateIndexes = result.columns.flatMap((_, index) => isDateColumn(result, index) ? [index] : [])

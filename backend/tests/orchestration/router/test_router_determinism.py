@@ -69,3 +69,30 @@ class TestCompositeIntent:
         d = router.route("每天查询库存不足的商品并发送邮件提醒")
         assert d is not None
         assert d.execution_mode == ExecutionMode.WORKFLOW
+
+
+class TestDailyMetricRouting:
+    def test_inventory_detail_request_is_sql_not_clarification(self, router):
+        query = "列出库存低于安全库存的商品、所在仓库、当前库存和安全线。"
+
+        decision = router.route(query)
+
+        assert decision is not None
+        assert decision.execution_mode == ExecutionMode.DIRECT
+        assert decision.candidates[0].name == "sql.query"
+
+    def test_daily_refund_count_is_sql_not_a_daily_report_workflow(self, router):
+        query = "最近 7 个自然日（含今天）每天的退款单数，没发生退款的日期也显示 0。"
+
+        decision = router.route(query)
+
+        assert decision is not None
+        assert decision.execution_mode == ExecutionMode.DIRECT
+        assert decision.candidates[0].name == "sql.query"
+
+    def test_explicit_daily_report_generation_remains_a_workflow(self, router):
+        decision = router.route("请每天生成销售日报")
+
+        assert decision is not None
+        assert decision.execution_mode == ExecutionMode.WORKFLOW
+        assert decision.workflow_name == "daily_report"

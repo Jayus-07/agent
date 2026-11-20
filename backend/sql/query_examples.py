@@ -47,6 +47,8 @@ SQL_QUERY_EXAMPLES: tuple[SQLQueryExample, ...] = (
         key="category_sales_rank",
         question="排除已取消订单，按商品明细数量乘以单价统计各分类销售额排名",
         aliases=(
+            "统计各商品分类的销售额排名",
+            "各分类销售额排名",
             "排除已取消订单后按商品明细统计分类销售额",
         ),
         tables=frozenset({
@@ -63,9 +65,41 @@ SQL_QUERY_EXAMPLES: tuple[SQLQueryExample, ...] = (
             "JOIN \"order\".order_items oi ON oi.product_id = p.id\n"
             "JOIN \"order\".orders o ON o.id = oi.order_id\n"
             "WHERE o.status <> 'cancelled'\n"
-            "GROUP BY c.name\n"
+            "GROUP BY c.id, c.name\n"
             "ORDER BY sales_amount DESC\n"
             "LIMIT 100"
+        ),
+    ),
+    SQLQueryExample(
+        key="top_products_in_top_sales_category",
+        question="销售额最高的分类下卖得最好的三个商品是什么",
+        aliases=(
+            "销售额最高分类里的商品销售额前三名",
+            "销售额最高的品类中卖得最好的三个商品",
+        ),
+        tables=frozenset({
+            "product.products", "order.order_items", "order.orders",
+        }),
+        sql=(
+            "SELECT p.product_name, "
+            "SUM(oi.quantity * oi.price) AS sales_amount\n"
+            'FROM "order".order_items oi\n'
+            'JOIN "order".orders o ON o.id = oi.order_id\n'
+            "JOIN product.products p ON p.id = oi.product_id\n"
+            "WHERE o.status <> 'cancelled'\n"
+            "  AND p.category_id = (\n"
+            "      SELECT p2.category_id\n"
+            '      FROM "order".order_items oi2\n'
+            '      JOIN "order".orders o2 ON o2.id = oi2.order_id\n'
+            "      JOIN product.products p2 ON p2.id = oi2.product_id\n"
+            "      WHERE o2.status <> 'cancelled'\n"
+            "      GROUP BY p2.category_id\n"
+            "      ORDER BY SUM(oi2.quantity * oi2.price) DESC\n"
+            "      LIMIT 1\n"
+            "  )\n"
+            "GROUP BY p.id, p.product_name\n"
+            "ORDER BY sales_amount DESC\n"
+            "LIMIT 3"
         ),
     ),
     SQLQueryExample(
@@ -81,6 +115,68 @@ SQL_QUERY_EXAMPLES: tuple[SQLQueryExample, ...] = (
             "FROM \"order\".orders\n"
             "WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'\n"
             "LIMIT 100"
+        ),
+    ),
+    SQLQueryExample(
+        key="top_selling_products",
+        question="销量最高的前 5 个商品及销量是什么",
+        aliases=("销量最高的前5个商品及销量是什么",),
+        tables=frozenset({
+            "product.products", "order.order_items", "order.orders",
+        }),
+        sql=(
+            "SELECT p.product_name, SUM(oi.quantity) AS total_qty\n"
+            'FROM "order".order_items oi\n'
+            'JOIN "order".orders o ON o.id = oi.order_id\n'
+            "JOIN product.products p ON p.id = oi.product_id\n"
+            "WHERE o.status <> 'cancelled'\n"
+            "GROUP BY p.id, p.product_name\n"
+            "ORDER BY total_qty DESC\n"
+            "LIMIT 5"
+        ),
+    ),
+    SQLQueryExample(
+        key="current_month_sales_growth",
+        question="截至今天本月累计销售额比上月同期增长了百分之几",
+        aliases=("本月累计销售额比上月同期增长百分之几",),
+        tables=frozenset({"order.orders"}),
+        sql=(
+            "SELECT current_period.current_month_sales,\n"
+            "       previous_period.previous_period_sales,\n"
+            "       CASE WHEN previous_period.previous_period_sales > 0\n"
+            "            THEN ROUND(\n"
+            "                (current_period.current_month_sales\n"
+            "                 - previous_period.previous_period_sales)\n"
+            "                / previous_period.previous_period_sales * 100, 2\n"
+            "            )\n"
+            "            ELSE NULL\n"
+            "       END AS mom_growth_percent\n"
+            "FROM (\n"
+            "    SELECT COALESCE(SUM(o.total_amount), 0) AS current_month_sales\n"
+            '    FROM "order".orders o\n'
+            "    WHERE o.created_at >= CURRENT_DATE\n"
+            "          - (EXTRACT(DAY FROM CURRENT_DATE)::int - 1)\n"
+            "      AND o.created_at < CURRENT_DATE + 1\n"
+            ") AS current_period\n"
+            "CROSS JOIN (\n"
+            "    SELECT COALESCE(SUM(o.total_amount), 0) AS previous_period_sales\n"
+            '    FROM "order".orders o\n'
+            "    CROSS JOIN (\n"
+            "        SELECT CURRENT_DATE\n"
+            "               - (EXTRACT(DAY FROM CURRENT_DATE)::int - 1)\n"
+            "               AS current_month_start\n"
+            "    ) AS bounds\n"
+            "    WHERE o.created_at >= (bounds.current_month_start\n"
+            "                          - INTERVAL '1 month')::date\n"
+            "      AND o.created_at < CASE\n"
+            "          WHEN (bounds.current_month_start - INTERVAL '1 month')::date\n"
+            "                   + (CURRENT_DATE + 1 - bounds.current_month_start)\n"
+            "               < bounds.current_month_start\n"
+            "          THEN (bounds.current_month_start - INTERVAL '1 month')::date\n"
+            "                   + (CURRENT_DATE + 1 - bounds.current_month_start)\n"
+            "          ELSE bounds.current_month_start\n"
+            "      END\n"
+            ") AS previous_period"
         ),
     ),
     SQLQueryExample(
@@ -140,6 +236,11 @@ _NEGATION_SCOPE_BREAKS = (
     "改看", "改统计", "需要", "现在", "这次", "本次", "另外", "然后",
     "同时", "并且", "而要",
 )
+_CANCELLED_ORDER_INCLUDE_PHRASES = (
+    "包含已取消订单", "包括已取消订单", "包含取消订单", "包括取消订单",
+    "不排除已取消订单", "不排除取消订单", "不要排除已取消订单",
+    "不要排除取消订单", "把取消订单也算上", "已取消订单也计入",
+)
 
 
 def _normalize_phrase(value: str) -> str:
@@ -195,9 +296,16 @@ def select_query_examples(
     available_tables = {
         table.casefold() for table in (table_names or ())
     }
+    includes_cancelled_orders = any(
+        _normalize_phrase(phrase) in normalized_question
+        for phrase in _CANCELLED_ORDER_INCLUDE_PHRASES
+    )
     ranked: list[tuple[int, str, SQLQueryExample]] = []
 
     for example in SQL_QUERY_EXAMPLES:
+        if (includes_cancelled_orders
+                and "status <> 'cancelled'" in example.sql.casefold()):
+            continue
         if not {table.casefold() for table in example.tables} <= available_tables:
             continue
 

@@ -92,6 +92,58 @@ describe('presentAssistantAnswer', () => {
     expect(presented).not.toContain('| 月份 | 销售额 |')
   })
 
+  it('restores a concise metric conclusion when the SQL table and count are the whole answer', () => {
+    const answer = [
+      '## 查询结果',
+      '',
+      '### 数据库查询',
+      '',
+      '查询成功，共 1 行。',
+      '',
+      '| active_product_count |',
+      '|:---:|',
+      '| 54 |',
+    ].join('\n')
+    const sqlResult = {
+      title: '数据库查询',
+      columns: ['active_product_count'],
+      rows: [[54]],
+      total_rows: 1,
+      total_rows_known: true,
+      omitted_columns: 0,
+    }
+
+    const presented = presentAssistantAnswer(answer, false, [sqlResult])
+
+    expect(presented).toBe('在售商品数为 54。')
+    expect(presented).not.toContain('查询成功，共 1 行。')
+    expect(presented).not.toContain('| active_product_count |')
+  })
+
+  it('uses the same percentage units in a fallback multi-metric conclusion', () => {
+    const sqlResult = {
+      title: '数据库查询',
+      columns: ['本月累计销售额', '上月同期销售额', '增长百分比'],
+      rows: [['53496.70', '49218.60', '8.69']],
+      total_rows: 1,
+      total_rows_known: true,
+      omitted_columns: 0,
+    }
+
+    expect(presentAssistantAnswer('## 查询结果\n\n### 数据库查询', false, [sqlResult]))
+      .toBe('本月累计销售额为 53496.70；上月同期销售额为 49218.60；增长百分比为 8.69%。')
+  })
+
+  it('does not claim an empty SQL result when its returned count is unknown', () => {
+    const sqlResult = {
+      title: '数据库查询', columns: ['订单号'], rows: [],
+      total_rows: 0, total_rows_known: false, omitted_columns: 0,
+    }
+
+    expect(presentAssistantAnswer('## 查询结果\n\n### 数据库查询', false, [sqlResult]))
+      .toBe('暂时没有可展示的明细，无法确认是否有匹配记录。')
+  })
+
   it('removes duplicated SQL count and truncation note when the card shows the same rows', () => {
     const rows = Array.from({ length: 20 }, (_, index) => [`2026-${index + 1}`, index + 1])
     const sqlResult = {

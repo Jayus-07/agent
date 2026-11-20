@@ -230,6 +230,8 @@ class TestOneLinerSummary:
         assert "本次查询返回 1 行" in prompt
         assert "全部结果，共 1 行" not in prompt
         assert "不编造或推算数值、单位、时间范围和趋势" in prompt
+        assert "结论要简短重述关键范围" in prompt
+        assert "完整排名结果的首行明确时，点明第一名和对应指标值" in prompt
 
     def test_sql_one_liner_supports_direct_agent_rows(self, fake_llm):
         sql = {

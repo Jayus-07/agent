@@ -196,7 +196,13 @@ def _build_keyword_map() -> None:
             "销售额": [
                 "product.categories", "product.products", "order.order_items",
             ],
-            "销量": ["product.products", "order.order_items"],
+            "卖得": [
+                "product.products", "order.order_items", "order.orders",
+            ],
+            # 销量排名按项目 SC-109 口径排除已取消订单，必须能关联订单状态。
+            "销量": [
+                "product.products", "order.order_items", "order.orders",
+            ],
             "订单": ["order.orders", "order.order_items"],
             "金额": ["order.orders", "order.order_items"],
             "售价": ["product.products"],
@@ -208,11 +214,41 @@ def _build_keyword_map() -> None:
         _KEYWORD_TABLE_MAP = _precise
 
 
+def _is_sales_ranking_question(question: str) -> bool:
+    """识别需要按订单状态过滤的销量/销售额排名或高低比较。"""
+    q_lower = question.casefold()
+    has_sales_metric = any(
+        term in q_lower
+        for term in ("销量", "销售额", "销售金额", "销售收入", "卖得")
+    )
+    has_rank_signal = any(
+        term in q_lower
+        for term in (
+            "排名", "排行", "最高", "最低", "最多", "最少", "更高",
+            "更低", "最好", "最差", "top",
+        )
+    ) or (
+        "前" in q_lower
+        and any(term in q_lower for term in ("商品", "产品", "品牌", "分类"))
+    )
+    return has_sales_metric and has_rank_signal
+
+
 def _keyword_match(question: str) -> list[str]:
     """关键词快路径：问题中包含已知业务词 → 直接匹配表。"""
     _build_keyword_map()
     matched: set[str] = set()
     q_lower = question.lower()
+    if (
+        all(term in q_lower for term in ("本月", "上月", "销售额"))
+        and any(term in q_lower for term in ("同期", "增长", "同比", "环比"))
+        and not any(term in q_lower for term in (
+            "分类", "商品", "品牌", "地区", "店铺", "客户", "按",
+        ))
+    ):
+        # SC-112 的期间销售额比较使用订单总额，其他维表/明细表会让
+        # SQL 生成器误选数量×单价并漏掉订单级时间口径。
+        return ["order.orders"]
     matched_keywords = [
         (kw, tables)
         for kw, tables in _KEYWORD_TABLE_MAP.items()
@@ -232,6 +268,12 @@ def _keyword_match(question: str) -> list[str]:
     # 例如“门店库存”不能同时带上 inventory.inventory。
     if any(table.startswith("retail.") for table in matched):
         matched = {table for table in matched if table.startswith("retail.")}
+    if (
+        _is_sales_ranking_question(question)
+        and not any(table.startswith("retail.") for table in matched)
+    ):
+        # 销量/销售额排名须基于订单状态过滤已取消订单。
+        matched.add("order.orders")
     return list(matched)
 
 
@@ -306,8 +348,10 @@ def select_tables(
          if table in all_tables]
     ))
 
-    # 快路径条件：匹配 1-3 张表时跳过 LLM（精确场景，不需要 LLM 选表）
-    if 1 <= len(fast_match) <= 3:
+    # 精确关键词通常限制为 1-3 张表；销售排名可额外带订单状态表，最多 4 张。
+    is_sales_ranking = _is_sales_ranking_question(question)
+    if (1 <= len(fast_match) <= 3
+            or (is_sales_ranking and 1 <= len(fast_match) <= 4)):
         # 如果同时有显式表名且关键词结果覆盖了它，用精确结果
         logger.info(
             f"[Router] 关键词快路径: 问题 '{question[:50]}...' → {fast_match}"
