@@ -153,6 +153,38 @@ describe('OperationsPanel 活动上传', () => {
     act(() => root.unmount())
   })
 
+  it('失败操作中的缺失操作者、英文错误和无 Trace 状态用中文说明', async () => {
+    operationApi.getOperations.mockResolvedValue({
+      items: [{
+        id: 3509,
+        doc_id: 'doc-1',
+        doc_name: 'legal_商标与域名台账.csv',
+        operation: 'reindex',
+        result: 'failed',
+        created_at: '2026-11-16 22:30:47',
+        trace_id: null,
+        batch_id: null,
+        detail: JSON.stringify({ error: "name 'quality_status' is not defined" }),
+        duration_ms: 320,
+        user_id: 'anonymous',
+        source: '172.21.0.10 | Mozilla/5.0',
+      }],
+      total: 1,
+      active_uploads: [],
+    })
+
+    const { root, container } = mount()
+    await act(async () => { await Promise.resolve() })
+
+    expect(container.textContent).toContain('操作者未记录')
+    expect(container.textContent).toContain('系统程序错误：缺少必要的内部状态变量，任务未完成')
+    expect(container.textContent).toContain('未关联追踪记录')
+    expect(container.textContent).not.toContain('anonymous')
+    expect(container.textContent).not.toContain('is not defined')
+
+    act(() => root.unmount())
+  })
+
   it('较早的筛选请求晚返回时不覆盖较新的结果', async () => {
     const first = deferred<any>()
     const second = deferred<any>()

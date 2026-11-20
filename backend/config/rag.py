@@ -103,11 +103,6 @@ RAG_UPLOAD_LOCK_STALE_SECONDS = float(
 RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS = float(
     os.getenv("RAG_UPLOAD_LOCK_HEARTBEAT_SECONDS", "60")
 )
-# 活动索引运行若超过该时长没有状态更新，管理端显示“状态待核对”，
-# 不再把它当作仍在推进的任务。默认复用现有锁失效窗口，部署环境可单独覆盖。
-RAG_INDEX_RUN_STALE_SECONDS = float(
-    os.getenv("RAG_INDEX_RUN_STALE_SECONDS", str(RAG_UPLOAD_LOCK_STALE_SECONDS))
-)
 RAG_UPLOAD_PROGRESS_GC_INTERVAL_SECONDS = float(
     os.getenv("RAG_UPLOAD_PROGRESS_GC_INTERVAL_SECONDS", "300")
 )
@@ -122,8 +117,6 @@ RAG_INDEX_SLO_THRESHOLD_SOURCE = (
 )
 if RAG_INDEX_SLO_THRESHOLD_MS <= 0:
     raise ValueError("RAG_INDEX_SLO_THRESHOLD_MS 必须大于 0 毫秒")
-if RAG_INDEX_RUN_STALE_SECONDS <= 0:
-    raise ValueError("RAG_INDEX_RUN_STALE_SECONDS 必须大于 0 秒")
 
 
 def _validate_rag_upload_ingress_limit(
