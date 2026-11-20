@@ -117,8 +117,6 @@ RAG_INDEX_SLO_THRESHOLD_SOURCE = (
 )
 if RAG_INDEX_SLO_THRESHOLD_MS <= 0:
     raise ValueError("RAG_INDEX_SLO_THRESHOLD_MS 必须大于 0 毫秒")
-if RAG_INDEX_RUN_STALE_SECONDS <= 0:
-    raise ValueError("RAG_INDEX_RUN_STALE_SECONDS 必须大于 0 秒")
 
 
 def _validate_rag_upload_ingress_limit(
