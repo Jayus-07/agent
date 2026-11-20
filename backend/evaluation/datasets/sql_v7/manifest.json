@@ -1,0 +1,10 @@
+{
+  "version": "7.0",
+  "case_count": 65,
+  "module": "sql",
+  "schema_description": "NL2SQL 候选集：基于当前 sql_v6（含 20 条零售 ERP 合成用例和竞品来源拒答样例），修正仓库上下文、完整日趋势、同期销售比较及多层排名取消订单过滤。",
+  "created": "2026-11-19",
+  "parent_dataset": "sql_v6",
+  "content_hash": "c50999f57bc097cc",
+  "notes": "候选集，不覆盖默认 sql v1.1。保留 sql_v6 全部 65 条及退役 crawler 来源拒答样例；SC-002、SC-107、SC-112 采用已评审修正，SC-125 在分类和商品两层排除 cancelled。共享业务库结果级评测及真实页面验收仍待安全服务窗口。"
+}

@@ -53,6 +53,25 @@ class TestLimitEnforcement:
         assert "LIMIT 100" in safe_sql
 
 
+class TestCaseExpressionFunctionValidation:
+    def test_case_expression_is_not_mistaken_for_if_function(self):
+        safe_sql, _, _ = sql_validator.validate(
+            "SELECT CASE WHEN id > 0 THEN 1 ELSE 0 END AS positive "
+            "FROM product.products"
+        )
+
+        assert "CASE WHEN" in safe_sql
+
+    def test_if_function_remains_unapproved(self):
+        with pytest.raises(ValidationError) as exc_info:
+            sql_validator.validate(
+                "SELECT IF(id > 0, 1, 0) AS positive FROM product.products"
+            )
+
+        assert exc_info.value.layer == 4
+        assert exc_info.value.reason == "unapproved_system_function"
+
+
 class TestStarProjectionHardening:
     @pytest.fixture(autouse=True)
     def _enable_sensitive_columns(self, monkeypatch):

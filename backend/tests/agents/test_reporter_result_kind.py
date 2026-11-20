@@ -46,7 +46,21 @@ def test_rag_service_failure_is_not_reported_as_missing_evidence():
         status="failed", tool_status="unavailable", error_type="network",
         output=None,
     )
-    assert _failure_text(result) == "知识库检索服务暂不可用，请稍后重试。"
+    assert _failure_text(result) == "知识库检索服务暂时不可用，请稍后重试。"
+
+
+def test_sql_validation_failure_is_not_reported_as_bad_request():
+    result = _sr(
+        capability="sql.query",
+        status="failed",
+        tool_status="invalid_request",
+        error_type="validation_error",
+        output=None,
+    )
+
+    assert _result_kind(result) == "sql_query_rejected"
+    assert "请求参数有误" not in _failure_text(result)
+    assert "数据库查询未能通过当前规则校验" in _failure_text(result)
 
 
 def test_disclosure_not_appended_for_dedupe_cache_hit():
@@ -87,3 +101,91 @@ def test_sql_table_keeps_delimited_and_multiline_values_in_one_cell():
 
     assert "查询成功，共 1 行。" in rendered
     assert "| A\\|B | 第一行 / 第二行 \\*重点\\* &lt;标签&gt; | — |" in rendered
+
+
+def test_sql_empty_rows_without_confirmed_count_are_not_called_no_matches():
+    result = _sr(
+        capability="sql.query",
+        description="订单查询",
+        output={
+            "status": "success",
+            "data": {"columns": ["订单号"], "rows": []},
+        },
+    )
+
+    assert _result_kind(result) == "success"
+    answer = generate_final_answer(
+        "查一下订单", {"s1": result}, context_filter=False, allow_llm=False,
+    )
+
+    assert "无法确认是否有匹配记录" in answer
+    assert "没有符合条件的数据（0 行）" not in answer
+
+
+def test_sql_empty_rows_with_explicit_empty_flag_are_called_no_matches():
+    result = _sr(
+        capability="sql.query",
+        description="订单查询",
+        is_empty=True,
+        output={"columns": ["订单号"], "rows": []},
+    )
+
+    assert _result_kind(result) == "no_data"
+    answer = generate_final_answer(
+        "查一下订单", {"s1": result}, context_filter=False, allow_llm=False,
+    )
+
+    assert "没有符合条件的数据（0 行）" in answer
+
+
+def test_sql_empty_rows_with_explicit_zero_count_are_called_no_matches():
+    result = _sr(
+        capability="sql.query",
+        description="订单查询",
+        output={"columns": ["订单号"], "rows": [], "row_count": 0},
+    )
+
+    assert _result_kind(result) == "no_data"
+    answer = generate_final_answer(
+        "查一下订单", {"s1": result}, context_filter=False, allow_llm=False,
+    )
+
+    assert "没有符合条件的数据（0 行）" in answer
+
+
+def test_sql_empty_rows_with_positive_count_disclose_missing_details():
+    result = _sr(
+        capability="sql.query",
+        description="订单查询",
+        output={
+            "status": "success",
+            "data": {"columns": ["订单号"], "rows": [], "total": 4},
+        },
+    )
+
+    answer = generate_final_answer(
+        "查一下订单", {"s1": result}, context_filter=False, allow_llm=False,
+    )
+
+    assert "已确认有 4 行结果，但当前没有可展示的明细" in answer
+    assert "没有符合条件的数据（0 行）" not in answer
+
+
+def test_sql_empty_rows_with_conflicting_count_metadata_remain_unconfirmed():
+    result = _sr(
+        capability="sql.query",
+        description="订单查询",
+        output={
+            "columns": ["订单号"],
+            "rows": [],
+            "row_count": 0,
+            "total": 4,
+        },
+    )
+
+    answer = generate_final_answer(
+        "查一下订单", {"s1": result}, context_filter=False, allow_llm=False,
+    )
+
+    assert "无法确认是否有匹配记录" in answer
+    assert "没有符合条件的数据（0 行）" not in answer

@@ -28,6 +28,7 @@ def test_category_sales_includes_order_item_price_tables(monkeypatch):
         "product.categories",
         "product.products",
         "order.order_items",
+        "order.orders",
     } <= set(tables)
 
 
@@ -64,8 +65,10 @@ def test_keyword_fast_path_skips_llm_without_context(monkeypatch):
     tables = router.select_tables("最近 30 天销量最高的 5 个商品")
 
     # 集合断言：关键词命中集合来自 set 迭代，顺序不保证
-    assert set(tables) == {"product.products", "order.order_items"}
-    assert len(tables) == 2
+    assert set(tables) == {
+        "product.products", "order.order_items", "order.orders",
+    }
+    assert len(tables) == 3
 
 
 @pytest.mark.parametrize(
@@ -102,6 +105,9 @@ def test_builtin_examples_have_their_fact_tables(monkeypatch):
         },
         "列出最近 10 个订单的金额": {"order.orders"},
         "对比商品售价": {"product.products"},
+        "销量最高的前 5 个商品及销量是什么": {
+            "product.products", "order.order_items", "order.orders",
+        },
     }
 
     for question, required_tables in examples.items():
@@ -167,6 +173,179 @@ def test_query_examples_match_chinese_aliases_within_selected_tables():
     )
 
     assert [example.key for example in examples] == ["inventory_low_stock"]
+
+
+def test_top_selling_products_example_matches_sc109_and_excludes_cancelled():
+    question = "销量最高的前 5 个商品及销量是什么？"
+    tables = router._keyword_match(question)
+    examples = select_query_examples(question, tables)
+
+    assert set(tables) == {
+        "product.products", "order.order_items", "order.orders",
+    }
+    assert [example.key for example in examples] == ["top_selling_products"]
+    example_sql = " ".join(examples[0].sql.split()).casefold()
+    dataset = (
+        Path(__file__).resolve().parents[2]
+        / "evaluation" / "datasets" / "sql_v6" / "cases.jsonl"
+    )
+    manifest = json.loads(
+        (dataset.parent / "manifest.json").read_text(encoding="utf-8")
+    )
+    verify_dataset_integrity("sql_v6", dataset.parent)
+    case = next(
+        item for item in map(json.loads, dataset.read_text(encoding="utf-8").splitlines())
+        if item["id"] == "SC-109"
+    )
+    gold_sql = " ".join(case["expected"]["gold_sql"].split()).casefold()
+
+    assert manifest["version"] == "6.0"
+    assert example_sql == gold_sql
+    assert "status <> 'cancelled'" in example_sql
+    assert "group by p.id, p.product_name" in example_sql
+
+
+def test_sales_rank_router_includes_order_status_table_without_llm(monkeypatch):
+    _disable_router_cache(monkeypatch)
+
+    class _NoLLM:
+        def invoke(self, *_args, **_kwargs):
+            raise AssertionError("清晰的销售排名不应因订单状态表而改走 LLM")
+
+    monkeypatch.setattr(router, "llm", _NoLLM())
+    questions = (
+        "统计各商品分类的销售额排名",
+        "华为和小米哪个品牌的销售额更高？",
+        "销售额最高的分类下卖得最好的三个商品是什么？",
+        "卖得最好的宝贝有哪些？",
+        "最近30天销量最高的前5个商品",
+    )
+
+    for question in questions:
+        tables = router.select_tables(question)
+        assert "order.orders" in tables, question
+
+
+def test_retail_sales_rank_does_not_mix_legacy_order_tables():
+    tables = router._keyword_match("POS销售额最高的商品")
+
+    assert tables
+    assert all(table.startswith("retail.") for table in tables)
+
+
+def test_top_products_in_top_sales_category_matches_v7_and_filters_both_levels():
+    question = "销售额最高的分类下卖得最好的三个商品是什么？"
+    tables = router._keyword_match(question)
+    examples = select_query_examples(question, tables)
+
+    assert "order.orders" in tables
+    assert [example.key for example in examples] == [
+        "top_products_in_top_sales_category",
+    ]
+    example_sql = " ".join(examples[0].sql.split()).casefold()
+    dataset = (
+        Path(__file__).resolve().parents[2]
+        / "evaluation" / "datasets" / "sql_v7" / "cases.jsonl"
+    )
+    verify_dataset_integrity("sql_v7", dataset.parent)
+    cases = {
+        item["id"]: item
+        for item in map(json.loads, dataset.read_text(encoding="utf-8").splitlines())
+    }
+    gold_sql = " ".join(cases["SC-125"]["expected"]["gold_sql"].split()).casefold()
+    _, example_tables, _ = sql_validator.validate(examples[0].sql)
+
+    assert example_sql == gold_sql
+    assert example_sql.count("status <> 'cancelled'") == 2
+    assert example_tables == set(examples[0].tables)
+
+
+def test_v7_sales_ranking_goldens_exclude_cancelled_orders():
+    dataset = (
+        Path(__file__).resolve().parents[2]
+        / "evaluation" / "datasets" / "sql_v7" / "cases.jsonl"
+    )
+    verify_dataset_integrity("sql_v7", dataset.parent)
+    cases = {
+        item["id"]: item
+        for item in map(json.loads, dataset.read_text(encoding="utf-8").splitlines())
+    }
+
+    for case_id in ("SC-109", "SC-119", "SC-124", "SC-125"):
+        case = cases[case_id]
+        normalized_sql = " ".join(
+            case["expected"]["gold_sql"].split()
+        ).casefold()
+        assert "order.orders" in case["expected"]["expected_tables"], case_id
+        assert "status <> 'cancelled'" in normalized_sql, case_id
+
+    nested_rank = cases["SC-125"]["expected"]["gold_sql"].casefold()
+    assert nested_rank.count("status <> 'cancelled'") == 2
+
+
+def test_monthly_sales_growth_example_preserves_sc112_semantics_and_validates():
+    dataset = (
+        Path(__file__).resolve().parents[2]
+        / "evaluation" / "datasets" / "sql_v7" / "cases.jsonl"
+    )
+    manifest = json.loads(
+        (dataset.parent / "manifest.json").read_text(encoding="utf-8")
+    )
+    verify_dataset_integrity("sql_v6", dataset.parent)
+    cases = {
+        item["id"]: item
+        for item in map(json.loads, dataset.read_text(encoding="utf-8").splitlines())
+    }
+    case = cases["SC-112"]
+    question = case["question"]
+    tables = router._keyword_match(question)
+    examples = select_query_examples(question, tables)
+
+    assert manifest["version"] == "7.0"
+    assert tables == ["order.orders"]
+    assert [example.key for example in examples] == ["current_month_sales_growth"]
+    _, example_tables, _ = sql_validator.validate(examples[0].sql)
+    normalized_sql = " ".join(examples[0].sql.split()).casefold()
+    assert example_tables == {"order.orders"}
+    assert "o.total_amount" in normalized_sql
+    assert "extract(day from current_date)" in normalized_sql
+    assert "bounds.current_month_start" in normalized_sql
+    assert "o.created_at < current_date + 1" in normalized_sql
+    assert "previous_period_sales > 0" in normalized_sql
+    assert "as mom_growth_percent" in normalized_sql
+    assert "when (bounds.current_month_start - interval '1 month')::date" in normalized_sql
+    assert "else bounds.current_month_start" in normalized_sql
+    assert "current_month_sales" in case["expected"]["gold_sql"]
+    assert "previous_period_sales" in case["expected"]["gold_sql"]
+
+
+def test_generate_sql_includes_top_sales_semantics_and_sc109_example(monkeypatch):
+    captured = {}
+
+    def fake_render_sync(key, **variables):
+        captured["key"] = key
+        captured.update(variables)
+        return SimpleNamespace(text="rendered prompt")
+
+    monkeypatch.setattr(
+        sql_generator.prompt_service, "render_sync", fake_render_sync
+    )
+    monkeypatch.setattr(
+        sql_generator,
+        "llm",
+        SimpleNamespace(
+            invoke=lambda _prompt: SimpleNamespace(content="SELECT 1")
+        ),
+    )
+    question = "销量最高的前 5 个商品及销量是什么？"
+    tables = router._keyword_match(question)
+
+    sql_generator.generate_sql(question, tables)
+
+    assert captured["key"] == "sql.generator"
+    assert 'JOIN "order".orders o ON o.id = oi.order_id' in captured["table_info"]
+    assert "WHERE o.status <> 'cancelled'" in captured["table_info"]
+    assert "项目统一口径（评测 SC-109、SC-119、SC-124、SC-125）" in captured["question"]
 
 
 def test_query_examples_require_every_example_table_in_selected_scope():
@@ -251,6 +430,14 @@ def test_sql_generator_preserves_calendar_comparison_and_empty_sum_semantics():
     assert "空结果上的 SUM 是 NULL" in template
     assert "只生成这两个自然月" in contract
     assert "没有记录就是 0" in contract
+    assert "比较本月累计（含今天）与上月相同天数" in template
+    assert "最近 N 个自然日每天/按日" in contract
+    assert "连续的 N 个日期" in contract
+    assert "*_rate` / `*_ratio` 返回 0 到 1" in contract
+    assert "*_percent` 返回 0 到 100" in contract
+    assert "项目统一口径（评测 SC-109、SC-119、SC-124、SC-125）" in contract
+    assert "每一层独立统计都要应用过滤" in contract
+    assert "排名/高低比较统一排除已取消订单" in template
     assert "稳定主键和展示名称" in template
     assert "稳定主键和展示名称" in contract
 
@@ -309,6 +496,46 @@ def test_sql_v5_groupings_use_stable_entity_keys():
     distinct_sql = cases["SC-111"]["expected"]["gold_sql"]
     assert "DISTINCT ON (c.id)" in distinct_sql
     assert "ORDER BY c.id, p.sale_price DESC, p.id" in distinct_sql
+
+
+def test_sql_v7_uses_dense_daily_series_and_comparable_sales_periods():
+    dataset = (
+        Path(__file__).resolve().parents[2]
+        / "evaluation" / "datasets" / "sql_v7" / "cases.jsonl"
+    )
+    manifest = json.loads(
+        (dataset.parent / "manifest.json").read_text(encoding="utf-8")
+    )
+    verify_dataset_integrity("sql_v7", dataset.parent)
+    cases = {
+        item["id"]: item
+        for item in map(json.loads, dataset.read_text(encoding="utf-8").splitlines())
+    }
+
+    assert manifest["version"] == "7.0"
+    assert manifest["parent_dataset"] == "sql_v6"
+    inventory = cases["SC-002"]
+    inventory_sql = inventory["expected"]["gold_sql"]
+    assert "warehouse_name" in inventory_sql
+    assert "JOIN inventory.warehouses w ON w.id = i.warehouse_id" in inventory_sql
+    assert "inventory.warehouses" in inventory["expected"]["expected_tables"]
+
+    daily = cases["SC-107"]
+    daily_sql = daily["expected"]["gold_sql"]
+    assert "7 个自然日（含今天）" in daily["question"]
+    assert "generate_series" in daily_sql
+    assert "LEFT JOIN refunds_by_day" in daily_sql
+    assert "COALESCE(r.refund_count, 0)" in daily_sql
+    assert "CURRENT_DATE - INTERVAL '6 days'" in daily_sql
+    assert "CURRENT_DATE + INTERVAL '1 day'" in daily_sql
+
+    growth = cases["SC-112"]
+    growth_sql = growth["expected"]["gold_sql"]
+    assert "上月同期" in growth["question"]
+    assert "previous_period_sales" in growth_sql
+    assert "LEAST(" in growth_sql
+    assert "AS mom_growth_percent" in growth_sql
+    assert "previous_period_sales > 0" in growth_sql
 
 
 def test_refund_rate_example_matches_sql_v3_sc117():
@@ -389,6 +616,15 @@ def test_query_examples_do_not_match_negated_request_phrases():
 
     for question, tables in negated_cases:
         assert select_query_examples(question, tables) == []
+
+    include_cancelled = (
+        "销售额最高的分类下卖得最好的三个商品，包含已取消订单",
+    )
+    for question in include_cancelled:
+        assert select_query_examples(
+            question,
+            ["product.products", "order.order_items", "order.orders"],
+        ) == []
 
     examples = select_query_examples(
         "不要查退款次数，改查最近30天订单量",

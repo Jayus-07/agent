@@ -26,7 +26,9 @@ from backend.orchestration.router.types import (
 
 # ── Workflow 强信号（每天/自动/发送 → 跑工作流）──
 _WORKFLOW_KEYWORDS = [
-    r"每天", r"每日", r"定时", r"自动", r"生成日报", r"生成周报",
+    r"定时.{0,8}(?:生成|跑|执行|运行|发送|推送|检查|提醒)",
+    r"自动.{0,8}(?:生成|跑|执行|运行|发送|推送|检查|提醒|采购)",
+    r"生成日报", r"生成周报",
     r"发邮件", r"发送邮件", r"推送", r"跑一下", r"触发",
     r"检查库存风险", r"自动提醒", r"自动采购",
 ]
@@ -51,6 +53,19 @@ _SQL_KEYWORDS_DEFAULT = [
     r"最近", r"本月", r"上月", r"今年", r"去年",
     r"环比", r"同比", r"增长率",
 ]
+
+_SQL_METRIC_QUERY = re.compile(
+    r"(?=.*(?:订单(?:量|数)|退款(?:金额|单数|数量|笔数|次数|率)|"
+    r"销售额|销量|库存(?:量|数)?|客户(?:数|量)|商品(?:数|销量)|"
+    r"金额|数量|笔数|单数))"
+    r"(?=.*(?:查询|查一下|列出|统计|汇总|合计|多少|排名|最高|最低|"
+    r"趋势|同比|环比|增长|按(?:日|天|周|月)|最近|近[一二三四五六七八九十\d]+|"
+    r"每天|每日))",
+)
+_SQL_POLICY_CONTEXT = re.compile(
+    r"制度|规定|规范|政策|流程|SOP|指南|怎么(?:做|办|操作|计算)|"
+    r"如何(?:处理|操作|计算)?|定义|操作规程",
+)
 
 
 # ── 业务 SOP 弱信号（"怎么做"/"时效" → 走 RAG，不强制）──
@@ -239,6 +254,20 @@ class RuleRouter:
                 candidates=[CapabilityScore(name="rag.search", score=0.95)],
                 confidence=0.95,
                 reason="当前问题要求核对业务主题原文依据，优先检索知识库",
+            )
+
+        # 统计问句中的「每天/每日」是时间分组，不代表要求定时跑工作流。
+        # 退款等词同时属于 RAG 业务主题；只有出现明确指标与查询/聚合信号，
+        # 且没有知识制度语境时，才将这类问句稳定路由到 SQL。
+        if (
+            _SQL_METRIC_QUERY.search(query_lower)
+            and not _SQL_POLICY_CONTEXT.search(query_lower)
+        ):
+            return RouteDecision(
+                execution_mode=ExecutionMode.DIRECT,
+                candidates=[CapabilityScore(name="sql.query", score=0.95)],
+                confidence=0.95,
+                reason="明确的业务指标统计问题，优先查询结构化数据",
             )
 
         # 2. 复合意图强信号（显式连接词 + ≥2 能力组命中 → 稳定走 plan）

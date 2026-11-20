@@ -376,3 +376,134 @@
 - PR #472 的 `acb9df9` 离线预检失败于两个既有契约：同一文档的不同章节应合并成一张 SourceCard，而不同文档版本仍需分别显示。问题来自引用时按引用编号去重，与来源卡片按文档聚合的既有行为冲突；章节级引用证据仍由独立证据提取逻辑保留。
 - 提交 `fe14a27` 首次按文档 ID（缺失时按文件名）和版本 ID 去重，并增加跨版本来源卡回归。本地 `test_citation_formatter.py` 与 `test_cs_eval_kb_contract.py` 共 59 passed；新 HEAD 离线 CI 为 2369 passed、1 failed，唯一失败是同文档不同页的显式引用必须分别保留页码来源卡。
 - 当前修正仅在回答显式引用来源时将页码纳入去重键：不同页的引用定位分别显示；没有正文引用时仍按文档版本合并候选卡。章节级事实证据仍由独立提取逻辑保留。三个引用相关测试文件 84 passed，Reporter 多步引用/提示契约/结果类型 38 passed；修正尚待提交并重新等待 PR #472 CI；真实 API/运行验收仍为 UNVERIFIED。
+
+
+## 2026-11-16：本轮固定验收标准与 PR 状态校准
+
+### 固定范围与可检查标准
+
+本轮只验收用户指定的四项。先固定标准，再按标准收集运行证据；四项分别给出 PASS、FAIL 或 BLOCKED。
+
+| 项目 | 可检查的验收标准 |
+| --- | --- |
+| SQL 问数结果正确性和结果展示 | 在授权的真实业务数据库上运行锁定的 sql_v5 45 条候选，逐条确认 Golden SQL 可执行、结果集与参考结果一致，并人工核对指标定义、筛选、自然月边界、空集合/NULL、实体主键与用户问题相符；空、部分、异常或数据不足时不得把缺失说成 0 或推算未返回值。真实页面至少核对单值、多指标、趋势、排名、明细、截断/大数、展开/导出和历史恢复；结论、卡片、SSE、历史载荷一致，并展示范围及限制。 |
+| RAG 检索、正文结论与引用质量 | 用授权账号提出代表性问题，保存实际问题、实际回答和 Trace；逐项区分检索候选与正文实际引用，确认结论能被引用段落支持，并核对文件、版本/生效日期、章节、页码与来源卡编号。检查历史恢复后正文编号和来源仍对应；无资料、降级或来源定位失败不得冒充有证据。 |
+| Conversation-first 多轮、历史、SSE 与 Trace | 在用户端新建会话、发问、流式接收、追问、切换、停止并刷新恢复；记录 conversation_id、request_id 和 Trace，确认 SSE、迟到事件、消息、SQL/RAG 展示元数据和 Trace 始终属于正确会话，历史恢复结果与当时页面一致。 |
+| 回复文字准确性、清晰度与体验 | 用真实页面覆盖成功、需澄清、无资料、检索降级、SQL 空结果/失败及数据不足；保存代表性输入和完整实际输出。逐项判断是否先讲结论、表达直白、指标/范围有依据、限制与缺失明确、引用可核对、状态不混淆且不重复；静态截图和组件测试不能替代运行回复。 |
+
+### GitHub 与基线校准
+
+- 已在本工作树 fetch；`origin/main` 与本轮基线均为 `05176213ae1ed84cfb2cdb146060915c01a83b2d`，提交标题为合并 PR #472。
+- GitHub 当前记录 #471、#472 均已 merged；#472 合并提交是 `05176213`，PR head 为 `b15052bc11cf07a61b96b1093f8788be42d9e418`。因此旧记录“PR #472 CI/Review 尚待确认”已被当前状态取代。
+- #472 的两个 Review thread 均为 resolved。没有重复发起相同 Review。
+- GitHub 对 PR #472 head 的最新检查：RAG Smoke (8 cases)、离线 preflight、Evaluation V2 管理端构建/测试、Evaluation V2 free contract、contract-check 与 scan 均 success；“RAG Smoke Evaluation (8 cases, real API)”为 skipped。检查详情：[PR #472 检查](https://github.com/Jayus-07/agent/actions/runs/43735864253)。
+- #471 head `cad34bb` 的 8 项检查中，7 项成功（RAG Smoke、离线 preflight、scan、Detect RAG changes、admin-observability-auth、frontend-admin-security、frontend-admin-functional），真实 API Evaluation 为 skipped。检查详情：[PR #471 检查](https://github.com/Jayus-07/agent/actions/runs/43731536972)。
+- 上述 CI 证据证明合并前离线门禁通过，不证明真实业务数据库、真实 RAG、当前部署版本或真实页面流程通过；这些仍按本表标准单独验收。
+
+## 2026-11-16：在线验收取证与最终结论
+
+### 运行环境检查证据
+
+- 只读执行 `docker compose ls`、`docker stats --no-stream`、`docker ps` 和 Windows 内存检查：共享 Compose 项目 `agent` 为 20 个运行、1 个 restarting；可用内存约 3.21 GB。
+- `agent-redis-1` 状态为 `Restarting (1)`。只读执行 `docker exec agent-redis-1 redis-cli PING` 时容器无法连接；因此没有取得索引队列长度，不能报告队列为空或空闲。
+- `agent-app-1` 和 `agent-frontend-1` 的 Compose 工作目录均指向 `C:\Users\wh\.codex\worktrees\evaluation-center-ui\agent`。本轮开始时该工作树是 `codex/file-quality-main-followup-20261114` / `cad34bb`，带有未跟踪 `.playwright-mcp/`；终检时状态已变为 `codex/evaluation-acceptance-20261116` / `05176213`，`.playwright-mcp/` 仍在。并行会话进度显示它在该目录切换到了最新 main 分支。本轮没有对该工作树执行切换、复原或文件修改。Compose 标签只能确认工作目录，不能确认当前镜像的源码 SHA；因此无法证明共享服务运行的是本轮代码版本。
+- Codex 线程列表显示另一项“知识库与 Trace 总验收”仍为 active。等待 60 秒后线程仍为 active；不进入其工作树、不操作共享资料、不重启或重建服务。
+- Playwright 浏览器列表读取失败，提示其 Chrome 配置已被其他会话占用。本轮没有接管或关闭该浏览器，也没有调用共享企业助手页面。
+- 本轮没有执行真实 SQL、RAG、API 或浏览器业务请求；没有写共享数据库、知识库、索引或 Prompt。共享服务未执行 start/stop/restart/build。
+
+### 四项验收结果
+
+| 项目 | 实际证据 | 结论 | 未解决问题及解除条件 |
+| --- | --- | --- | --- |
+| SQL 问数结果正确性和结果展示 | PR #472 head `b15052bc` 的离线 SQL 评测/Golden/Prompt 定向记录为 134 passed；当前 PR 检查中离线门禁成功。真实结果级命令 `D:\Python\python.exe -m backend.evaluation.cli --module sql --dataset sql_v5/cases.jsonl --live --no-ragas` 本轮未运行；没有真实数据库结果或浏览器结果卡证据。共享 Redis restarting，且另一会话仍在使用同一共享栈。 | **BLOCKED** | 另一会话结束并释放共享栈后，确认 Redis 健康、索引/任务队列可读；确认连接到授权的真实业务数据且使用只读权限，再运行锁定 sql_v5 45 条结果级评测，并完成真实页面展示核对。若当前库不是实际业务数据，需提供真实数据环境与只读访问。 |
+| RAG 检索、正文结论与引用质量 | PR #472 的离线 Reporter/引用检查通过，单步引用编号错位已由合并 Review 修复且 Review thread resolved；当前 PR 的真实 API RAG Evaluation 检查为 skipped。本轮没有真实问题、回答、Trace、有效索引代次或来源卡对应证据。另一会话正在验收同一知识库/Trace，Redis 队列也无法读取。 | **BLOCKED** | 待另一会话完成；Redis 和索引任务状态稳定可读；通过可用的授权账号在确认过的索引上做只读查询。保留实际问答与 Trace，逐项核对候选来源、正文引用、版本、章节、页码、来源卡和历史恢复。 |
+| Conversation-first 多轮、历史、SSE 与 Trace | PR #472 的会话/RAG/Trace 后端定向记录为 104 passed，相关 CI 门禁成功。本轮没有从真实用户端记录新建、追问、切换、停止、刷新恢复的 conversation_id/request_id、SSE 事件和 Trace。当前共享容器来自另一工作树，浏览器自动化实例被占用。 | **BLOCKED** | 需在无并发验收窗口，把共享服务切换到可确认版本 `05176213` 的安全部署/构建，健康检查通过后，使用可访问的授权测试账号完成端到端流程并保存事件与 Trace 对照。 |
+| 回复文字准确性、清晰度与体验 | PR #472 的前端定向套件已有 8 个文件、113 passed 的记录，SQL 卡与引用/提示的组件检查覆盖离线展示。当前 CI 的真实 API 评测被 skipped。本轮没有取得成功、追问、无资料、降级、SQL 空结果/失败等真实页面输入和输出，不能评判实际回复。 | **BLOCKED** | 解除浏览器占用并确认运行版本后，使用代表性真实问题完成页面验收；保存每个终态的输入、输出和来源/结果卡，按本节固定标准核对依据、范围、限制、状态及重复信息。 |
+
+### 收敛结论
+
+- 四项均已有标准、当前证据、明确结论和可执行的解除条件；本轮未发现可据实判为 FAIL 的在线功能结果。
+- **验收流程：已完成（已收敛）**。四项均为 BLOCKED，表示流程完成了分类与外部依赖定位。
+- **总目标：未全部通过**。没有任何一项因本轮在线验收而达到 PASS。
+- 下一步由共享运行环境的当前使用方完成知识库/Trace 验收并释放工作树、Docker 与浏览器；随后恢复 Redis 并确认队列状态。之后在一个不并发的窗口，从本任务分支构建/确认运行版本，按上述四项解除条件逐项取证。缺少真实业务库、只读权限或授权测试账号时，需由用户提供或指定。
+
+## 2026-11-18：修复 SQL 空明细误报为 0 行
+
+- 新工作树 `C:\Users\wh\.codex\worktrees\assistant-quality-implementation-20261118`，分支 `codex/assistant-quality-implementation-20261118`，基于 `origin/main` / `1a025f87`（PR #483）。未修改已有工作树；本分支改动未提交。
+- 复现 Reporter 确定性回复路径：当 SQL 返回 `rows: []`，但没有可信 `is_empty` 或行数时，`_result_kind` 仍判为 `no_data`，用户会看到“没有符合条件的数据（0 行）”。这绕过了数据摘要路径已有的“无法确认是否有匹配记录”保护。
+- Reporter 现沿 `{status, data}` 封套汇总空标记和行数事实；空明细本身不证明 0 行。只有明确空标记或一致的零行数才回复无匹配；有已确认行数但明细缺失时披露缺失明细，计数冲突时明确无法确认。RAG 检索故障提示统一为“知识库检索服务暂时不可用”。
+- Reporter 定向测试：`D:\Python\python.exe -m pytest --no-cov --noconftest -q backend/tests/agents/test_reporter_result_kind.py backend/tests/test_reporter_prompt_contract.py backend/tests/test_reporter_degraded.py --tb=short`：69 passed（5.36 秒）。RAG 引用、历史元数据和 Trace 定向组合（`test_rag_answer_status.py`、`test_chunk_pages_locality.py`、`test_reporter_multi_rag_citations.py`、`test_runner_trace_finalize.py`、`test_message_codec.py`）：80 passed（20.54 秒）。Reporter 源码和新增测试 `py_compile` 通过。
+- SQL 离线评测、预检、Golden 与 Prompt 六个定向文件：106 passed（7.00 秒），未连接业务数据库。`git diff --check` 通过。
+- GitHub 状态校准：PR #471、#472、#483 当前均为 merged；此前“PR #472 尚待提交/CI”的记录是当时进度，不能作为当前待办。本工作树起点是 #483 合并后的 `main` / `1a025f87`，没有重复 cherry-pick 或合并上述 PR。
+- 共享运行环境只读检查：`agent` Compose 项目有 21 个运行中容器，配置混合多个工作树；`agent-rag-service-1` 使用 494.2/512 MiB（96.5%），索引 worker CPU 约 78%，宿主机可用内存 3.77 GB。Redis `PING` 返回 `NOAUTH Authentication required`，因此索引队列状态未知；未取用凭据、未运行真实业务请求、未重建或重启服务。源码标签显示 app/RAG/index worker 来自 `pr481-deploy-main-20261118`，前端来自 `upload-allowlist-budget-ux-20261118/agent`，均不是本分支代码。
+- 四项总验收仍为 UNVERIFIED：SQL v5 真实数据库结果与结果卡浏览器验收未做；RAG 真实召回/正文引用/页码版本与 Trace 未做；Conversation-first ADR-0002 明确 Batch 1–3 仍未完成，真实多轮 API/SSE/History/Trace 未做；本次 Reporter 回复缺陷的离线测试通过，但真实页面回复体验仍未做。
+- 下一步：继续做可离线复现的最小缺陷修复；待共享栈、索引队列和会话使用情况明确且资源安全后，再一次性安排受控的 SQL v5、RAG 来源、Conversation-first 与浏览器回复验收。未有运行证据前不把总目标标成通过。
+
+## 2026-11-18：补齐 SQL 结果语义与结果卡单位
+
+- 基于独立的 `assistant_qa` PostgreSQL（宿主端口 5434、容器内存上限 512 MiB）导入现有演示种子；没有写共享业务库或知识库。样例问题见 `SQL-UX-ACCEPTANCE.md`。
+- 对照隔离数据复现三处展示/口径缺口，源工作树当时创建候选 `sql_v6`（45 条，hash `28eca709dbf1970c`）：SC-002 加仓库字段，SC-107 按 7 个自然日补齐 0 退款日期，SC-112 改为本月累计与上月同期比较并返回百分数。后续主线又把 20 条零售 ERP 合成用例并入 v6，当前 v6 为 65 条；本段隔离库证据仍只覆盖当时 45 条候选。
+- v6 候选 42 条只读 Gold SQL 全部在隔离库执行成功，3 条安全/非 SQL 样本不执行。v5→v6 对比：SC-002 均 15 行，v6 从 3 列增加到 4 列；SC-107 从 4 个有退款日期变成 7 日完整序列（3 个 0 日、合计 4 笔）；SC-112 从单个比例值变成本月金额、上月同期金额和增长百分数，样例为 8.69%。
+- SQL 生成约束同步明确完整自然日趋势的零值填充、未结束月份按同期比较，以及 `_rate`/`_ratio` 比例与 `_percent` 百分数的单位契约。
+- SQL 结果卡现在对比率指标、走势图、明细表和 CSV 按明确列名显示百分数；比率比例以十进制字符串精确移位，避免高精度值经浏览器浮点数舍入。同期销售额为零时仍显示不可计算的百分比指标为“—”。前端定向 Vitest：2 个文件、46 passed；SQL router/Golden/manifest/schema preflight 定向 pytest：42 passed；Python `py_compile` 与 `git diff --check` 通过。
+- 浏览器真实发问与视觉验收仍 UNVERIFIED：Playwright 浏览器正被占用；隔离 Windows 浏览器因 URL 策略不支持而不能继续控制。未重建混合版本的共享栈。隔离数据库容器仍运行，当前使用约 63 MiB，宿主机可用内存约 2.83 GB。
+- 下一步：在可用且版本一致的服务窗口运行 sql_v6 SQL Agent Live 评测，并用 Q1–Q11、追问脚本和授权的现行知识资料验收真实回复、卡片、导出、历史恢复、RAG 引用与 Trace；完成前四项总验收保持 UNVERIFIED。
+
+## 2026-11-18：当前分支 SQL 结果卡浏览器验收
+
+- 为绕过登录而只读展示卡片，在当前工作树临时建了 `/acceptance-sql` 路由；使用本地仅前端有效的临时会话标记，载入隔离数据库生成的 7 组 SQL 结果，不请求后端、不访问共享服务。验收后会删除临时路由和 JSON，不保留演示入口。
+- Playwright 在桌面 1920px 和手机 390px 检查当前分支组件：SC-001 单指标 `43`、SC-002 含仓库的 15 行明细、SC-107 7 日退款趋势（含 3 个 0 值日）、SC-109 排名柱图、SC-112 三项指标与 `8.69%`、SC-117 `1.0000` 显示 `100%` 并保留商品上下文、SC-128 的 0 订单数。手机端文档宽度等于视口，无横向溢出；排名图与明细按钮可切换，表格核对到 5 行。
+- 浏览器控制台没有卡片或 Recharts 运行错误，只有开发服务器未配置 favicon 的 404。截图保存在未跟踪的 `.playwright-mcp/` 证据目录（桌面全页、手机全页及手机排名图卡）。
+- 本轮重跑的后端 SQL、Reporter、RAG 引用、来源元数据、History/Trace 编解码定向组合：10 个测试文件、191 passed；前端 `SQLResultCard` 与展示选择两个 Vitest 文件：46 passed。
+- 复跑命令：后端从仓库根目录执行 `D:\Python\python.exe -m pytest --no-cov --noconftest -q`，后接上述 10 个测试文件；前端从 `frontend/` 执行 `npx vitest run src/components/enterprise-assistant/SQLResultCard.test.tsx src/components/enterprise-assistant/sqlResultPresentation.test.ts`。
+- 该浏览器验收证明当前分支的卡片能展示真实隔离 SQL 输出，不证明真实 SQL Agent 自然语言生成、Reporter 回复、CSV 下载、正式 `/agent` SSE/历史恢复。先前“浏览器无法控制”的记录是本次使用 Playwright 前的状态，现由以上局部证据更新；四项总目标仍不能标为全部通过。
+- 当前结论：SQL v6 Gold SQL 隔离库结果与 SQL 卡片局部视觉/交互为 PASS；真实 SQL Agent 结果正确性和整体问答回复为 UNVERIFIED。真实 RAG 召回与引用、完整 Conversation-first 多轮/SSE/History/Trace、Reporter 真实文本与正式页面仍需版本一致且安全的运行窗口。
+
+## 2026-11-18：正式页面复现并修复 SQL 日趋势错路由
+
+- 在当前分支前端本地页通过共享 API 实测 Q1、Q4。Q1 返回 54 个在售商品，正文和卡片都清晰显示；Q4 要求七个自然日退款单数，却由 `daily_report` 工作流返回销售日报，属于真实业务答案错误。SSE 为 HTTP 200，Trace `de75c18b8046`；不是接口请求失败。
+- 复开同一会话链接后，历史接口和按会话筛选的任务接口返回 HTTP 200，Q1/Q4 两轮消息及 Q1 结果卡均恢复。此为 Conversation-first 历史恢复局部 PASS，不证明追问承接或 Trace 归属；共享旧前端恢复的 SQL 卡仍显示原始字段名。
+- 共享后端运行提交为 `fc5f94a`；本分支路由模块与该运行版本一致，尚未包含本轮修复。未重建、重启或写入共享服务/数据库。
+- 根因是 `RuleRouter` 把单独出现的“每天/每日”认作工作流信号；“退款”又让模糊路由偏向 RAG。修复后，只有出现业务指标和查询/聚合信号时才把日频问句稳定路由到 `sql.query`；显式“每天生成销售日报”仍留在原工作流。
+- 路由定向 5 个测试文件 66 passed；Python `py_compile` 通过。前端答案/卡片/展示定向 3 个测试文件 64 passed。页面在 390px 检查无横向溢出，卡片标题从被按钮挤成省略号改为完整显示；控制台无错误。截图及逐题状态见 `SQL-UX-ACCEPTANCE.md`。
+- 当前结论：Q1 真实页面局部 PASS；Q4 真实共享服务 FAIL，当前分支的路由修复离线 PASS、在线部署与复验 UNVERIFIED。Conversation-first 历史恢复局部 PASS，追问承接与 Trace 归属 UNVERIFIED。不能据此宣称 SQL 总体验收通过。接下来需等待安全的版本一致服务窗口验证修复后的 Q4，再继续只读 Q5/Q6/Q9；RAG 仍未验收。
+- 收尾核查：Q4 错路由确实走入日报生成；Trace `de75c18b8046` 的邮件 span 以 `confirmation_required` 失败，审批模式为 `required`，因此邮件未发送。只删除了该 Trace 的单条 `delivery_failed` 日报记录和唯一关联图表文件，Trace 保留；日报删除数 1、图表已移除。未操作共享业务库或知识库。
+
+## 2026-11-18：Q2–Q6 正式页面复核与本地修复
+
+- 继续用当前分支前端和共享 API 复测企业常见问法。Q2 `f20f6159299e` 查询数为 3，页面指标卡正确，但正文没有重述“最近 30 天”；Q3 `a0a3b13bb619` 漏过滤取消订单，旧页面显示 49、44、40、40、38，SC-109 Gold SQL 只读复算为 48、39、38、36、34，且前端把销量字段标成“销售额”；Q5 `25ac4608ba6a` 错误追问时间范围；Q6 `597a54a28e79` 在 SQL 校验阶段失败并把内部失败显示为“请求参数有误”。详情和页面截图记录在 `SQL-UX-ACCEPTANCE.md`。
+- 从只读 PostgreSQL 核对 Reporter Prompt 与 Trace：`reporter.summary` 当前生产发布版为 v1（指纹 `6146f08b00c3417f`），四条 Trace 都实际使用 v1；该模板没有要求正文重述时间范围。本分支增强 Reporter 默认模板和调用层规则，但未改共享 Prompt。
+- 本地修复：销量排名问句选入 `order.orders` 并按 SC-109 过滤取消订单；库存明细问句稳定路由 SQL；本月同期比较改为校验器可接受的嵌套 SQL，保留 SC-112 同期边界；validator 只跳过 CASE 下的 `exp.If`，裸 `IF()` 仍拒绝；`total_qty` 列名显示为“销量”。Reporter 摘要要求在有依据时重述用户范围，并对完整排名概括首项。
+- 真实只读业务查询（`transaction_read_only=on`）执行 SC-109 Gold SQL 和经 SQL validator 输出的 SC-112 示例。Q3 结果与 SC-109 口径一致；Q6 的范围为 2026-11-01 至 2026-11-19，对比 2026-10-01 至 2026-10-19，本月销售额 1057.00、上月同期 24630.00、增长 -95.71%。未写业务库或知识库。
+- 定向验证：`test_sql_router_examples.py`、`test_sql_validator_hardening.py`、`test_router_determinism.py`、`test_routing_engine.py` 共 69 passed；Reporter 提示契约 20 passed；前端 `sqlResultPresentation.test.ts` 21 passed。另一个需 `guard` 夹具的 SQL 安全回归因测试连接本机 PostgreSQL 未提供密码而阻塞，未记为通过。
+- 页面验收：390px 视口无横向溢出，控制台 0 错误；历史、任务和 SSE 请求 HTTP 200，Trace 数据表中 Q2、Q3、Q5、Q6 的 Trace 归属同一会话。HTTP 200 不代表业务正确，旧服务上的 Q3/Q5/Q6 仍是失败结果。Q1–Q2 有局部通过，Q3/Q4/Q5/Q6 需在版本一致的服务上复测；RAG、完整多轮追问/停止/迟到事件、CSV 实际下载仍未验收。未重启或重建共享服务，没有写共享知识库。
+- RAG 运行前资源检查：共享 Compose 项目 21 个容器运行中；主机可用内存约 3 GB；`agent-rag-service-1` 使用 `486/512 MiB`，四个主要队列长度均为 0。因检索服务已接近内存上限，本轮没有发 RAG 请求；等待资源安全窗口后再做真实召回/引用验收。
+
+## 2026-11-18：Q6 失败提示语校正
+
+- 根因确认：SQL Agent 把生成 SQL 未通过白名单/规则校验记为 `validation_error`；Reporter 将其归类为 `invalid_request`，因此 Q6 显示“请求参数有误”，实际不是用户输入参数格式错误。
+- 当前分支修复为：`sql.query` 的 `validation_error` 显示“数据库查询未能通过当前规则校验，暂时没有返回结果”，并提示换种问法或确认数据是否已接入；RAG 等入口的真实请求参数错误文案保持原样。回归覆盖 SQL 校验失败同时带有 `tool_status=invalid_request` 的误分类情形。
+- Reporter 定向验证：`test_reporter_result_kind.py`、`test_reporter_degraded.py`、`test_reporter_prompt_contract.py` 共 70 passed。修复尚未加载到共享后端，Q6 页面新提示仍为 UNVERIFIED。
+- 不重建共享服务：先前资源检查显示 RAG 容器为 486/512 MiB，且已有约束要求资料验收期间不并行重启共享服务。等安全、版本一致的服务窗口再做正式页面和 Trace 复测。
+
+## 2026-11-19：统一销售排名取消订单口径
+
+- 用户确认：后续销量/销售额排名统一排除已取消订单；用户明确要求纳入取消订单时仍按明确筛选条件处理。
+- 源工作树当时新增候选 `sql_v7`（45 条，内容锁 `3fc673c5a7377c46`，parent=`sql_v6`）只修正了 SC-125。其在隔离库的 Gold SQL 复跑与真实 SQL Agent / 页面在线复测尚未执行。
+
+## 2026-11-20：对齐当前 main 的 SQL 质量候选
+
+- 以最新 `origin/main` / `8e042d9` 为基线，将归档的 SQL/Reporter/回复体验改动放入专用分支；不改本地 `main`、不改其他工作树或共享业务库/知识库。
+- 归档中的 SQL v6/v7 文件基于 ERP 合并前的 45 条数据。本分支从当前 v6 重新构建 65 条 v7，保留全部 20 条 ERP 合成用例和竞品来源拒答样例，合入 SC-002、SC-107、SC-112、SC-125 修正；hash 见 v7 manifest。默认 SQL 数据集未改变。
+- 合并冲突保留了 main 的 ERP 专属表路由和竞品退役规则，也接入订单域取消订单过滤。另加回归防止 POS 排名混入旧 demo 的订单表。
+- 定向验证：后端 9 个文件 189 passed；前端结果卡、值展示和回答呈现 3 个文件 64 passed。`git diff --check` 和 v7 manifest hash 检查通过。这些是离线验证，不等于真实页面和真实业务结果验收。
+- 尚未对重建后的 65 条 v7 执行隔离库结果级评测；未用版本一致的真实后端复测 SQL、RAG、Conversation-first 或回复文案；共享服务未重建、重启。该分支尚未提交或合并。
+
+## 2026-11-20：P1 扫码回调守卫与 P2 存量库补齐修复
+
+- P1（登录扫码回调拦截）：`AuthGate.tsx` 公开页清单缺 `/login/sso/callback`；回调页要用 code 换 token、加载时必然无 token，未登录用户扫码回来会在 `completeSsoLogin` 之前被弹回统一门户，扫码闭环断裂。已放行该路径，`AuthGate.test.tsx` 补回调页公开与续期失败不弹回两组用例（9 passed）。
+- P2（旧数据库补齐）：隔离旧库副本两阶段验证发现比"漏 008"更深的两层问题：① `MEMORY_MIGRATIONS` 手工清单与 `init_db.MIGRATION_TARGETS` 唯一事实源漂移——151 的 `auth.users` schema 是 008→131 一串迁移演化的，只补 008 后 151 仍因缺 `tenant_id` 列失败（已复现）；② `ensure_dbs._apply_migration` 简化裸执行路径不登记跟踪表，存量库重跑 003/031 因 ON CONFLICT 约束重建/引用列变更而报错（幂等重跑复现）。
+- 修复：memory 清单改为从 `discover_migrations()` 动态派生（134 个，排除运行时托管 049），应用统一委托 `init_db.apply_migration`（跟踪表 checksum、冻结校验、逐语句降级继承），memory 循环前建 `public.schema_migrations`；business 权限链清单与 NOLOGIN 门控不变。
+- 隔离验证（本机 PG 5432 临时库，全程未触碰现有库，已清理）：阶段一只跑 151 复现 `auth` schema 缺失失败；阶段二派生清单建齐 134/134 applied、auth 系 11 表与 151 唯一索引全部建出；第二遍存量重跑 134/134 skipped 零 error。
+- 定向测试：`test_auth_sso_migration.py` + `test_startup_validation.py` 63 passed；前端 AuthGate 9 passed。Docker Desktop 未预启动，本机验证未动共享栈；共享栈由 Docker Desktop 自恢复拉起，本轮未重建、未写入。
+- 修复尚未提交；P1/P2 改动与既有 26 个暂存文件同工作树未提交状态共存，等待用户确认提交。

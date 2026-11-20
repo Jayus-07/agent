@@ -11,7 +11,8 @@
 
 职责：
   1. 补齐数据库（agent_memory / agent_business）
-  2. 按库应用迁移（含 001/002/003/005/006/007、只读角色 004 与口令撤销 093）
+  2. 按库应用迁移（business 为显式权限链清单；memory 从 init_db 的
+     MIGRATION_TARGETS 唯一事实源动态派生，两入口不漂移）
   3. 用 PG_READONLY_PASSWORD 对齐 agent_readonly 密码（**不经 shell/sed
      插值** —— 那会把含特殊字符的密码写坏，实测踩过）
   4. 校验并打印状态（表数量 / 角色可登录性），失败非零退出
@@ -52,25 +53,27 @@ BUSINESS_MIGRATIONS = [
     "150_retail_erp_pilot_schema.sql",  # 零售 ERP 试点业务域
     "152_retire_crawler_read_access.sql",  # 竞品旧表保留但问数账号无读取权限
 ]
-MEMORY_MIGRATIONS = [
-    "002_agent_memory_schema.sql",
-    "006_customer_service.sql",
-    "003_agent_memory_seed.sql",
-    "010_doc_registry_pg.sql",
-    "011_doc_registry_version_governance.sql",
-    "012_obs_trace_store_pg.sql",
-    "013_obs_analytics_pg.sql",
-    "014_rag_stores_pg.sql",
-    "027_rag_processing_lineage.sql",
-    "151_auth_sso.sql",  # 扫码身份绑定与租户级企业登录配置
-]
 
-# "已存在 / 已导入"类错误码（幂等跳过，不算失败）
-# 42P07 重复表 / 42710 重复对象 / 42P06 重复 schema / 42P04 重复库 /
-# 42723 重复函数 / 42P16 重复约束 / 23505 唯一键冲突（种子数据重跑）
-_ALREADY_EXISTS_SQLSTATES = {
-    "42P07", "42710", "42P06", "42P04", "42723", "42P16", "23505",
-}
+
+def _derive_memory_migrations() -> list[str]:
+    """memory 库迁移清单：从 init_db.MIGRATION_TARGETS（唯一事实源）派生。
+
+    手工清单曾与登记漂移：151_auth_sso 被登记，但它的 auth.users schema
+    是 008→131 一串迁移逐步演化出来的，旧库补齐在 151 上必然失败
+    （隔离旧库副本已复现）。改为动态派生后两个入口永不漂移；顺序与
+    全新初始化一致（文件名序 + 尾置），运行时托管迁移（049，对象由
+    应用启动 ensure_schema() 幂等建立）照 init_db 语义跳过不执行。
+    """
+    from scripts.init_db import RUNTIME_MANAGED_MIGRATIONS, discover_migrations
+
+    ordered, _unregistered = discover_migrations()
+    return [
+        name for name, target in ordered
+        if target == "memory" and name not in RUNTIME_MANAGED_MIGRATIONS
+    ]
+
+
+MEMORY_MIGRATIONS = _derive_memory_migrations()
 _READONLY_TRACKED_MIGRATIONS = frozenset({
     "004_readonly_role.sql",
     "043_readonly_public_revoke.sql",
@@ -121,7 +124,14 @@ def _apply_migration(
     password: str,
     user: str | None = None,
 ) -> str:
-    """在给定连接上应用单个迁移文件。返回 'applied' / 'skipped' / 'error:…'。"""
+    """在给定连接上应用单个迁移文件。返回 'applied' / 'applied-partial' /
+    'skipped' / 'error:…'。
+
+    统一委托 init_db.apply_migration：跟踪表查 checksum（存量库重跑直接
+    skipped，不裸重放 SQL）、冻结校验和、逐语句降级补齐全继承。此前的
+    简化裸执行路径不登记跟踪表，存量库重跑 003/031 时因 ON CONFLICT
+    约束被后续迁移重建、引用列被改而报错（隔离旧库副本已复现）。
+    """
     path = MIGRATIONS_DIR / filename
     if not path.exists():
         return "error: 迁移文件不存在"
@@ -131,41 +141,23 @@ def _apply_migration(
     sql = sql.replace("${PG_READONLY_PASSWORD}", password)
     sql = sql.replace("${PG_READONLY_USER}", os.getenv("PG_READONLY_USER", "agent_readonly"))
 
-    if filename in _READONLY_TRACKED_MIGRATIONS:
-        try:
-            from scripts.init_db import apply_migration
+    try:
+        from scripts.init_db import apply_migration
 
-            status, _detail = apply_migration(
-                conn,
-                filename,
-                sql,
-                force=False,
-                readonly_password=password,
-                readonly_user=user or os.getenv("PG_READONLY_USER", "agent_readonly"),
-            )
-            if status == "error":
-                return f"error: {filename} failed"
-            return status
-        except Exception as exc:  # noqa: BLE001
-            conn.rollback()
-            return f"error: {type(exc).__name__}: readonly migration failed"
-
-    applied_any = False
-    with conn.cursor() as cur:
-        try:
-            cur.execute(sql)
-            applied_any = True
-        except Exception as e:  # noqa: BLE001
-            code = getattr(e, "pgcode", None)
-            if code in _ALREADY_EXISTS_SQLSTATES:
-                conn.rollback()
-                return "skipped"
-            conn.rollback()
-            if filename == "093_revoke_readonly_default_password.sql":
-                return f"error: {type(e).__name__}: readonly credential migration failed"
-            return f"error: {type(e).__name__}: {str(e)[:160]}"
-    conn.commit()
-    return "applied" if applied_any else "skipped"
+        status, detail = apply_migration(
+            conn,
+            filename,
+            sql,
+            force=False,
+            readonly_password=password,
+            readonly_user=user or os.getenv("PG_READONLY_USER", "agent_readonly"),
+        )
+        if status == "error":
+            return f"error: {detail}" if detail else f"error: {filename} failed"
+        return status
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        return f"error: {type(exc).__name__}: {str(exc)[:120]}"
 
 
 def _apply_business_migrations(
@@ -334,6 +326,11 @@ def main() -> int:
                     check=args.check,
                 )
             else:
+                # 委托 init_db.apply_migration 需要跟踪表记录 checksum
+                from scripts.init_db import ensure_migration_tracking_table
+
+                ensure_migration_tracking_table(conn)
+                conn.commit()
                 for mig in migrations:
                     if args.check:
                         print(f"[ensure_dbs]   ({db}) {mig}: 跳过（--check）")
@@ -341,9 +338,8 @@ def main() -> int:
                     result = _apply_migration(
                         conn, mig, password=ro_pw, user=ro_user
                     )
-                    mark = "✓" if result == "applied" else (
-                        "=" if result == "skipped" else "✗"
-                    )
+                    mark = {"applied": "✓", "applied-partial": "~",
+                            "skipped": "="}.get(result, "✗")
                     print(f"[ensure_dbs]   {mark} ({db}) {mig}: {result}")
                     if result.startswith("error"):
                         rc = 1

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import type { SQLResultSet } from '@/lib/types'
 import {
   chooseSQLChartPresentation,
+  displaySQLColumnLabel,
   formatSQLChartValue,
+  formatSQLResultValue,
   isPercentageSQLColumn,
   parseSQLChartNumber,
   sortSQLTrendRows,
@@ -13,6 +15,13 @@ function result(columns: string[], rows: SQLResultSet['rows']): SQLResultSet {
 }
 
 describe('SQL result chart selection', () => {
+  it('maps common technical aliases to readable Chinese labels', () => {
+    expect(displaySQLColumnLabel('active_product_count')).toBe('在售商品数')
+    expect(displaySQLColumnLabel('refund_rate')).toBe('退款率')
+    expect(displaySQLColumnLabel('total_qty')).toBe('销量')
+    expect(displaySQLColumnLabel('本月累计销售额')).toBe('本月累计销售额')
+  })
+
   it('single numeric value becomes a metric', () => {
     expect(chooseSQLChartPresentation(result(['销售额'], [[12345.6]]))).toEqual({
       kind: 'metric', valueIndexes: [0],
@@ -131,6 +140,35 @@ describe('SQL result chart selection', () => {
     expect(isPercentageSQLColumn(counts, 1)).toBe(false)
     expect(formatSQLChartValue(12.5, true)).toBe('12.5%')
     expect(formatSQLChartValue(12.5)).toBe('12.5')
+  })
+
+  it('formats SQL ratio columns consistently as percentages without losing decimal text', () => {
+    const ratios = result(
+      ['product_name', 'refund_rate'], [['无线耳机', '1.0000']],
+    )
+    const exactRatio = result(
+      ['refund_rate'], [['0.000000000000000001']],
+    )
+    const explicitPercent = result(
+      ['mom_growth_percent'], [[-42.47]],
+    )
+
+    expect(isPercentageSQLColumn(ratios, 1)).toBe(true)
+    expect(formatSQLResultValue('1.0000', ratios, 1)).toBe('100%')
+    expect(formatSQLResultValue('0.000000000000000001', exactRatio, 0)).toBe('0.0000000000000001%')
+    expect(formatSQLResultValue(-42.47, explicitPercent, 0)).toBe('-42.47%')
+  })
+
+  it('keeps an unavailable percentage metric visible instead of hiding it', () => {
+    const resultWithNoComparisonBase = result(
+      ['current_month_sales', 'previous_period_sales', 'mom_growth_percent'],
+      [[1200, 0, null]],
+    )
+
+    expect(chooseSQLChartPresentation(resultWithNoComparisonBase)).toEqual({
+      kind: 'metrics', valueIndexes: [0, 1, 2],
+    })
+    expect(formatSQLResultValue(null, resultWithNoComparisonBase, 2)).toBe('—')
   })
 
   it('keeps meaningful decimal precision in chart labels and tooltips', () => {

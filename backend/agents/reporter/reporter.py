@@ -29,7 +29,7 @@ from backend.prompts.service import prompt_service
 # events.make_done_event（读原始 step_results，不受此处剥离影响）
 _RAG_META_RE = re.compile(r"<!--\s*RAGMETA\s*(\{.*?\})\s*-->\s*", re.DOTALL)
 _STRUCTURED_SUMMARY_RULES = """SQL 摘要强制规则（不受已发布模板版本影响）：
-只根据已核实的数据作答，不编造或推算数值、单位、时间范围和趋势；预览或样例不能证明全量排名、总计、比例或趋势；只有明确确认总数为 0 才能说没有匹配记录；摘要省略的内容不能猜测，数据不足时说明缺少什么。"""
+只根据已核实的数据作答，不编造或推算数值、单位、时间范围和趋势；问题明确给出的时间范围、筛选条件或比较口径且数据摘要可支持时，结论要简短重述关键范围，不能只报裸数值，也不得把范围换成其他窗口；完整排名结果的首行明确时，点明第一名和对应指标值，预览或样例不能证明全量排名、总计、比例或趋势；只有明确确认总数为 0 才能说没有匹配记录；摘要省略的内容不能猜测，数据不足时说明缺少什么。"""
 
 
 def _ensure_structured_summary_contract(prompt: str, question: str) -> str:
@@ -523,6 +523,70 @@ def _enum_text(value) -> str:
     return str(getattr(value, "value", value) or "").strip().lower()
 
 
+def _sql_result_sources(result: Mapping) -> tuple[list[Mapping], Mapping | None]:
+    """返回 SQL 结果封套各层及最内层数据，供行数判定共用。"""
+    sources = [result]
+    output = result.get("output")
+    while isinstance(output, Mapping):
+        sources.append(output)
+        if (output.get("status") in {"success", "ok"}
+                and isinstance(output.get("data"), Mapping)):
+            output = output["data"]
+            continue
+        break
+    return sources, output if isinstance(output, Mapping) else None
+
+
+def _sql_row_count_values(sources: list[Mapping]) -> list[int]:
+    """读取并校验所有已声明的 SQL 返回行数。"""
+    counts = []
+    for source in sources:
+        for key in ("row_count", "total", "total_rows"):
+            value = source.get(key)
+            if (isinstance(value, int) and not isinstance(value, bool)
+                    and value >= 0):
+                counts.append(value)
+    return counts
+
+
+def _sql_result_state(result: Mapping) -> str:
+    """判断结果为空、非空或无法确认；空 rows 本身不足以证明零条。"""
+    sources, output = _sql_result_sources(result)
+    facts = [
+        source["is_empty"]
+        for source in sources
+        if isinstance(source.get("is_empty"), bool)
+    ]
+    facts.extend(count == 0 for count in _sql_row_count_values(sources))
+    rows = output.get("rows") if output is not None else None
+    if isinstance(rows, (list, tuple)) and rows:
+        facts.append(False)
+
+    if not facts or any(fact != facts[0] for fact in facts[1:]):
+        return "unknown"
+    return "empty" if facts[0] else "nonempty"
+
+
+def _render_sql_empty_rows(label: str, result: Mapping) -> str:
+    """按可信元数据说明无明细，避免把未知行数说成零条。"""
+    state = _sql_result_state(result)
+    if state == "empty":
+        detail = _FAILURE_TEXT["no_data"]
+    elif state == "nonempty":
+        sources, _ = _sql_result_sources(result)
+        counts = _sql_row_count_values(sources)
+        if counts and all(count == counts[0] for count in counts):
+            detail = f"已确认有 {counts[0]} 行结果，但当前没有可展示的明细。"
+        else:
+            detail = (
+                "结果状态显示有匹配记录，但返回行数未确认，"
+                "当前没有可展示的明细。"
+            )
+    else:
+        detail = "当前没有可展示的明细，无法确认是否有匹配记录。"
+    return f"### {label}\n\n{detail}"
+
+
 def _result_kind(result: dict) -> str:
     """把已有 StepResult / ToolStatus 字段映射为用户展示语义。"""
     tool_status = _enum_text(result.get("tool_status"))
@@ -557,6 +621,11 @@ def _result_kind(result: dict) -> str:
     if tool_status == "rate_limited" or error_type == "rate_limited" \
             or error_code == "rate_limited":
         return "rate_limited"
+    # SQL validation_error means generated SQL did not pass the allowlist or
+    # query policy checks; it does not mean the user's request parameters are
+    # malformed. Keep actual request-shape errors on the invalid_request path.
+    if cap == "sql.query" and error_type == "validation_error":
+        return "sql_query_rejected"
     if (tool_status == "invalid_request"
             or error_type in {"invalid_param", "validation_error", "invalid_request"}):
         return "invalid_request"
@@ -577,10 +646,8 @@ def _result_kind(result: dict) -> str:
         return "degraded"
 
     output = result.get("output")
-    if status == "success" and cap == "sql.query" and (
-            result.get("is_empty") is True
-            or (isinstance(output, Mapping) and "rows" in output
-                and not output.get("rows"))):
+    if (status == "success" and cap == "sql.query"
+            and _sql_result_state(result) == "empty"):
         return "no_data"
     if status == "success" and cap == "rag.search" \
             and isinstance(output, str) and _is_empty_output(output):
@@ -601,6 +668,10 @@ _FAILURE_TEXT = {
     "unavailable": "服务暂时不可用，请稍后重试。",
     "rate_limited": "请求受到频率限制，请稍后重试。",
     "invalid_request": "请求参数有误，请检查后重试。",
+    "sql_query_rejected": (
+        "数据库查询未能通过当前规则校验，暂时没有返回结果。"
+        "可以换一种问法，或请管理员确认相关数据是否已接入。"
+    ),
     "failed": "本次操作未能完成，建议稍后重试。",
     "skipped": "该步骤未执行，因此没有可展示的结果。",
     "no_evidence": "知识库没有足够可靠的依据回答该问题。",
@@ -615,7 +686,7 @@ def _failure_text(result: dict) -> str:
     if kind == "permission_denied" and result.get("capability") == "sql.query":
         return "当前账号无权执行该查询或访问相关数据，请联系管理员申请相应的数据访问权限后重试。"
     if kind == "unavailable" and result.get("capability") == "rag.search":
-        return "知识库检索服务暂不可用，请稍后重试。"
+        return "知识库检索服务暂时不可用，请稍后重试。"
     if (kind == "approval_required"
             and isinstance(result.get("output"), str)
             and result.get("output").strip()):
@@ -783,6 +854,14 @@ def render_result_for_user(description: str, capability: str, output) -> str:
             return output
     if isinstance(output, Mapping):
         if output.get("status") in {"success", "ok"} and "data" in output:
+            if capability == "sql.query":
+                _, data = _sql_result_sources({"output": output})
+                if (data is not None
+                        and isinstance(data.get("rows"), (list, tuple))
+                        and not data.get("rows")):
+                    return _render_sql_empty_rows(
+                        label, {"output": output},
+                    )
             return render_result_for_user(label, capability, output.get("data"))
         if isinstance(output.get("report_md"), str):
             return output["report_md"].strip()
@@ -790,7 +869,7 @@ def render_result_for_user(description: str, capability: str, output) -> str:
             columns = output.get("columns") or []
             rows = output.get("rows") or []
             if not rows:
-                return f"### {label}\n\n{_FAILURE_TEXT['no_data']}"
+                return _render_sql_empty_rows(label, {"output": output})
             if not columns and isinstance(rows[0], Mapping):
                 columns = list(rows[0])
             return _render_table_section(label, columns, rows)
@@ -1237,10 +1316,7 @@ def _render_structured_sections(step_results: dict) -> str:
                         columns = list(rows[0])
                     section = _render_table_section(description, columns, rows)
                 else:
-                    section = (
-                        f"### {description}\n\n"
-                        f"{_FAILURE_TEXT['no_data']}"
-                    )
+                    section = _render_sql_empty_rows(description, sr)
                 sections.append(section)
             # BusinessInsight → 风险+建议
             elif "summary" in output and any(

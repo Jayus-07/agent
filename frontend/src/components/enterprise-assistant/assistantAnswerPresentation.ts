@@ -1,4 +1,9 @@
 import type { SQLResultSet } from '@/lib/types'
+import {
+  displaySQLColumnLabel,
+  formatSQLResultValue,
+  isUnsafeSQLInteger,
+} from './sqlResultPresentation'
 
 const REFERENCE_SECTION_MARKERS = [
   '\n\n---\n\n### 参考文献',
@@ -43,7 +48,57 @@ export function presentAssistantAnswer(
       }
     }
   }
-  return removeRenderedSQLTables(presented, sqlResults)
+  const rendered = removeRenderedSQLTables(presented, sqlResults)
+  if (!sqlResults.length || rendered.replace(/^\s{0,3}#{1,6}\s+.*$/gm, '').trim()) {
+    return rendered
+  }
+  return sqlResults.map(summarizeSQLResult).join('\n\n')
+}
+
+function sqlColumnLabel(column: string): string {
+  const label = displaySQLColumnLabel(column)
+  return label !== column.trim() || /\p{Script=Han}/u.test(label) ? label : ''
+}
+
+function summarizeSQLResult(result: SQLResultSet): string {
+  if (result.rows.length === 0) {
+    if (result.total_rows_known !== true) {
+      return '暂时没有可展示的明细，无法确认是否有匹配记录。'
+    }
+    if (result.total_rows === 0) return '没有匹配到记录。'
+    return `查询返回 ${result.total_rows} 行，但当前没有可展示的明细。`
+  }
+
+  const complete = result.total_rows_known === true
+    && result.total_rows === result.rows.length
+    && result.payload_truncated !== true
+    && result.omitted_columns === 0
+    && result.truncated_cells !== true
+  if (!complete) {
+    return '查询已完成，结果完整度或返回总数未确认，详情见下方结果卡。'
+  }
+
+  if (result.rows.length === 1) {
+    const values = result.columns.map((column, index) => ({
+      label: sqlColumnLabel(column),
+      value: result.rows[0]?.[index] ?? null,
+    }))
+    if (values.some(({ value }) => isUnsafeSQLInteger(value))) {
+      return '查询已完成，部分整数精度无法确认，详情见下方结果卡。'
+    }
+    if (values.length === 1) {
+      const value = formatSQLResultValue(values[0].value, result, 0)
+      const label = values[0].label
+      return label ? `${label}为 ${value}。` : `查询结果为 ${value}。`
+    }
+    if (values.length > 1 && values.every(({ label }) => label)) {
+      return `${values.map(({ label, value }, index) => (
+        `${label}为 ${formatSQLResultValue(value, result, index)}`
+      )).join('；')}。`
+    }
+  }
+
+  return `查询已返回 ${result.total_rows} 行，详情见下方结果卡。`
 }
 
 function markdownCells(line: string): string[] {

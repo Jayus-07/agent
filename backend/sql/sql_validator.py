@@ -433,6 +433,10 @@ class SQLValidator:
         for func in stmt.find_all(exp.Func):
             if isinstance(func, (exp.Anonymous, exp.Connector, exp.Case)):
                 continue
+            # sqlglot 会把 CASE WHEN 的条件节点也表示为 exp.If；只有其
+            # 父节点为 CASE 时跳过，独立的 IF(...) 仍按未批准函数拒绝。
+            if isinstance(func, exp.If) and isinstance(func.parent, exp.Case):
+                continue
             func_name = type(func).__name__.upper()
             self._deny_dangerous_function(func_name, func)
             if hasattr(func, "sql_name"):

@@ -6,7 +6,8 @@ import { BarChart3, Download, Table2 } from 'lucide-react'
 import type { SQLResultSet } from '@/lib/types'
 import {
   chooseSQLChartPresentation,
-  formatSQLChartValue,
+  displaySQLColumnLabel,
+  formatSQLResultValue,
   isUnsafeSQLInteger,
   isPercentageSQLColumn,
   parseSQLChartNumber,
@@ -15,6 +16,16 @@ import {
 
 const SERIES_COLORS = ['#4f46e5', '#0f766e', '#d97706', '#be123c']
 
+function displaySQLResultTitle(result: SQLResultSet): string {
+  const title = result.title.trim()
+  if (!/^(?:数据库查询|查询结果|SQL\s*查询)$/i.test(title)) return title
+  if (result.columns.length === 1) {
+    const label = displaySQLColumnLabel(result.columns[0])
+    if (label !== result.columns[0].trim() || /\p{Script=Han}/u.test(label)) return label
+  }
+  return '查询结果'
+}
+
 function csvCell(value: string | number | boolean | null): string {
   let text = value == null ? '' : String(value)
   if (typeof value === 'string' && /^[\s]*[=+\-@\t\r]/.test(value)) text = `'${text}`
@@ -22,14 +33,22 @@ function csvCell(value: string | number | boolean | null): string {
 }
 
 function exportCSV(result: SQLResultSet) {
+  const headers = result.columns.map((column, index) => (
+    isPercentageSQLColumn(result, index)
+      && !/[%％]|percent|pct|百分比/i.test(displaySQLColumnLabel(column))
+      ? `${displaySQLColumnLabel(column)}（%）`
+      : displaySQLColumnLabel(column)
+  ))
   const content = [
-    result.columns.map(csvCell).join(','),
-    ...result.rows.map((row) => result.columns.map((_, index) => csvCell(row[index] ?? null)).join(',')),
+    headers.map(csvCell).join(','),
+    ...result.rows.map((row) => result.columns.map((_, index) => (
+      csvCell(row[index] == null ? null : formatSQLResultValue(row[index], result, index))
+    )).join(',')),
   ].join('\r\n')
   const blob = new Blob([`\uFEFF${content}`], { type: 'text/csv;charset=utf-8' })
   const href = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
-  const safeTitle = result.title.replace(/[\\/:*?"<>|]/g, '-').slice(0, 50) || '查询结果'
+  const safeTitle = displaySQLResultTitle(result).replace(/[\\/:*?"<>|]/g, '-').slice(0, 50) || '查询结果'
   anchor.href = href
   anchor.download = `${safeTitle}.csv`
   anchor.click()
@@ -79,10 +98,10 @@ function SQLDataTable({ result }: { result: SQLResultSet }) {
     <div className="max-h-[360px] overflow-auto">
       <table className="w-full border-collapse text-left text-xs">
       <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-slate-500">
-        <tr>{result.columns.map((column, index) => <th key={`${column}-${index}`} className="whitespace-nowrap border-b border-slate-200 px-3 py-2 font-medium">{column}</th>)}</tr>
+        <tr>{result.columns.map((column, index) => <th key={`${column}-${index}`} className="whitespace-nowrap border-b border-slate-200 px-3 py-2 font-medium">{displaySQLColumnLabel(column)}</th>)}</tr>
       </thead>
       <tbody>{rows.map((row) => <tr key={row.key} className="even:bg-slate-50/60">
-        {row.cells.map((cell, index) => <td key={index} className="max-w-[260px] border-b border-slate-100 px-3 py-2 align-top text-slate-700">{cell == null ? <span className="text-slate-400">—</span> : isUnsafeSQLInteger(cell) ? <span className="text-amber-700">精度不可靠</span> : <span className="whitespace-pre-wrap break-words">{String(cell)}</span>}</td>)}
+        {row.cells.map((cell, index) => <td key={index} className="max-w-[260px] border-b border-slate-100 px-3 py-2 align-top text-slate-700">{cell == null ? <span className="text-slate-400">—</span> : isUnsafeSQLInteger(cell) ? <span className="text-amber-700">精度不可靠</span> : <span className="whitespace-pre-wrap break-words">{formatSQLResultValue(cell, result, index)}</span>}</td>)}
       </tr>)}</tbody>
       </table>
     </div>
@@ -102,12 +121,12 @@ function SQLChart({ result }: { result: SQLResultSet }) {
     const value = parseSQLChartNumber(rawValue)
     const context = result.columns.flatMap((column, columnIndex) => (
       columnIndex !== index && result.rows[0]?.[columnIndex] != null
-        ? [`${column}：${result.rows[0][columnIndex]}`]
+        ? [`${displaySQLColumnLabel(column)}：${result.rows[0][columnIndex]}`]
         : []
     )).join(' · ')
     return <div className="flex min-h-40 flex-col justify-center px-5 py-6">
-      <span className="text-xs font-medium text-slate-500">{result.columns[index]}</span>
-      <strong className="mt-2 break-all text-3xl font-semibold tracking-tight text-slate-900">{value == null ? '—' : String(rawValue)}</strong>
+      <span className="text-xs font-medium text-slate-500">{displaySQLColumnLabel(result.columns[index])}</span>
+      <strong className="mt-2 break-all text-3xl font-semibold tracking-tight text-slate-900">{value == null ? '—' : formatSQLResultValue(rawValue, result, index)}</strong>
       {context && <span className="mt-1 break-words text-xs text-slate-500">{context}</span>}
     </div>
   }
@@ -116,16 +135,16 @@ function SQLChart({ result }: { result: SQLResultSet }) {
     const metricIndexes = new Set(presentation.valueIndexes)
     const context = result.columns.flatMap((column, columnIndex) => (
       !metricIndexes.has(columnIndex) && result.rows[0]?.[columnIndex] != null
-        ? [`${column}：${result.rows[0][columnIndex]}`]
+        ? [`${displaySQLColumnLabel(column)}：${result.rows[0][columnIndex]}`]
         : []
     )).join(' · ')
     return <div className="px-4 py-5">
       <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {presentation.valueIndexes.map((index) => (
           <div key={index} className="min-w-0 rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-3">
-            <dt className="break-words text-xs font-medium text-slate-500">{result.columns[index]}</dt>
+            <dt className="break-words text-xs font-medium text-slate-500">{displaySQLColumnLabel(result.columns[index])}</dt>
             <dd className="mt-1 break-all text-2xl font-semibold tracking-tight text-slate-900">
-              {result.rows[0]?.[index] == null ? '—' : String(result.rows[0][index])}
+              {formatSQLResultValue(result.rows[0]?.[index], result, index)}
             </dd>
           </div>
         ))}
@@ -137,16 +156,15 @@ function SQLChart({ result }: { result: SQLResultSet }) {
   if (presentation.kind === 'bar') {
     const valueIndex = presentation.valueIndexes[0]
     const series = `series-${valueIndex}`
-    const isPercentage = isPercentageSQLColumn(result, valueIndex)
     const height = Math.min(340, Math.max(176, chartData.length * 38 + 56))
     return <div className="w-full px-2 py-4" style={{ height }}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 22, bottom: 4, left: 8 }}>
           <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" horizontal={false} />
-          <XAxis type="number" tick={{ fill: '#64748b', fontSize: 12 }} tickFormatter={(value) => formatSQLChartValue(Number(value), isPercentage)} />
+          <XAxis type="number" tick={{ fill: '#64748b', fontSize: 12 }} tickFormatter={(value) => formatSQLResultValue(Number(value), result, valueIndex)} />
           <YAxis type="category" dataKey="category" width={96} tick={{ fill: '#475569', fontSize: 12 }} />
-          <Tooltip formatter={(value) => [formatSQLChartValue(Number(value), isPercentage), result.columns[valueIndex]]} />
-          <Bar dataKey={series} name={result.columns[valueIndex]} fill={SERIES_COLORS[0]} radius={[0, 5, 5, 0]} maxBarSize={22} />
+          <Tooltip formatter={(value) => [formatSQLResultValue(Number(value), result, valueIndex), displaySQLColumnLabel(result.columns[valueIndex])]} />
+          <Bar dataKey={series} name={displaySQLColumnLabel(result.columns[valueIndex])} fill={SERIES_COLORS[0]} radius={[0, 5, 5, 0]} maxBarSize={22} />
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -155,16 +173,15 @@ function SQLChart({ result }: { result: SQLResultSet }) {
   if (presentation.kind === 'line') {
     return <div className="grid w-full gap-3 px-2 py-4 sm:grid-cols-2">
       {presentation.valueIndexes.map((index, colorIndex) => {
-        const isPercentage = isPercentageSQLColumn(result, index)
-        return <section key={index} aria-label={`${result.columns[index]}趋势图`} className="min-w-0">
-          <h4 className="mb-1 truncate px-2 text-xs font-medium text-slate-600">{result.columns[index]}</h4>
+        return <section key={index} aria-label={`${displaySQLColumnLabel(result.columns[index])}趋势图`} className="min-w-0">
+          <h4 className="mb-1 truncate px-2 text-xs font-medium text-slate-600">{displaySQLColumnLabel(result.columns[index])}</h4>
           <div className="h-56 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 8, right: 18, bottom: 4, left: 4 }}>
                 <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
                 <XAxis dataKey="category" tick={{ fill: '#64748b', fontSize: 12 }} tickLine={false} />
-                <YAxis tick={{ fill: '#64748b', fontSize: 12 }} tickFormatter={(value) => formatSQLChartValue(Number(value), isPercentage)} width={72} />
-                <Tooltip formatter={(value) => [formatSQLChartValue(Number(value), isPercentage), result.columns[index]]} />
+                <YAxis tick={{ fill: '#64748b', fontSize: 12 }} tickFormatter={(value) => formatSQLResultValue(Number(value), result, index)} width={72} />
+                <Tooltip formatter={(value) => [formatSQLResultValue(Number(value), result, index), displaySQLColumnLabel(result.columns[index])]} />
                 <Line dataKey={`series-${index}`} name={`series-${index}`} type="monotone" stroke={SERIES_COLORS[colorIndex]} strokeWidth={2} dot={{ r: 2.5 }} activeDot={{ r: 4 }} connectNulls />
               </LineChart>
             </ResponsiveContainer>
@@ -178,6 +195,7 @@ function SQLChart({ result }: { result: SQLResultSet }) {
 }
 
 export default function SQLResultCard({ result }: { result: SQLResultSet }) {
+  const title = displaySQLResultTitle(result)
   const displayedRows = result.rows.length
   const rowCountInconsistent = result.total_rows_known === true && result.total_rows < displayedRows
   const truncated = result.payload_truncated === true || result.total_rows > displayedRows
@@ -199,10 +217,10 @@ export default function SQLResultCard({ result }: { result: SQLResultSet }) {
       ? `展示 ${displayedRows} 行 · ${rowCountInconsistent ? '行数信息不一致' : '查询返回数未确认'}`
       : rowCountInconsistent ? '行数信息不一致，无法确认返回数' : '查询返回数未确认'
 
-  return <section aria-label={`${result.title}数据结果`} className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
+  return <section aria-label={`${title}数据结果`} className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-3.5 py-3 sm:px-4">
-      <div className="min-w-0 flex-1">
-        <h3 className="truncate text-sm font-semibold text-slate-800">{result.title}</h3>
+      <div className="min-w-0 basis-full flex-1 sm:basis-auto">
+        <h3 className="truncate text-sm font-semibold text-slate-800">{title}</h3>
         <p className="mt-0.5 text-xs text-slate-500">{countLabel}{result.omitted_columns ? ` · 另有 ${result.omitted_columns} 列未展示` : ''}{result.truncated_cells ? ' · 部分单元格已截短' : ''}</p>
       </div>
       <div className="flex items-center gap-1">
