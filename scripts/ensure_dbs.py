@@ -177,16 +177,21 @@ def _apply_business_migrations(
     from scripts.init_db import (
         block_readonly_roles_for_migrations,
         ensure_migration_tracking_table,
+        heal_missing_readonly_role,
         pending_readonly_authorization_migrations,
     )
 
+    db_label = os.getenv("BUSINESS_PGDATABASE", "agent_business")
     ensure_migration_tracking_table(conn)
+    heal_status = heal_missing_readonly_role(
+        conn, user=user, dbname=db_label,
+    )
+    print(f"[ensure_dbs]   ({db_label}) 只读角色探测: {heal_status}")
     if pending_readonly_authorization_migrations(conn):
         block_readonly_roles_for_migrations(conn, readonly_user=user)
 
     rc = 0
     readonly_migrations_ready = True
-    db_label = os.getenv("BUSINESS_PGDATABASE", "agent_business")
     for mig in BUSINESS_MIGRATIONS:
         if (
             mig == "093_revoke_readonly_default_password.sql"

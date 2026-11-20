@@ -1005,6 +1005,35 @@ def ensure_readonly_role(conn, *, user: str, password: str) -> str:
     return "ok" if password else "已禁用只读登录（未配置 PG_READONLY_PASSWORD）"
 
 
+def heal_missing_readonly_role(
+    conn, *, user: str, dbname: str,
+) -> str:
+    """存量库恢复后自愈缺失的只读角色。
+
+    pg_dump 备份只含库级数据，pg_roles 是集群对象不随库恢复；而
+    schema_migrations 跟踪表（表数据）随库回来，004 等建角色迁移被
+    幂等跳过 → 角色永远没人重建（2026-11-20 生产恢复实测：150/152
+    因 role 不存在失败，部署拒绝启动）。此处探测到角色缺失时重放
+    004（全幂等：IF NOT EXISTS 建角色 + 重复 GRANT 无害），跟踪表
+    记录保持不变——重放后实际状态与"已应用"重新一致。
+    """
+    target_user = str(user or _LEGACY_READONLY_USER).strip()
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s", (target_user,))
+        if cur.fetchone() is not None:
+            return "exists"
+    conn.rollback()
+
+    sql = (MIGRATIONS_DIR / "004_readonly_role.sql").read_text(encoding="utf-8")
+    # 004 硬编码 GRANT CONNECT ON DATABASE agent_business；存量库名可能
+    # 不同（BUSINESS_PGDATABASE），重放时对齐实际库名。
+    sql = sql.replace("ON DATABASE agent_business", f"ON DATABASE {dbname}")
+    with conn.cursor() as cur:
+        cur.execute(sql)
+    conn.commit()
+    return "healed"
+
+
 def verify_readonly(args: argparse.Namespace, dbname: str, *, user: str, password: str) -> str:
     if not password:
         return "跳过（未配置只读密码）"

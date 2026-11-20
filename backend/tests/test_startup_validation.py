@@ -1057,6 +1057,11 @@ class TestReadonlyPassword:
             "ensure_migration_tracking_table",
             lambda _conn: events.append(("tracking",)),
         )
+        monkeypatch.setattr(
+            init_db,
+            "heal_missing_readonly_role",
+            lambda _conn, *, user, dbname: events.append(("heal", user, dbname)) or "exists",
+        )
 
         def _apply(_conn, filename, *, password, user):
             events.append(("migration", filename))
@@ -1079,7 +1084,9 @@ class TestReadonlyPassword:
         )
 
         assert result == 1
-        assert events[:2] == [("tracking",), ("block", "sql_reader")]
+        assert events[:3] == [
+            ("tracking",), ("heal", "sql_reader", "agent_business"), ("block", "sql_reader"),
+        ]
         assert (
             "migration", "093_revoke_readonly_default_password.sql"
         ) not in events
@@ -1109,6 +1116,11 @@ class TestReadonlyPassword:
             lambda _conn: events.append(("tracking",)),
         )
         monkeypatch.setattr(
+            init_db,
+            "heal_missing_readonly_role",
+            lambda _conn, *, user, dbname: events.append(("heal", user, dbname)) or "exists",
+        )
+        monkeypatch.setattr(
             ensure_dbs,
             "_apply_migration",
             lambda _conn, filename, **_kwargs: events.append(
@@ -1128,6 +1140,66 @@ class TestReadonlyPassword:
 
         assert result == 0
         assert events[0] == ("tracking",)
+        assert ("password-aligned",) in events
+
+    def test_ensure_dbs_heals_role_absent_after_restore(
+        self, monkeypatch,
+    ):
+        """恢复库丢集群角色时：heal 重放 004 建角色，权限链不误伤。
+
+        回归背景：2026-11-20 生产部署失败——备份恢复的库没有
+        agent_readonly 角色，跟踪表却谎报 004 已应用，150/152 因
+        UndefinedObject 失败，密码对齐被跳过，部署拒绝启动。
+        """
+        from scripts import init_db
+        from scripts import ensure_dbs
+
+        events = []
+        monkeypatch.setattr(
+            init_db,
+            "block_readonly_roles_for_migrations",
+            lambda _conn, *, readonly_user: events.append(("block", readonly_user)),
+        )
+        monkeypatch.setattr(
+            init_db,
+            "pending_readonly_authorization_migrations",
+            lambda _conn: (),
+        )
+        monkeypatch.setattr(
+            init_db,
+            "ensure_migration_tracking_table",
+            lambda _conn: events.append(("tracking",)),
+        )
+
+        def _heal(_conn, *, user, dbname):
+            events.append(("heal", user, dbname))
+            return "healed"
+
+        monkeypatch.setattr(init_db, "heal_missing_readonly_role", _heal)
+        monkeypatch.setattr(
+            ensure_dbs,
+            "_apply_migration",
+            lambda _conn, filename, **_kwargs: events.append(
+                ("migration", filename)
+            ) or "applied",
+        )
+        monkeypatch.setattr(
+            ensure_dbs,
+            "_ensure_readonly_password",
+            lambda *_args, **_kwargs: events.append(("password-aligned",)) or "ok",
+        )
+
+        result = ensure_dbs._apply_business_migrations(
+            object(), password="test-only-placeholder", user="sql_reader",
+            check=False,
+        )
+
+        assert result == 0
+        # heal 在跟踪表之后、全部迁移之前执行；待授权迁移为空则不设屏障
+        assert events[:2] == [
+            ("tracking",), ("heal", "sql_reader", "agent_business"),
+        ]
+        assert events[2] == ("migration", "001_business_warehouse.sql")
         assert ("password-aligned",) in events
 
     def test_pending_readonly_migrations_respects_applied_and_frozen_checksums(
