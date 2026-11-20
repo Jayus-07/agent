@@ -2,6 +2,35 @@
 
 以下命令以当前仓库根目录执行；仅在本地或已获授权的环境运行会停止、重建服务或访问真实 Provider 的命令。服务定义以 `docker-compose.yml` 和脚本为准。
 
+## Git 工作树审计与收尾
+
+每个任务使用独立工作树。开始处理和准备结束时先盘点所有登记的工作树：
+
+~~~powershell
+powershell -NoProfile -File scripts/worktree_lifecycle.ps1 -Action Audit -RefreshRemote
+~~~
+
+`DIRTY_OR_IGNORED` 表示有本地内容必须先检查和保留；`NOT_PROVEN_MERGED` 表示当前证据无法证明提交已进入 `origin/main`。审计不会改写工作树文件、删除工作树或归档证据；`-RefreshRemote` 只刷新 Git 的远端跟踪引用。默认显示各类状态的数量和部分路径；需要完整清单时加 `-ShowAllFiles`。
+
+PR 确认合并后，工作树干净、没有未跟踪或忽略文件，且确认无人使用，才可移除指定工作树。命令先做保护检查，`-Apply` 启用操作，PowerShell 仍会要求确认；不使用强制删除：
+
+~~~powershell
+powershell -NoProfile -File scripts/worktree_lifecycle.ps1 `
+  -Action Remove `
+  -Path 'C:\Users\wh\.codex\worktrees\<任务工作树>' `
+  -Apply -ConfirmInactive
+~~~
+
+如需同时删除本地分支，加 `-DeleteBranch`；只允许 Git 能正常确认已合并的分支，不强删 squash/rebase 后无法用祖先关系证明的分支。脚本不删除远端分支，不自动归档证据，也不切换或同步 `main`。工作树删除后验证关单结果：
+
+~~~powershell
+powershell -NoProfile -File scripts/worktree_lifecycle.ps1 `
+  -Action VerifyCloseout `
+  -Path 'C:\Users\wh\.codex\worktrees\<已删除的任务工作树>'
+~~~
+
+此检查会刷新 `origin`，确认本地 `main` 干净且与 `origin/main` 一致，并确认指定工作树已移除。只有用户明确要求仓库只留 `main`、且确认没有其他活动任务时，才加 `-RequireOnlyMain`。任何检查失败都代表尚未收尾，应保留工作树并报告阻塞原因。
+
 ## 本地服务
 
 `devctl.bat` 是本地开发服务入口：`backend` 对应 Compose 的 `app`，`admin`、`cs`、`web` 分别启动对应前端。
