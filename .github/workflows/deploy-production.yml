@@ -1,11 +1,9 @@
 name: Deploy production
 
+# 部署只走手动触发：镜像构建（publish-images）在 main 上自动进行，
+# 但部署时机由人选择（攒批、择窗口），避免逐 PR 自动部署把中间态
+# 推上生产。用法：传一个成功的 "Publish production images" run ID。
 on:
-  workflow_run:
-    workflows:
-      - Publish production images
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       publish_run_id:
@@ -25,9 +23,6 @@ concurrency:
 jobs:
   verify-release:
     name: Verify published main images
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -41,7 +36,7 @@ jobs:
         id: manifest
         env:
           GH_TOKEN: ${{ github.token }}
-          PUBLISH_RUN_ID: ${{ github.event.workflow_run.id || inputs.publish_run_id }}
+          PUBLISH_RUN_ID: ${{ inputs.publish_run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -161,7 +156,6 @@ jobs:
       IMAGE_ADMIN: ${{ needs.verify-release.outputs.image_admin }}
       IMAGE_CS: ${{ needs.verify-release.outputs.image_cs }}
       IMAGE_SHA: ${{ needs.verify-release.outputs.sha }}
-      AUTO_DEPLOY: ${{ github.event_name == 'workflow_run' }}
     steps:
       - name: Checkout the published commit
         uses: actions/checkout@v7
@@ -271,32 +265,6 @@ jobs:
           backend_dirty="$(docker image inspect "$IMAGE_BACKEND" --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^GIT_DIRTY=//p')"
           test "$backend_commit" = "$short_sha"
           test "$backend_dirty" = "false"
-
-          if [[ "$AUTO_DEPLOY" == "true" ]]; then
-            latest_main_sha="$(python - "$GITHUB_REPOSITORY" <<'PY'
-          import json
-          import os
-          import sys
-          from urllib.request import Request, urlopen
-
-          repository = sys.argv[1]
-          request = Request(
-              f"https://api.github.com/repos/{repository}/commits/main",
-              headers={
-                  "Accept": "application/vnd.github+json",
-                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
-                  "X-GitHub-Api-Version": "2022-11-28",
-              },
-          )
-          with urlopen(request, timeout=15) as response:
-              print(json.load(response)["sha"])
-          PY
-            )"
-            if [[ "$latest_main_sha" != "$IMAGE_SHA" ]]; then
-              echo "main advanced after image verification; refusing to deploy a stale build." >&2
-              exit 1
-            fi
-          fi
 
           docker compose run --rm --no-deps \
             -e PYTHONPATH=/app \
