@@ -1142,6 +1142,78 @@ class TestReadonlyPassword:
         assert events[0] == ("tracking",)
         assert ("password-aligned",) in events
 
+    def test_heal_missing_readonly_role_respects_tracking_table_gate(self, monkeypatch):
+        """heal 只在跟踪表谎报 004 已应用时重放；fresh 库不干预。
+
+        fresh 场景 004 引用的业务 schema 尚未创建，提前重放必然失败；
+        跟踪表有 004 applied 记录才说明是恢复库不一致，重放 004 重建角色。
+        """
+        import psycopg2
+
+        from scripts import init_db
+
+        calls = []
+
+        class _Cursor:
+            def __init__(self, role_exists, tracked):
+                self._role_exists = role_exists
+                self._tracked = tracked
+
+            def execute(self, query, params=None):
+                calls.append((query.strip().splitlines()[0][:40], params))
+
+            def fetchone(self):
+                if "pg_roles" in calls[-1][0]:
+                    return (1,) if self._role_exists else None
+                return (1,) if self._tracked else None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        class _Conn:
+            def __init__(self, role_exists, tracked):
+                self._cursor = _Cursor(role_exists, tracked)
+                self.commits = 0
+
+            def cursor(self):
+                return self._cursor
+
+            def rollback(self):
+                pass
+
+            def commit(self):
+                self.commits += 1
+
+        # fresh：角色缺 + 跟踪表无 004 → 不重放
+        conn = _Conn(role_exists=False, tracked=False)
+        assert init_db.heal_missing_readonly_role(
+            conn, user="agent_readonly", dbname="agent_business",
+        ).startswith("absent-but-untracked")
+        assert conn.commits == 0
+
+        # 恢复库：角色缺 + 跟踪表谎报 → 重放 004（一次 commit）
+        monkeypatch.setattr(
+            init_db, "checksum_of", lambda _text: "x", raising=False,
+        )
+        conn = _Conn(role_exists=False, tracked=True)
+        assert init_db.heal_missing_readonly_role(
+            conn, user="agent_readonly", dbname="agent_business",
+        ) == "healed"
+        assert conn.commits == 1
+        assert any(
+            "CREATE ROLE" in q or "pg_roles" in q for q, _p in calls
+        )
+
+        # 角色已在 → exists 无操作
+        conn = _Conn(role_exists=True, tracked=True)
+        assert init_db.heal_missing_readonly_role(
+            conn, user="agent_readonly", dbname="agent_business",
+        ) == "exists"
+        assert conn.commits == 0
+
     def test_ensure_dbs_heals_role_absent_after_restore(
         self, monkeypatch,
     ):

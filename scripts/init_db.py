@@ -1022,7 +1022,17 @@ def heal_missing_readonly_role(
         cur.execute("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s", (target_user,))
         if cur.fetchone() is not None:
             return "exists"
+        # 只修「跟踪表谎报 004 已应用而角色缺失」的恢复库不一致。
+        # 跟踪表无 004 记录（fresh 库）时角色由迁移链正常建立，不干预：
+        # 此时 004 引用的业务 schema 尚未创建，提前重放必然失败。
+        cur.execute(
+            "SELECT 1 FROM public.schema_migrations "
+            "WHERE filename = '004_readonly_role.sql' AND status = 'applied'"
+        )
+        tracked = cur.fetchone() is not None
     conn.rollback()
+    if not tracked:
+        return "absent-but-untracked（fresh 或跟踪表未登记，由迁移链建角色）"
 
     sql = (MIGRATIONS_DIR / "004_readonly_role.sql").read_text(encoding="utf-8")
     # 004 硬编码 GRANT CONNECT ON DATABASE agent_business；存量库名可能
@@ -1191,6 +1201,12 @@ def main() -> int:
 
                 print(f"[init_db] ── {dbname} ──")
                 if db_key == "business":
+                    # 恢复库可能只有表数据没有集群角色（pg_dump 不含 roles），
+                    # 跟踪表谎报 004 已应用 → 幂等跳过永不重建；先探测自愈。
+                    heal_status = heal_missing_readonly_role(
+                        conn, user=ro_user, dbname=business_db,
+                    )
+                    print(f"[init_db]   只读角色探测: {heal_status}")
                     pending_readonly = pending_readonly_authorization_migrations(
                         conn,
                         force=args.force,
