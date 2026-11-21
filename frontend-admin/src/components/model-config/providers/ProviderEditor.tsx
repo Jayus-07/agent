@@ -148,6 +148,15 @@ export default function ProviderEditor({
         && (provider.models ?? []).some((model) => model.name === trimmedName)) ?? null
     : null
 
+  // 价格必填（2026-11-20 收口，与后端 _validate_model_pricing 同口径）：
+  // metered 供应商在「新增」或「追加未登记模型」时必须带价（缺价模型会被
+  // enforce 预算全量拒调用）；编辑已登记模型时留空 = 不改价，不强制。
+  const isLlmFamily = draft.modelKind !== 'embedding' && draft.modelKind !== 'rerank'
+  const addsNewModel = isNew || (!currentRegistered && Boolean(trimmedName))
+  const priceRequired = draft.billing === 'metered' && addsNewModel
+  const missingPrice = priceRequired
+    && (!draft.inputPrice.trim() || (isLlmFamily && !draft.outputPrice.trim()))
+
   function changeModelName(next: string) {
     // 改成另一个已登记模型名时，用途跟着走 —— 否则必然撞上「不可改用途」的 409。
     const registered = registeredModels.find((model) => model.name === next.trim())
@@ -216,6 +225,40 @@ export default function ProviderEditor({
           </label>
           {currentRegistered && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">「{currentRegistered.name}」已登记为{modelKindLabel(currentRegistered.modelKind)}，用途不可更改。要换用途请改用另一个模型名。</div>}
 
+          {priceRequired && (
+            <fieldset className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2.5" data-testid="provider-price-fields">
+              <legend className="px-1 text-[11px] text-text-secondary">Token 计费单价（每 1M tokens，保存即生效）</legend>
+              <label className="mb-2 block text-[11px] text-text-secondary">货币
+                <select data-testid="provider-price-currency" value={draft.priceCurrency} onChange={(event) => update({ priceCurrency: event.target.value as 'CNY' | 'USD' })} className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-xs">
+                  <option value="CNY">CNY（人民币）</option>
+                  <option value="USD">USD（美元）</option>
+                </select>
+              </label>
+              <div className={`grid gap-2 ${isLlmFamily ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                <label className="block text-[11px] text-text-secondary">输入价格 <span className="text-red-500" aria-hidden="true">*</span>
+                  <input data-testid="provider-input-price" value={draft.inputPrice} onChange={(event) => update({ inputPrice: event.target.value })} inputMode="decimal" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="3" />
+                </label>
+                {isLlmFamily && (
+                  <label className="block text-[11px] text-text-secondary">输出价格 <span className="text-red-500" aria-hidden="true">*</span>
+                    <input data-testid="provider-output-price" value={draft.outputPrice} onChange={(event) => update({ outputPrice: event.target.value })} inputMode="decimal" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="9" />
+                  </label>
+                )}
+              </div>
+              {isLlmFamily && (
+                <label className="mt-2 block text-[11px] text-text-secondary">缓存命中价格（可选）
+                  <input data-testid="provider-cached-price" value={draft.cachedInputPrice} onChange={(event) => update({ cachedInputPrice: event.target.value })} inputMode="decimal" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="0.3" />
+                  <span className="mt-1 block text-[10px] leading-4 text-text-muted">仅当 Provider 回传缓存命中 Token 数时参与精确成本计算；留空按输入价保守估算（标记 estimated）。</span>
+                </label>
+              )}
+              {!isLlmFamily && (
+                <div className="mt-2 text-[10px] leading-4 text-text-muted">向量 / 重排模型按输入 token 计量计费，无输出单价。</div>
+              )}
+              {missingPrice && (
+                <div className="mt-2 text-[10px] leading-4 text-red-600">按量计费模型需填写{isLlmFamily ? '输入与输出单价' : '输入单价'}后才能保存；缺价模型会被预算治理拒绝调用。</div>
+              )}
+            </fieldset>
+          )}
+
           {!isNew && registeredModels.length > 0 && <div className="rounded-lg border border-slate-100 px-3 py-2">
             <div className="text-[11px] text-text-secondary">该供应商已登记 {registeredModels.length} 个模型</div>
             <div className="mt-1.5 flex flex-wrap gap-1.5">{registeredModels.map((model) => <span key={model.name} className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-text-muted">{model.name} · {modelKindLabel(model.modelKind)}</span>)}</div>
@@ -256,7 +299,7 @@ export default function ProviderEditor({
         <div className="mt-5 flex justify-end gap-2">
           <button disabled={busy} onClick={onCancel} className="rounded-lg border border-black/10 px-3 py-2 text-xs text-text-secondary">取消</button>
           <button data-testid="provider-test" disabled={busy} onClick={() => onTest(probeDepth)} className="flex items-center gap-1 rounded-lg border border-accent/30 px-3 py-2 text-xs text-accent disabled:opacity-50"><FlaskConical size={13} />{testingMode ? `${probeModeLabel(testingMode)}中 ${formatLiveElapsed(testingElapsedMs)}` : probeDepth === 'full' ? '完整测试' : '测试连接'}</button>
-          <button disabled={busy} onClick={onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"><Save size={13} />保存</button>
+          <button disabled={busy || missingPrice} title={missingPrice ? '按量计费模型需先填写必填单价' : undefined} onClick={onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"><Save size={13} />保存</button>
         </div>
       </div>
     </div>

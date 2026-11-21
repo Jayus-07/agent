@@ -930,6 +930,71 @@ describe('ProvidersTab 供应商删除（2026-09-22 拍板：软删 + 关联一�
   })
 })
 
+describe('ProvidersTab 价格必填（2026-11-20 收口）', () => {
+  it('新增 metered 供应商缺价时价格字段出现且保存被禁用', async () => {
+    apiMock.verifyDraftProvider.mockResolvedValue({
+      ok: true, provider: 'x', target: 'x', network_scope: 'public', draft: true, summary: '通过', steps: [],
+    })
+    const container = mount()
+    await openNewProvider(container)
+
+    const dialog = container.querySelector('[role="dialog"][aria-label="新增供应商"]') as HTMLElement
+    expect(dialog).toBeTruthy()
+    // metered（默认计费口径）→ 价格字段集出现
+    const priceFields = dialog.querySelector('[data-testid="provider-price-fields"]') as HTMLElement
+    expect(priceFields).toBeTruthy()
+    expect(priceFields.textContent).toContain('每 1M tokens')
+
+    const saveButton = findButton(dialog, '保存') as HTMLButtonElement
+    expect(saveButton.disabled).toBe(true)
+    expect(priceFields.textContent).toContain('按量计费模型需填写输入与输出单价')
+  })
+
+  it('切到订阅制后价格字段消失，保存不再被价格拦住', async () => {
+    apiMock.verifyDraftProvider.mockResolvedValue({
+      ok: true, provider: 'x', target: 'x', network_scope: 'public', draft: true, summary: '通过', steps: [],
+    })
+    const container = mount()
+    await openNewProvider(container)
+    const dialog = container.querySelector('[role="dialog"][aria-label="新增供应商"]') as HTMLElement
+
+    choose(dialog, 'provider-billing', 'subscription')
+    expect(dialog.querySelector('[data-testid="provider-price-fields"]')).toBeNull()
+    const saveButton = findButton(dialog, '保存') as HTMLButtonElement
+    expect(saveButton.disabled).toBe(false)
+  })
+
+  it('补齐单价后 createProvider 的 payload 带价格与币种', async () => {
+    apiMock.verifyDraftProvider.mockResolvedValue({
+      ok: true, provider: 'x', target: 'x', network_scope: 'public', draft: true, summary: '通过', steps: [],
+    })
+    apiMock.createProvider.mockResolvedValue({
+      id: 'new-provider', displayName: '新供应商', billing: 'metered', models: [],
+      credential: { configured: true, fingerprint: 'f', last4: 'l', rotatedAt: null, rotatedBy: null },
+    })
+    const container = mount()
+    await openNewProvider(container)
+    const dialog = container.querySelector('[role="dialog"][aria-label="新增供应商"]') as HTMLElement
+
+    typeInto(dialog, 'provider-display-name', '新供应商')
+    typeInto(dialog, 'provider-base-url', 'https://new.example/v1')
+    typeInto(dialog, 'provider-api-key', 'sk-test-dummy')
+    typeInto(dialog, 'provider-model-name', 'glm-5.3-flash')
+    typeInto(dialog, 'provider-input-price', '0.8')
+    typeInto(dialog, 'provider-output-price', '2.8')
+    typeInto(dialog, 'provider-cached-price', '0.23')
+    choose(dialog, 'provider-price-currency', 'CNY')
+
+    await click(findButton(dialog, '保存'))
+    expect(apiMock.createProvider).toHaveBeenCalledTimes(1)
+    const payload = apiMock.createProvider.mock.calls[0][0]
+    expect(payload.inputPricePer1m).toBe(0.8)
+    expect(payload.outputPricePer1m).toBe(2.8)
+    expect(payload.cachedInputPricePer1m).toBe(0.23)
+    expect(payload.priceCurrency).toBe('CNY')
+  })
+})
+
 afterEach(() => {
   for (const mock of Object.values(apiMock)) mock.mockReset()
   for (const { container, root } of mounted.splice(0)) {

@@ -19,6 +19,13 @@ export type Draft = {
   originalModelKind: ModelKind
   credentialConfigured: boolean
   keyLast4: string | null
+  /** 按量计费单价草稿（每 1M tokens），表单原始字符串。
+   *  新增供应商 / 追加未登记模型时必填；编辑已登记模型时留空 = 不改价。 */
+  inputPrice: string
+  outputPrice: string
+  /** 缓存命中单价：空串 = 未配置（NULL）；'0' = 明确免费 */
+  cachedInputPrice: string
+  priceCurrency: 'CNY' | 'USD'
   /** 附加请求体的预设选择：'none' | 'thinking-off' | 'low-effort' | 'custom' */
   extraBodyPreset: ExtraBodyPreset
   /** 自定义 JSON 原文（仅 preset='custom' 时参与提交）。
@@ -167,6 +174,11 @@ export function draftFromRow(
     originalModelKind: modelKind,
     credentialConfigured: row.credential.configured,
     keyLast4: row.credential.last4,
+    // 编辑已有供应商：价格留空 = 不改价（要改价走「调整价格」弹窗）
+    inputPrice: '',
+    outputPrice: '',
+    cachedInputPrice: '',
+    priceCurrency: 'CNY',
     ...(() => {
       const { preset, text } = extraBodyToDraft(row.extraBody)
       return {
@@ -194,6 +206,10 @@ export function newDraft(): Draft {
     originalModelKind: 'chat',
     credentialConfigured: false,
     keyLast4: null,
+    inputPrice: '',
+    outputPrice: '',
+    cachedInputPrice: '',
+    priceCurrency: 'CNY',
     extraBodyPreset: 'none',
     extraBodyText: '',
     originalExtraBody: {},

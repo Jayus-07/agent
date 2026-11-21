@@ -41,6 +41,12 @@ export interface ProviderUpdateInput {
   enabled?: boolean
   modelName?: string
   modelKind?: ModelKind
+  /** 按量计费单价（每 1M tokens）。仅追加未登记新模型时必填；已登记模型不传 = 不改价 */
+  inputPricePer1m?: number
+  outputPricePer1m?: number
+  /** 缓存命中单价（每 1M tokens，可选）。不传 = 未配置（NULL） */
+  cachedInputPricePer1m?: number
+  priceCurrency?: 'CNY' | 'USD'
   extraHeaders?: Record<string, string>
   /** 附加请求体（如 {"thinking":{"type":"disabled"}} 关闭思考）。
    *  不传 = 保留库中原值；{} = 显式清空。 */
@@ -59,6 +65,12 @@ export interface ProviderCreateInput {
   networkScope?: ProviderRow['networkScope']
   billing?: ProviderRow['billing']
   enabled?: boolean
+  /** 按量计费单价（每 1M tokens）。2026-11-20 起创建必填（后端硬校验），登记即生效 */
+  inputPricePer1m?: number
+  outputPricePer1m?: number
+  /** 缓存命中单价（每 1M tokens，可选）。不传 = 未配置（NULL），运行时判 estimated */
+  cachedInputPricePer1m?: number
+  priceCurrency?: 'CNY' | 'USD'
   extraHeaders?: Record<string, string>
   /** 附加请求体（如关闭思考）；缺省空对象 = 不附加 */
   extraBody?: Record<string, unknown>

@@ -447,6 +447,41 @@ export default function ProvidersTab({
       const extraBodyUnchanged = JSON.stringify(extraBodyResult.value)
         === JSON.stringify(editing.originalExtraBody ?? {})
 
+      // 价格必填（2026-11-20 收口）：metered 且本次会新增登记模型时必须带价，
+      // 与后端 _validate_model_pricing 同口径；已登记模型留空 = 不改价。
+      const rowModels = editing.id ? providers.find((item) => item.id === editing.id)?.models ?? [] : []
+      const registersNewModel = !editing.id
+        || !rowModels.some((model) => model.name === modelName)
+      const isLlmFamily = editing.modelKind !== 'embedding' && editing.modelKind !== 'rerank'
+      const priceRequired = editing.billing === 'metered' && registersNewModel
+      let inputPricePer1m: number | undefined
+      let outputPricePer1m: number | undefined
+      let cachedInputPricePer1m: number | undefined
+      if (priceRequired || (editing.billing === 'metered'
+        && (editing.inputPrice.trim() || editing.outputPrice.trim()))) {
+        const inputText = editing.inputPrice.trim()
+        const outputText = editing.outputPrice.trim()
+        if (!inputText || (isLlmFamily && !outputText)) {
+          const message = `按量计费模型需填写${isLlmFamily ? '输入与输出单价' : '输入单价'}后才能保存`
+          setDraftProbeError(message)
+          toast.error(message)
+          return
+        }
+        inputPricePer1m = Number(inputText)
+        outputPricePer1m = isLlmFamily ? Number(outputText) : undefined
+        const cachedText = editing.cachedInputPrice.trim()
+        if (isLlmFamily && cachedText !== '') cachedInputPricePer1m = Number(cachedText)
+        const invalid = [inputPricePer1m, outputPricePer1m, cachedInputPricePer1m].some(
+          (value) => value !== undefined && (!Number.isFinite(value) || value < 0),
+        )
+        if (invalid) {
+          const message = '单价必须是 ≥ 0 的数字（每 1M tokens）'
+          setDraftProbeError(message)
+          toast.error(message)
+          return
+        }
+      }
+
       const common = {
         displayName: editing.displayName.trim(),
         driver: editing.driver,
@@ -459,6 +494,10 @@ export default function ProvidersTab({
         apiKey: editing.apiKey?.trim() || undefined,
         clearApiKey: editing.clearApiKey,
         extraBody: extraBodyUnchanged ? undefined : extraBodyResult.value,
+        ...(inputPricePer1m !== undefined ? { inputPricePer1m } : {}),
+        ...(outputPricePer1m !== undefined ? { outputPricePer1m } : {}),
+        ...(cachedInputPricePer1m !== undefined ? { cachedInputPricePer1m } : {}),
+        ...(inputPricePer1m !== undefined ? { priceCurrency: editing.priceCurrency } : {}),
       }
       if (editing.id) {
         await saveProvider(editing.id, common)

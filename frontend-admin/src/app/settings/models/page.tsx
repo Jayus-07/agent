@@ -9,6 +9,7 @@ import { atLeast } from '@/lib/auth'
 import { getConfigDrift, listConfigHistory, listModelCatalog, listModelRoles, listProviders } from '@/api/modelConfig'
 import { listModelPriceMonitorRuns, priceMonitorSourcesSummary } from '@/api/modelPrices'
 import RoleBindingsTab from '@/components/model-config/RoleBindingsTab'
+import MemoryModelCard from '@/components/model-config/MemoryModelCard'
 import RuntimeChainCard from '@/components/model-config/RuntimeChainCard'
 import ProvidersTab from '@/components/model-config/ProvidersTab'
 import ConfigHistoryTab from '@/components/model-config/ConfigHistoryTab'
@@ -179,6 +180,8 @@ export default function ModelConfigPage() {
         <div className="space-y-5">
           {/* 运行时链路：按角色绑定动态生成的问答/入库模型链（治理 2026-09-22） */}
           <RuntimeChainCard roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} />
+          {/* 记忆模型：记忆系统向量化用的 embedding 绑定（同一份配置的记忆语义入口） */}
+          <MemoryModelCard roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} canManage={canManageEmbedding} onSaved={refreshAll} />
           <RoleBindingsTab roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} canAdmin={canAdmin} canManageEmbedding={canManageEmbedding} highlightRole={highlightRole} onSaved={refreshAll} />
         </div>
       )
