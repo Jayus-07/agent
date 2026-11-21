@@ -269,10 +269,14 @@ def g8_travel_direct(token: str) -> bool:
     body = {"message": "帮我规划厦门2天的行程，两人出行",
             "session_id": session, "mode": "plan",
             "client_run_id": f"gate-{session}"}
-    st, raw = _request("POST", f"{GATEWAY}/api/travel/plan/stream",
+    # V1 /travel/plan/stream 已退役且整组路由未挂载（生产实测 404 NOT_FOUND），
+    # 旅游页现役规划流入口是 V2 路径。
+    st, raw = _request("POST", f"{GATEWAY}/api/travel/v2/plan/stream",
                        body=body, token=token, timeout=240)
     if st != 200:
-        DETAIL["g8"] = f"http={st} (travel direct stream)"
+        DETAIL["g8"] = (
+            f"http={st} (travel direct stream) body={raw[:120]}"
+        )
         return False
     done = False
     done_status = ""

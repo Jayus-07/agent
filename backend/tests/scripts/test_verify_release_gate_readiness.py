@@ -343,18 +343,25 @@ def test_g8_travel_direct_requires_done_with_ok_status(monkeypatch):
     """Gate8 语义（2026-11-21）：旅游域经专属直达流验证。
 
     产品路由按路径判定（/chat/stream → public，域节点不可达）；Gate8
-    改走 /api/travel/plan/stream，断言 done 终帧且 status 非 failed。
+    改走旅游页现役 V2 规划流 /api/travel/v2/plan/stream（V1 /plan/stream
+    已退役且整组路由未挂载，生产实测 404），断言 done 终帧且 status 非 failed。
     """
-    body = (
-        'event: ping\ndata: {"event":"ping"}\n\n'
-        'event: done\ndata: {"event":"done","status":"success",'
-        '"result":{"result_kind":"plan"}}\n\n'
-    )
-    monkeypatch.setattr(gate, "_request", lambda *_args, **_kwargs: (200, body))
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured["url"] = url
+        return 200, (
+            'event: ping\ndata: {"event":"ping"}\n\n'
+            'event: done\ndata: {"event":"done","status":"success",'
+            '"result":{"result_kind":"plan"}}\n\n'
+        )
+
+    monkeypatch.setattr(gate, "_request", fake_request)
     gate.DETAIL.clear()
 
     assert gate.g8_travel_direct("token") is True
     assert "status=success" in gate.DETAIL["g8"]
+    assert captured["url"].endswith("/api/travel/v2/plan/stream")
 
 
 def test_g8_travel_direct_fails_on_error_frame(monkeypatch):
