@@ -41,11 +41,11 @@ class TestUndefinedAliasRejected:
     def test_cte_alias_not_falsely_flagged(self):
         """CTE 别名 bounds 不被 f21 误判为未定义别名。
 
-        注：CTE 作为 FROM 源本身会被 Layer 2 表名白名单拒绝
-        （既有行为，非 f21 引入），此处只验证错误不出自别名层。
+        2026-11-21 CTE/表值函数表提取修复后，CTE 作为 FROM 源可合法通过
+        Layer 2（此前会被表名白名单误拒）；本用例继续锁定别名层不误判
+        ——CTE 查询全链路校验成功。
         """
         sql = ('WITH bounds AS (SELECT MAX(created_at) AS latest FROM "order".orders) '
                "SELECT latest FROM bounds LIMIT 5")
-        with pytest.raises(ValidationError) as exc_info:
-            sql_validator.validate(sql)
-        assert "别名" not in str(exc_info.value)
+        safe_sql, _, _ = sql_validator.validate(sql)
+        assert "bounds" in safe_sql
