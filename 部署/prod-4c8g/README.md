@@ -63,7 +63,7 @@ sudo certbot --nginx --non-interactive --agree-tos --register-unsafely-without-e
 sudo certbot renew --dry-run
 ```
 
-无联系邮箱签发证书，因此不会收到到期邮件；Certbot timer 仍会自动续期。客服 WebSocket 使用 `wss://cs.anyanyan.me`。
+无联系邮箱签发证书，因此不会收到到期邮件；Certbot timer 仍会自动续期。客服端与坐席端的 WebSocket 由前端回退页面同源（`wss://<当前访问域名>/ws/`），入口 Nginx 必须按 HTTPS 域名转发 `/ws/*` 到 APISIX。
 
 ## 生产启动
 
@@ -99,7 +99,7 @@ docker compose --env-file .env.production up -d app rag-service mcp-service agen
 
 订单取消独立开关 `CS_ORDER_CANCEL_MODE`（[W5 2026-11-04]）：默认 `http`（跟随业务网关既有模式放行，与退款申请闭环一致）；显式 `disabled` 时取消提案写入与确认执行全拒（不取消、不退款）。与 `CS_REFUND_REQUEST_MODE` 相互独立；未知值安全拒绝。
 
-坐席端 WS 自动派单依赖构建参数 `NEXT_PUBLIC_WS_ORIGIN`（frontend-cs 构建期内联，[W3 2026-11-03]）：本机默认 `ws://127.0.0.1:9080`；ECS 部署必须在 .env.production 注入对外网关 origin（如 `wss://cs.example.com`，走 HTTPS 入口反向代理需支持 WebSocket upgrade）。缺省回退页面同源——Next standalone 容器无 `/ws/*` 路由，回退即坐席端恒「连接中断·轮询降级」（自动派单失效，仅手动认领可用）。
+坐席端 WS 自动派单依赖构建参数 `NEXT_PUBLIC_WS_ORIGIN`（frontend-cs 构建期内联，[W3 2026-11-03]，[W6 2026-11-21]）：生产镜像（publish-images.yml）默认不注入该参数——前端回退页面同源 `wss://<当前访问域名>/ws/`，经入口 Nginx 的 `/ws/*` 转发到 APISIX（HTTPS 入口需支持 WebSocket upgrade），不把域名锁死进构建产物。需要固定网关 origin 时，设置 GitHub variable `PRODUCTION_CS_WS_ORIGIN`（CI 构建）或在 .env.production 注入（compose 本地 rebuild）。本机演练仍由 compose 默认 `ws://127.0.0.1:9080` 直连本机网关。若部署环境的入口 Nginx 未转发 `/ws/*`，坐席端将恒「连接中断·轮询降级」（自动派单失效，仅手动认领可用）。
 
 模型供应商需由管理端登记为可从生产服务器访问的外部地址。host.docker.internal:8088 是本机联调地址，不能直接视为生产模型地址。登记/切换模型继续经过预检、身份围栏和重建确认。
 
