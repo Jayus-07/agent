@@ -192,6 +192,7 @@ jobs:
             backend/tests/evaluation/test_provider_breaker.py \
             backend/tests/evaluation/test_compose_scheduling_contract.py \
             backend/tests/test_circuit_breaker.py \
+            backend/tests/rag/test_rerank_fallback_backend.py \
             backend/tests/test_llm_resilience.py \
             backend/tests/evaluation/test_planner_live_runner.py \
             backend/tests/evaluation/test_online_sampler.py \
