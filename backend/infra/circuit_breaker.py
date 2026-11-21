@@ -86,8 +86,19 @@ class CircuitBreaker:
     def state(self) -> State:
         return self._state
 
-    def call(self, fn: Callable[..., T], *args, **kwargs) -> T:
+    def call(
+        self,
+        fn: Callable[..., T],
+        *args,
+        ignore: tuple[type[BaseException], ...] = (),
+        **kwargs,
+    ) -> T:
         """受熔断保护的调用。
+
+        Args:
+            ignore: 不计入熔断统计的异常类型（仅透传）。用于调用方侧异常，
+                如本请求 deadline 过期导致的迟到结果丢弃——Provider 实际
+                已成功返回，误计失败会把健康的下游错误熔断。
 
         Raises:
             CircuitBreakerOpenError: 熔断器开路
@@ -98,15 +109,23 @@ class CircuitBreaker:
             result = fn(*args, **kwargs)
             self._on_success()
             return result
+        except ignore:
+            raise
         except Exception as e:
             self._on_failure(e)
             raise
 
-    async def acall(self, fn: Callable[..., Awaitable[T]], *args, **kwargs) -> T:
+    async def acall(
+        self,
+        fn: Callable[..., Awaitable[T]],
+        *args,
+        ignore: tuple[type[BaseException], ...] = (),
+        **kwargs,
+    ) -> T:
         """受熔断保护的异步调用（对称于 call，供 _LLMProxy async wrapper 使用）。
 
         与 call 共享同一状态机（_check_state/_on_success/_on_failure），
-        确保 async 调用与 sync 调用计入同一个熔断统计。
+        确保 async 调用与 sync 调用计入同一个熔断统计；ignore 语义同 call。
 
         Raises:
             CircuitBreakerOpenError: 熔断器开路
@@ -117,6 +136,8 @@ class CircuitBreaker:
             result = await fn(*args, **kwargs)
             self._on_success()
             return result
+        except ignore:
+            raise
         except Exception as e:
             self._on_failure(e)
             raise
@@ -382,12 +403,44 @@ pg_circuit_breaker = CircuitBreaker("postgresql", fail_threshold=3, timeout=60.0
 chroma_circuit_breaker = CircuitBreaker("chromadb", fail_threshold=5, timeout=30.0)
 
 
+# 专项链路（embedding/rerank）熔断器：按 角色+Provider+模型 分区，
+# 与 LLM 熔断器隔离。专项调用在检索链上串行生效，3 次连续失败即开路、
+# 30s 半开试探——避免主备切换场景下每个请求都白等一次超时。
+_specialized_breakers: dict[str, CircuitBreaker] = {}
+_specialized_breakers_lock = threading.Lock()
+
+
+def get_specialized_circuit_breaker(
+    role: str,
+    provider_id: str,
+    model_name: str,
+) -> CircuitBreaker:
+    """返回按 角色+Provider/模型 隔离的专项链路熔断器（embedding/rerank）。"""
+    key = (
+        f"specialized:{role or 'unknown'}:"
+        f"{provider_id or 'unknown'}:{model_name or 'unknown'}"
+    )
+    with _specialized_breakers_lock:
+        breaker = _specialized_breakers.get(key)
+        if breaker is None:
+            breaker = CircuitBreaker(
+                key,
+                fail_threshold=3,
+                timeout=30.0,
+            )
+            _specialized_breakers[key] = breaker
+        return breaker
+
+
 def get_all_breakers() -> dict[str, CircuitBreaker]:
     """返回所有熔断器实例（供 /metrics 查询）。"""
+    with _specialized_breakers_lock:
+        specialized = {**_specialized_breakers}
     with _llm_model_breakers_lock:
         return {
             "deepseek": llm_circuit_breaker,
             "postgresql": pg_circuit_breaker,
             "chromadb": chroma_circuit_breaker,
             **_llm_model_breakers,
+            **specialized,
         }
