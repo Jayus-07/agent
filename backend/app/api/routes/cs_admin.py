@@ -685,6 +685,9 @@ class MessageDTO(BaseModel):
     intent_name: str | None = None
     confidence: float | None = None
     trace_id: str | None = None
+    # M2：card 消息附件（[{"type":"order_ref","order_no":...}]），随轮询/
+    # 对账响应透传给坐席端渲染订单卡（与 WS message.created 同构）
+    attachments: list[dict] | None = None
     created_at: str
 
 
@@ -729,6 +732,8 @@ class MyConversationMessage(BaseModel):
     sender_type: str
     content: str
     content_type: str = "text"
+    # M2：card 附件随会话回放透传（用户端历史会话渲染订单卡）
+    attachments: list[dict] | None = None
     created_at: str
 
 
@@ -2175,6 +2180,7 @@ async def _async_my_conversations(
                         sender_type=m.sender_type,
                         content=m.content,
                         content_type=m.content_type or "text",
+                        attachments=m.attachments,
                         created_at=m.created_at.isoformat() if m.created_at else "",
                     )
                     for m in by_conv.get(c.conversation_id, [])
@@ -2399,6 +2405,7 @@ async def _async_get_conversation(conversation_id: str, run_sync):
                     intent_name=m.intent_name,
                     confidence=m.confidence,
                     trace_id=m.trace_id,
+                    attachments=m.attachments,
                     created_at=m.created_at.isoformat() if m.created_at else "",
                 )
                 for m in messages
@@ -2849,6 +2856,7 @@ async def _async_messages_since(conversation_id: str, since_id: int, limit: int,
                     sender_type=m.sender_type,
                     content=m.content,
                     content_type=m.content_type,
+                    attachments=m.attachments,
                     created_at=m.created_at.isoformat() if m.created_at else "",
                 )
                 for m in rows
