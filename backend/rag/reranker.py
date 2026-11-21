@@ -78,9 +78,16 @@ def _configured_rerank_model() -> str:
     return model_roles.resolve_runtime_name("rerank", RERANK_MODEL)
 
 
-def _resolve_rerank_runtime_config() -> dict[str, str]:
-    """解析专项 DB 绑定；未配置时返回未配置状态，不读取旧 env。"""
-    binding = specialized_mod.resolve_binding("rerank")
+def _resolve_rerank_runtime_config(
+    binding: "specialized_mod.SpecializedBinding | None" = None,
+) -> dict[str, str]:
+    """解析专项 DB 绑定；未配置时返回未配置状态，不读取旧 env。
+
+    binding 为 None 时解析全局 rerank 绑定（主绑定）；传入显式绑定时按
+    该绑定解析（主备切换派生备后端复用同一解析，不改全局角色缓存）。
+    """
+    if binding is None:
+        binding = specialized_mod.resolve_binding("rerank")
     if binding is None:
         return {
             "model": _configured_rerank_model(),
@@ -114,10 +121,49 @@ def _resolve_rerank_runtime_config() -> dict[str, str]:
     }
 
 
+def _resolve_rerank_fallback_binding(
+    primary: "specialized_mod.SpecializedBinding | None",
+) -> "specialized_mod.SpecializedBinding | None":
+    """解析 rerank 备用绑定：llm_model_role_policy.fallback_model（内存读，零 IO）。
+
+    备模型必须是同一用途（rerank kind）的已登记模型，经 registered_binding
+    从当前注册表快照派生完整绑定（provider/adapter/base_url/凭据引用）；
+    未配置、未登记或与主绑定同名时返回 None——调用方保持单后端行为，
+    不因备配置问题阻断主链路。
+    """
+    if primary is None:
+        return None
+    fallback_name = str(
+        model_roles.resolve_runtime_policy("rerank").fallback_model or ""
+    ).strip()
+    if not fallback_name:
+        return None
+    if fallback_name == primary.model_name:
+        return None
+    try:
+        binding = specialized_mod.registered_binding("rerank", fallback_name)
+    except (RuntimeError, ValueError) as e:
+        logger.warning(
+            "[Reranker] rerank 备用模型 %s 派生绑定失败，本次按无备运行: %s",
+            fallback_name, e,
+        )
+        return None
+    if not binding.enabled:
+        return None
+    return binding
+
+
 def _reranker_runtime_signature() -> tuple[Any, ...]:
-    """返回影响重排客户端的配置签名，供已存在的 RAGPipeline 热切换。"""
+    """返回影响重排客户端的配置签名，供已存在的 RAGPipeline 热切换。
+
+    备模型名纳入签名：管理端修改 rerank 策略的 fallback_model 后，
+    已缓存的 RerankCompressor 在下次调用前自动重建主备后端。
+    """
     binding = specialized_mod.resolve_binding("rerank")
     if binding is not None:
+        fallback_name = str(
+            model_roles.resolve_runtime_policy("rerank").fallback_model or ""
+        ).strip()
         return (
             "specialized",
             binding.provider_id,
@@ -126,6 +172,7 @@ def _reranker_runtime_signature() -> tuple[Any, ...]:
             binding.base_url,
             repr(sorted(dict(binding.options).items())),
             credentials_mod.credentials_version(binding.provider_id),
+            fallback_name,
         )
     return (
         "unconfigured",
@@ -804,6 +851,221 @@ def _sigmoid(x: float) -> float:
     return e / (1.0 + e)
 
 
+class FallbackRerankBackend(BaseDocumentCompressor):
+    """rerank 主备后端：主失败自动降级备，主备全挂统一标记降级。
+
+    主备均为独立后端实例（各自带 provider_key 与熔断器分区）。语义：
+    - 主成功 → 直接返回（熔断器成功路径零额外开销）；
+    - 主失败 / 主熔断 OPEN → 调备；备成功时清除主失败写入的
+      ``rerank_unavailable`` 条目——重排实际成功，检索链不得因此拒答；
+    - 备也失败（或无备）→ 主备 key 统一写入 ``rerank_unavailable``，
+      由 chain.py 既有消费链如实降级提示（rag_retrieval_degraded）；
+    - 迟到结果（RerankLateResultDiscarded）不计熔断也不触发备调用：
+      deadline 已过，备调用必然同样超时，纯属浪费。
+    """
+
+    def __init__(
+        self,
+        primary: BaseDocumentCompressor,
+        fallback: BaseDocumentCompressor | None,
+        *,
+        primary_provider_key: str = "",
+        fallback_provider_key: str = "",
+    ):
+        self.__dict__["primary"] = primary
+        self.__dict__["fallback"] = fallback
+        self.__dict__["_primary_provider_key"] = primary_provider_key
+        self.__dict__["_fallback_provider_key"] = fallback_provider_key
+        self.__dict__["backend_label"] = (
+            f"fallback(primary={getattr(primary, '_provider_id', 'unknown')}"
+            + (
+                f",fallback={getattr(fallback, '_provider_id', 'unknown')}"
+                if fallback is not None
+                else ""
+            )
+            + ")"
+        )
+
+    @staticmethod
+    def _provider_breaker(backend):
+        from backend.infra.circuit_breaker import get_specialized_circuit_breaker
+
+        return get_specialized_circuit_breaker(
+            "rerank",
+            str(getattr(backend, "_provider_id", "") or "unknown"),
+            str(getattr(backend, "_billing_model", "")
+                or getattr(backend, "_model", "") or "unknown"),
+        )
+
+    @staticmethod
+    def _unavailable_keys(backend) -> str:
+        return f"{getattr(backend, '_provider_id', 'unknown')}|" \
+               f"{getattr(backend, '_endpoint', '')}|{getattr(backend, '_model', '')}"
+
+    def _mark_primary_recovered(self) -> None:
+        """备成功后清除主失败写入的请求级不可用标记（set.discard 幂等）。"""
+        if not self._primary_provider_key:
+            return
+        try:
+            from backend.rag.context import get_context
+
+            get_context().rerank_unavailable.discard(self._primary_provider_key)
+        except Exception:  # noqa: BLE001 — 观测状态缺失不影响业务结果
+            pass
+
+    def _mark_all_unavailable(self) -> None:
+        """主备全挂：统一写入请求级不可用标记（chain.py 如实降级拒答）。"""
+        try:
+            from backend.rag.context import get_context
+
+            unavailable = get_context().rerank_unavailable
+            for key in (self._primary_provider_key, self._fallback_provider_key):
+                if key:
+                    unavailable.add(key)
+        except Exception:  # noqa: BLE001 — 观测状态缺失不影响异常传播
+            pass
+
+    def _call_with_breaker(self, backend, invoke):
+        """按后端专属熔断器调用；OPEN 与失败均由调用方决定是否降级。"""
+        breaker = self._provider_breaker(backend)
+        return breaker.call(invoke, ignore=(RerankLateResultDiscarded,))
+
+    def _score_via(self, backend, query, documents, top_k, timeout_s, deadline_at):
+        """经熔断器对单个后端发起评分；成功清除主侧不可用标记。"""
+        result = self._call_with_breaker(
+            backend,
+            lambda: backend.rank(
+                query, documents, top_k=top_k,
+                timeout_s=timeout_s, deadline_at=deadline_at,
+            ),
+        )
+        if backend is not self.primary:
+            self._mark_primary_recovered()
+        return result
+
+    def _score_with_fallback(self, query, documents, top_k, timeout_s, deadline_at):
+        """主备评分入口：主 → 备 → 全挂标记。"""
+        if self.fallback is None:
+            try:
+                return self._score_via(
+                    self.primary, query, documents, top_k, timeout_s, deadline_at,
+                )
+            except RerankLateResultDiscarded:
+                raise
+            except Exception:
+                # 无备可用：无论失败类型（超时/连接/HTTP 5xx），统一走
+                # 请求级不可用语义，检索链如实降级而不是静默透传原序。
+                self._mark_all_unavailable()
+                raise
+
+        try:
+            return self._score_via(
+                self.primary, query, documents, top_k, timeout_s, deadline_at,
+            )
+        except RerankLateResultDiscarded:
+            raise
+        except Exception as primary_exc:
+            logger.warning(
+                "[Rerank] 主重排失败（%s），降级备用重排（provider=%s）",
+                type(primary_exc).__name__,
+                getattr(self.fallback, "_provider_id", "unknown"),
+            )
+        try:
+            return self._score_via(
+                self.fallback, query, documents, top_k, timeout_s, deadline_at,
+            )
+        except RerankLateResultDiscarded:
+            raise
+        except Exception as fallback_exc:
+            logger.warning(
+                "[Rerank] 备用重排同样失败（%s），本轮按重排不可用降级",
+                type(fallback_exc).__name__,
+            )
+            self._mark_all_unavailable()
+            raise
+
+    def rank(
+        self,
+        query: str,
+        documents: list[str],
+        top_k: int = 8,
+        *,
+        timeout_s: float | None = None,
+        deadline_at: float | None = None,
+    ) -> list[tuple[int, float]]:
+        if not documents:
+            return []
+        if top_k <= 0:
+            return []
+        return self._score_with_fallback(
+            query, documents, top_k, timeout_s, deadline_at,
+        )
+
+    def rank_all(
+        self,
+        query: str,
+        documents: list[str],
+        *,
+        deadline_at: float | None = None,
+    ) -> list[tuple[int, float]]:
+        """对全部候选评分（不裁剪），按批切分；每批走主备逻辑。"""
+        scored: list[tuple[int, float]] = []
+        total = len(documents)
+        for start in range(0, total, _RERANK_BATCH_SIZE):
+            batch = documents[start:start + _RERANK_BATCH_SIZE]
+            rows = self.rank(
+                query, batch, top_k=len(batch), deadline_at=deadline_at,
+            )
+            for local_idx, score in rows:
+                scored.append((start + local_idx, score))
+        return scored
+
+    def rerank_text(self, doc, limit: int = 2000) -> str:
+        """候选评分文本统一用主后端表达（主备评分同一批文本）。"""
+        return self.primary.rerank_text(doc, limit=limit)
+
+    def compress_documents(self, documents, query, **kwargs):
+        """单查询路径：主备各走一次 compress_documents，失败语义同评分入口。"""
+        if not documents:
+            return []
+        try:
+            return self._call_with_breaker(
+                self.primary,
+                lambda: self.primary.compress_documents(documents, query, **kwargs),
+            )
+        except RerankLateResultDiscarded:
+            raise
+        except Exception as primary_exc:
+            if self.fallback is None:
+                logger.warning(
+                    "[Rerank] 主重排失败且无备用（%s），本轮按重排不可用降级",
+                    type(primary_exc).__name__,
+                )
+                self._mark_all_unavailable()
+                raise
+            logger.warning(
+                "[Rerank] 主重排失败（%s），降级备用重排（provider=%s）",
+                type(primary_exc).__name__,
+                getattr(self.fallback, "_provider_id", "unknown"),
+            )
+        try:
+            result = self._call_with_breaker(
+                self.fallback,
+                lambda: self.fallback.compress_documents(documents, query, **kwargs),
+            )
+            self._mark_primary_recovered()
+            return result
+        except RerankLateResultDiscarded:
+            raise
+        except Exception as fallback_exc:
+            logger.warning(
+                "[Rerank] 备用重排同样失败（%s），本轮按重排不可用降级",
+                type(fallback_exc).__name__,
+            )
+            self._mark_all_unavailable()
+            raise
+
+
 class LocalCrossEncoderBackend(BaseDocumentCompressor):
     """本地 CrossEncoder 实现 (作为 DashScope API 的 fallback)"""
 
@@ -962,6 +1224,28 @@ def _get_tracker() -> "TokenTracker":
     return _reranker_tracker
 
 
+def _build_rerank_backend_from_binding(
+    binding: "specialized_mod.SpecializedBinding",
+) -> DashScopeReranker:
+    """按显式绑定构造重排后端（主备共用；不改全局角色缓存）。"""
+    runtime_config = _resolve_rerank_runtime_config(binding)
+    api_key = runtime_config["api_key"]
+    if not api_key:
+        raise RuntimeError(
+            f"重排供应商 {binding.provider_id} 未配置可用的 API Key，"
+            "请先在管理端测试并保存重排模型。"
+        )
+    return DashScopeReranker(
+        api_key=api_key,
+        timeout=RERANK_TIMEOUT,
+        model=runtime_config["model"],
+        api_format=runtime_config["api_format"],
+        base_url=runtime_config["base_url"],
+        provider_id=runtime_config["provider"],
+        billing_model=runtime_config["billing_model"],
+    )
+
+
 def get_reranker_backend() -> BaseDocumentCompressor:
     """
     获取 reranker 后端实例 (工厂函数，P0 架构重构)
@@ -970,6 +1254,12 @@ def get_reranker_backend() -> BaseDocumentCompressor:
       - RERANK_PROVIDER=cloud → DashScopeReranker (强制，API key 错误时抛异常)
       - RERANK_PROVIDER=local → LocalCrossEncoderBackend
       - RERANK_PROVIDER 留空时跟随 ENV_MODE（向后兼容）
+
+    主备切换（2026-11-21）：存在专项绑定且 rerank 策略配置了
+    fallback_model（已登记的同用途模型）时返回 FallbackRerankBackend，
+    主失败自动降级备；备未配置或派生失败时保持单后端行为。
+    embedding 角色无此机制——换 embedding 模型等于换语义空间，禁止
+    静默 fallback（model_roles.py 契约）。
 
     关键约束:
       - 不根据 API key 存在与否自动降级
@@ -980,22 +1270,35 @@ def get_reranker_backend() -> BaseDocumentCompressor:
     if RERANK_PROVIDER == "cloud" or binding is not None:
         # Cloud 模式：强制使用云端 API，缺少 API Key 时明确报错
         # 协议与凭据均由数据库专项绑定解析；不同供应商可以使用不同 Key。
-        runtime_config = _resolve_rerank_runtime_config()
-        api_key = runtime_config["api_key"]
-        if not api_key:
-            raise RuntimeError(
-                "数据库未配置可用的 rerank 供应商 API Key，请先在管理端测试并保存"
-                "重排模型；如需本地模型，请显式使用本地模式。"
+        primary = _build_rerank_backend_from_binding(binding)
+        logger.info(
+            f"[Reranker] 主重排后端初始化完成 "
+            f"(provider={primary._provider_id}, model={primary._model})"
+        )
+        fallback_binding = _resolve_rerank_fallback_binding(binding)
+        if fallback_binding is None:
+            return primary
+        try:
+            fallback = _build_rerank_backend_from_binding(fallback_binding)
+        except (RuntimeError, ValueError) as e:
+            logger.warning(
+                "[Reranker] 备用重排后端构建失败，按无备运行: %s", e,
             )
-        logger.info(f"[Reranker] Cloud 模式初始化完成 (model={runtime_config['model']})")
-        return DashScopeReranker(
-            api_key=api_key,
-            timeout=RERANK_TIMEOUT,
-            model=runtime_config["model"],
-            api_format=runtime_config["api_format"],
-            base_url=runtime_config["base_url"],
-            provider_id=runtime_config["provider"],
-            billing_model=runtime_config["billing_model"],
+            return primary
+        logger.info(
+            "[Reranker] 主备重排初始化完成 "
+            f"(primary={primary._provider_id}/{primary._model}, "
+            f"fallback={fallback._provider_id}/{fallback._model})"
+        )
+        return FallbackRerankBackend(
+            primary,
+            fallback,
+            primary_provider_key=(
+                f"{primary._provider_id}|{primary._endpoint}|{primary._model}"
+            ),
+            fallback_provider_key=(
+                f"{fallback._provider_id}|{fallback._endpoint}|{fallback._model}"
+            ),
         )
     else:
         # Local 模式：使用 CrossEncoder
@@ -1054,8 +1357,14 @@ def _read_runtime_queries(documents, query: str) -> list[str]:
 
 @contextmanager
 def _query_scorer(backend, queries, texts, deadline_at, parent_id):
-    """云端三查询共享截止时间并发评分；仅调用方可把分数写回业务结果。"""
-    parallel = isinstance(backend, DashScopeReranker) and len(queries) <= 3
+    """云端三查询共享截止时间并发评分；仅调用方可把分数写回业务结果。
+
+    主备包装（FallbackRerankBackend）按主后端判断并发能力——评分仍经
+    包装入口发起，每条查询内部各自走主备降级。
+    """
+    parallel = isinstance(
+        getattr(backend, "primary", backend), DashScopeReranker,
+    ) and len(queries) <= 3
     if not parallel or deadline_at is None:
         yield lambda position, query: full_candidate_scores(
             backend, query, texts, deadline_at=deadline_at,
@@ -1230,7 +1539,9 @@ class RerankCompressor(BaseDocumentCompressor):
                 if self.backend is None or self._backend_signature != signature:
                     self.__dict__['backend'] = get_reranker_backend()
                     self.__dict__['_backend_signature'] = signature
-                    if isinstance(self.backend, DashScopeReranker):
+                    if isinstance(self.backend, FallbackRerankBackend):
+                        self.__dict__['_backend_type'] = self.backend.backend_label
+                    elif isinstance(self.backend, DashScopeReranker):
                         self.__dict__['_backend_type'] = "dashscope"
                     else:
                         self.__dict__['_backend_type'] = "local"
