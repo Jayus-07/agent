@@ -4,7 +4,8 @@
 // 目标态对照 docs/tasks/cs-workstation-v2/prototypes/user-portal.html 的客服视图；
 // 聊天链路复用既有 SSE 契约（/api/chat/customer-service/stream，含断线续播与中止）。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Headphones } from 'lucide-react'
+import { ArrowLeft, Headphones, Send, ShoppingBag } from 'lucide-react'
+import Link from 'next/link'
 import { abortChat, streamChat } from '@/api/chat'
 import { nanoid } from 'nanoid'
 import {
@@ -27,7 +28,6 @@ import {
   type MyMessageRow,
 } from './cs2Api'
 import { newConversationDraft, type Cs2ConversationDraft, type Cs2Message } from './types'
-import SiteNav from '@/mall/SiteNav'
 import ConfirmCard from './ConfirmCard'
 import FoldCards from './FoldCards'
 
@@ -68,6 +68,7 @@ export default function CustomerServicePage() {
   const [input, setInput] = useState('')
   const [revealing, setRevealing] = useState(false)
   const [customerCtx, setCustomerCtx] = useState<CustomerContext | null>(null)
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const [handoffState, setHandoffState] = useState<string>('none')
   const [handoffMeta, setHandoffMeta] = useState<{
     total_deadline_at: string | null
@@ -384,31 +385,37 @@ export default function CustomerServicePage() {
 
   return (
     <div className="flex h-screen flex-col bg-slate-100">
-      <SiteNav />
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* 会话头：精简版（转人工入口移至输入栏，避免窄屏挤压） */}
-          <header className="flex h-12 flex-none items-center gap-2 border-b border-slate-200 bg-white px-4">
-            <Headphones size={16} className="shrink-0 text-indigo-600" aria-hidden />
-            <b className="shrink-0 text-sm text-slate-900">智能客服</b>
-            <select
-              className="h-7 min-w-0 max-w-40 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 sm:max-w-56"
-              aria-label="切换会话"
-              value={draft.id === 'new' ? '' : draft.id}
-              onChange={(e) => selectSession(e.target.value)}
+          {/* 会话头：返回 + 居中标题 + 头像（个人中心抽屉）/商城入口 */}
+          <header className="flex h-12 flex-none items-center gap-2 border-b border-slate-200 bg-white px-3">
+            <Link
+              href="/"
+              aria-label="返回门户"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-700 hover:bg-slate-100"
             >
-              <option value="">新的会话</option>
-              {convOptions.map((o) => (
-                <option key={o.id} value={o.id}>{o.label}</option>
-              ))}
-            </select>
+              <ArrowLeft size={18} />
+            </Link>
+            <div className="min-w-0 flex-1 text-center">
+              <b className="block truncate text-sm text-slate-900">智能客服</b>
+            </div>
             <button
               type="button"
-              className="ml-auto shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
-              onClick={startNewSession}
+              aria-label="打开个人中心"
+              title="打开个人中心"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-indigo-600 text-xs text-white hover:opacity-90"
+              onClick={() => setDrawerOpen(true)}
             >
-              + 新会话
+              {customerCtx ? customerCtx.customer.display_name.slice(0, 1) : '演'}
             </button>
+            <Link
+              href="/mall"
+              aria-label="逛商城"
+              title="逛商城"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-700 hover:bg-slate-100"
+            >
+              <ShoppingBag size={17} />
+            </Link>
           </header>
 
           {/* 消息流 */}
@@ -425,17 +432,23 @@ export default function CustomerServicePage() {
                 <div className="mb-2.5 rounded-lg bg-amber-50 px-2.5 py-1 text-[11.5px] text-amber-600">
                   🧪 演示环境 · 数据为示例
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="mb-2.5 flex gap-2 overflow-x-auto pb-1">
                   {QUICK_ENTRIES.map((q) => (
                     <button
                       key={q.title}
                       type="button"
-                      className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2.5 text-left text-xs text-slate-700 hover:border-indigo-400"
+                      className="shrink-0 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs text-slate-700 hover:border-indigo-400 hover:text-indigo-600"
                       onClick={() => send(q.text)}
                     >
-                      <b className="block">{q.icon} {q.title}</b>
+                      {q.icon} {q.title}
                     </button>
                   ))}
+                  <Link
+                    href="/mall"
+                    className="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-3.5 py-1.5 text-xs text-indigo-600 hover:bg-indigo-100"
+                  >
+                    🛍 逛商城
+                  </Link>
                 </div>
               </div>
             )}
@@ -562,7 +575,7 @@ export default function CustomerServicePage() {
               type="button"
               aria-label="转人工"
               title="转人工"
-              className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl border ${
+              className={`grid h-11 w-11 shrink-0 place-items-center rounded-full border ${
                 draft.id !== 'new' && draft.messages.length > 0
                   ? 'border-indigo-200 bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
                   : 'border-slate-200 bg-slate-50 text-slate-400'
@@ -573,7 +586,7 @@ export default function CustomerServicePage() {
               <Headphones size={18} aria-hidden />
             </button>
             <textarea
-              className="min-h-11 max-h-32 flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-base text-slate-900 outline-none focus:border-indigo-500"
+              className="min-h-11 max-h-32 flex-1 resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500"
               rows={1}
               placeholder="请描述您的问题…"
               aria-label="咨询输入框"
@@ -589,10 +602,15 @@ export default function CustomerServicePage() {
             />
             <button
               type="button"
-              className={`min-h-11 rounded-xl px-4 text-sm text-white ${busy ? 'bg-red-500' : 'bg-indigo-600 hover:opacity-90'}`}
+              aria-label={busy ? '停止生成' : '发送'}
+              title={busy ? '停止' : '发送'}
+              className={`grid h-11 w-11 shrink-0 place-items-center rounded-full text-white ${
+                busy ? 'bg-red-500 hover:bg-red-600' : 'bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300'
+              }`}
+              disabled={!busy && !input.trim()}
               onClick={() => (busy ? stop() : send(input))}
             >
-              {busy ? '停止' : '发送'}
+              {busy ? <Square size={16} /> : <Send size={17} />}
             </button>
           </div>
         </div>
@@ -695,6 +713,101 @@ export default function CustomerServicePage() {
           </div>
         </aside>
       </div>
+      {drawerOpen && (
+        <>
+          {/* 抽屉：个人中心 + 历史会话/新咨询（替代顶栏的切换会话下拉） */}
+          <div
+            className="fixed inset-0 z-40 bg-black/30"
+            onClick={() => setDrawerOpen(false)}
+            aria-hidden
+          />
+          <aside
+            className="fixed inset-y-0 right-0 z-50 flex w-72 flex-col overflow-auto border-l border-slate-200 bg-white p-4"
+            role="dialog"
+            aria-label="个人中心"
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <b className="text-sm text-slate-900">个人中心</b>
+              <button
+                type="button"
+                aria-label="关闭抽屉"
+                className="grid h-8 w-8 place-items-center rounded-full text-slate-500 hover:bg-slate-100"
+                onClick={() => setDrawerOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <span className="grid h-9 w-9 place-items-center rounded-full bg-indigo-600 text-white">
+                {customerCtx ? customerCtx.customer.display_name.slice(0, 1) : '演'}
+              </span>
+              <div>
+                <b className="text-xs text-slate-900">
+                  {customerCtx?.customer.display_name ?? '演示用户'}
+                </b>
+                <div className="text-[11px] text-slate-500">
+                  {customerCtx
+                    ? customerCtx.customer.level === 'gold'
+                      ? '黄金会员'
+                      : (customerCtx.customer.level ?? '普通会员')
+                    : '普通会员'}
+                </div>
+              </div>
+            </div>
+            <nav className="mb-4 flex flex-col gap-1" aria-label="个人中心导航">
+              <Link
+                href="/my-orders"
+                className="rounded-lg px-2.5 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                onClick={() => setDrawerOpen(false)}
+              >
+                📦 我的订单
+              </Link>
+              <Link
+                href="/mall"
+                className="rounded-lg px-2.5 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                onClick={() => setDrawerOpen(false)}
+              >
+                🛍 逛商城
+              </Link>
+              <Link
+                href="/settings"
+                className="rounded-lg px-2.5 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                onClick={() => setDrawerOpen(false)}
+              >
+                ⚙️ 账号设置
+              </Link>
+            </nav>
+            <b className="mb-1.5 text-xs text-slate-500">历史会话</b>
+            <div className="flex flex-col gap-1">
+              <button
+                type="button"
+                className="rounded-lg px-2.5 py-2 text-left text-sm text-indigo-600 hover:bg-indigo-50"
+                onClick={() => {
+                  startNewSession()
+                  setDrawerOpen(false)
+                }}
+              >
+                ＋ 开始新咨询
+              </button>
+              {convOptions.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  className={`rounded-lg px-2.5 py-2 text-left text-sm hover:bg-slate-50 ${
+                    draft.id === o.id ? 'bg-slate-100 text-slate-900' : 'text-slate-700'
+                  }`}
+                  onClick={() => {
+                    selectSession(o.id)
+                    setDrawerOpen(false)
+                  }}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </aside>
+        </>
+      )}
     </div>
   )
 }
@@ -724,21 +837,28 @@ function MessageBubble({ message }: { message: Cs2Message }) {
         ? 'self-center max-w-[88%]'
         : 'self-start'
   const bubble =
-    message.role === 'user' || message.role === 'agent'
-      ? 'rounded-xl bg-emerald-50 px-3 py-2'
-      : message.role === 'system'
-        ? 'rounded-full border border-dashed border-slate-200 px-3 py-1 text-xs text-slate-500'
-        : 'rounded-xl border border-slate-200 bg-white px-3 py-2'
+    message.role === 'user'
+      ? 'rounded-2xl rounded-br-md bg-indigo-600 px-3 py-2 text-white' // 用户消息：实心品牌色白字（商城客服惯例）
+      : message.role === 'agent'
+        ? 'rounded-2xl rounded-bl-md bg-emerald-600 px-3 py-2 text-white' // 人工客服消息
+        : message.role === 'system'
+          ? 'rounded-full border border-dashed border-slate-200 px-3 py-1 text-xs text-slate-500'
+          : 'rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3 py-2 text-slate-800'
 
   return (
     <div className={`flex max-w-[78%] flex-col gap-0.5 ${align}`}>
       {message.role !== 'system' && (
         <div className={`flex items-center gap-1.5 text-[11px] text-slate-400 ${message.role === 'user' ? 'justify-end' : ''}`}>
+          {message.role === 'assistant' && (
+            <span className="grid h-5 w-5 place-items-center rounded-full bg-indigo-600 text-white" aria-hidden>
+              <Headphones size={12} />
+            </span>
+          )}
           {who}
           {message.interrupted && <span className="rounded-full bg-slate-100 px-1.5 text-[10px]">已停止</span>}
         </div>
       )}
-      <div className={`whitespace-pre-wrap text-[13px] leading-relaxed text-slate-800 ${bubble}`}>
+      <div className={`whitespace-pre-wrap text-[13px] leading-relaxed ${bubble}`}>
         {message.content || (message.streaming ? '' : '（空）')}
       </div>
       {message.csNodes && message.csNodes.length > 0 && (
