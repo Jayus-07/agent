@@ -271,6 +271,13 @@ export default function CustomerServicePage() {
     })
   }, [patchDraft])
 
+  // 空回复重试：用上一条用户话术重新发起一轮（仅 AI 服务态可用，人工态由渲染条件拦截）
+  const retryLast = useCallback(() => {
+    if (busy) return
+    const prev = [...draftRef.current.messages].reverse().find((m) => m.role === 'user')
+    if (prev?.content) send(prev.content)
+  }, [busy, send])
+
   const selectSession = useCallback((id: string) => {
     const found = sessions.find((s) => s.id === id)
     if (found) {
@@ -423,42 +430,53 @@ export default function CustomerServicePage() {
 
           {/* 消息流 */}
           <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto px-4 py-3.5">
+            {/* 开场白（淘宝式问候气泡，仅首屏）：AI 免责由气泡标签承载；
+                快捷入口已常驻输入栏上方，不再放欢迎卡。发首条消息后随消息流自然上移 */}
             {showWelcome && (
-              <div className="mx-auto w-full max-w-md rounded-xl border border-slate-200 bg-white p-3.5 text-center">
-                <span className="mb-2 inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11.5px] text-indigo-600">
-                  🤖 AI 智能客服
-                </span>
-                <h3 className="mb-1.5 text-[15px] text-slate-900">您好，我是演示商城的智能客服</h3>
-                <p className="mb-2.5 text-xs leading-relaxed text-slate-500">
-                  回复由 AI 生成，仅供参考。
-                </p>
-                <div className="mb-2.5 rounded-lg bg-amber-50 px-2.5 py-1 text-[11.5px] text-amber-600">
+              <>
+                <MessageBubble
+                  message={{
+                    id: 'greeting-1',
+                    role: 'assistant',
+                    content: '您好，我是演示商城的智能客服，很高兴为您服务！',
+                    createdAt: 0,
+                  }}
+                />
+                <MessageBubble
+                  message={{
+                    id: 'greeting-2',
+                    role: 'assistant',
+                    content: '订单查询、物流进度、退款售后，都可以直接问我～',
+                    createdAt: 0,
+                  }}
+                />
+                <div className="self-center rounded-full border border-dashed border-slate-200 bg-slate-50 px-3 py-1 text-[11px] text-slate-500">
                   🧪 演示环境 · 数据为示例
                 </div>
-                <div className="mb-2.5 flex gap-2 overflow-x-auto pb-1">
-                  {QUICK_ENTRIES.map((q) => (
-                    <button
-                      key={q.title}
-                      type="button"
-                      className="shrink-0 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs text-slate-700 hover:border-indigo-400 hover:text-indigo-600"
-                      onClick={() => send(q.text)}
-                    >
-                      {q.icon} {q.title}
-                    </button>
-                  ))}
-                  <Link
-                    href="/mall"
-                    className="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-3.5 py-1.5 text-xs text-indigo-600 hover:bg-indigo-100"
-                  >
-                    🛍 逛商城
-                  </Link>
-                </div>
-              </div>
+              </>
             )}
 
             {draft.messages.map((m) => (
               <MessageBubble key={m.id} message={m} />
             ))}
+
+            {/* AI 回复未生成（SSE 断流/空回包，error 事件已由 reducer 兜底为系统提示）：
+                展示友好提示 + 一键重试，替代生硬的「（空）」占位。人工服务态不显示
+                （此时重发会误走坐席消息通道） */}
+            {!busy &&
+              !['waiting_human', 'agent_offered', 'human_active'].includes(handoffState) &&
+              lastMsg && lastMsg.role === 'assistant' && !lastMsg.content && (
+              <div className="mx-auto flex w-full max-w-md items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                <span className="flex-1">抱歉，刚才的回复没有生成成功，请重试</span>
+                <button
+                  type="button"
+                  className="shrink-0 rounded-full bg-amber-600 px-2.5 py-1 text-xs text-white hover:bg-amber-700"
+                  onClick={retryLast}
+                >
+                  重试
+                </button>
+              </div>
+            )}
 
             {/* live 时间线（完成后固化到气泡下） */}
             {draft.streaming && draft.liveTimeline.length > 0 && (
@@ -570,6 +588,30 @@ export default function CustomerServicePage() {
             {busy && <span className="h-2 w-2 animate-pulse rounded-full bg-indigo-500" aria-hidden />}
             {busy && <span>正在 {draft.liveStep ?? '处理'}…</span>}
             {draft.pausedText && <span className="text-amber-600">{draft.pausedText}</span>}
+          </div>
+
+          {/* 快捷入口：常驻输入栏上方横滑（淘宝式），发消息后不消失；
+              「发订单给客服」chip 待订单选择抽屉（TASK.md M1）落地后加入本行 */}
+          <div
+            className="flex flex-none items-center gap-2 overflow-x-auto px-3.5 pb-1.5 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            aria-label="快捷入口"
+          >
+            {QUICK_ENTRIES.map((q) => (
+              <button
+                key={q.title}
+                type="button"
+                className="shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-100"
+                onClick={() => send(q.text)}
+              >
+                {q.icon} {q.title}
+              </button>
+            ))}
+            <Link
+              href="/mall"
+              className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:border-indigo-400 hover:text-indigo-600"
+            >
+              🛍 逛商城
+            </Link>
           </div>
 
           {/* 输入区：转人工为图标入口（有会话且有消息时可用），布局对齐商城客服习惯 */}
@@ -825,6 +867,9 @@ function formatCountdown(deadlineIso: string, now: number): string {
 }
 
 function MessageBubble({ message }: { message: Cs2Message }) {
+  // 空回复且本轮已结束（SSE 断流/空回包）：不渲染空泡和「（空）」占位，
+  // 页面的友好重试卡已接管；streaming 中的空占位泡保留（配合 typing 点点）
+  if (!message.content && !message.streaming) return null
   const who =
     message.role === 'user'
       ? '我'
@@ -862,7 +907,7 @@ function MessageBubble({ message }: { message: Cs2Message }) {
         </div>
       )}
       <div className={`whitespace-pre-wrap text-[13px] leading-relaxed ${bubble}`}>
-        {message.content || (message.streaming ? '' : '（空）')}
+        {message.content}
       </div>
       {message.csNodes && message.csNodes.length > 0 && (
         <div className="flex flex-wrap items-center gap-1 pt-0.5 text-[10.5px] text-slate-400">

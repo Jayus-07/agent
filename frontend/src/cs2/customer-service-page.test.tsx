@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
 const chatApi = vi.hoisted(() => ({
-  streamChat: vi.fn(async function* () {
+  streamChat: vi.fn(async function* (_req?: unknown) {
     /* 空流 */
   }),
   abortChat: vi.fn(async () => {}),
@@ -38,7 +38,7 @@ const cs2Api = vi.hoisted(() => ({
   })),
   newSessionId: vi.fn(() => 'sess-xyz'),
   ORDER_STATUS_ZH: { paid: '待发货' },
-  fetchPendingSnapshot: vi.fn(async () => null),
+  fetchPendingSnapshot: vi.fn<(cid: string) => Promise<unknown>>(async () => null),
   confirmAction: vi.fn(async () => ({ status: 'success', answer: '' })),
   updateRefundReason: vi.fn(async () => {}),
   listRefundRequests: vi.fn(async () => []),
@@ -92,17 +92,67 @@ async function openConversation(c: HTMLElement, label: string) {
 }
 
 describe('CustomerServicePage（/customer-service，P8 切换）', () => {
-  it('欢迎态：AI 徽章/免责语/演示标记/四个快捷入口/转人工禁用', async () => {
+  it('欢迎态：开场白气泡/演示标记/快捷入口常驻输入栏上方/转人工禁用', async () => {
     const c = await mount()
-    expect(c.textContent).toContain('AI 智能客服')
-    expect(c.textContent).toContain('回复由 AI 生成，仅供参考。')
+    // 开场白改为淘宝式问候气泡，AI 免责由每条气泡的标签承载
+    expect(c.textContent).toContain('很高兴为您服务')
+    expect(c.textContent).toContain('由人工智能生成')
     expect(c.textContent).toContain('演示环境 · 数据为示例')
-    expect(c.querySelectorAll('button').length).toBeGreaterThanOrEqual(4)
+    // 快捷入口常驻输入栏上方（aria 容器），不再只在欢迎卡出现
+    const quickBar = c.querySelector('[aria-label="快捷入口"]')
+    expect(quickBar).not.toBeNull()
+    expect(quickBar?.textContent).toContain('查询订单')
+    expect(quickBar?.textContent).toContain('物流追踪')
+    expect(quickBar?.textContent).toContain('逛商城')
     // 转人工入口已移至输入栏（aria-label 图标按钮），新会话态禁用
-    const handoffNew = c.querySelector('button[aria-label="转人工"]')
+    const handoffNew = c.querySelector<HTMLButtonElement>('button[aria-label="转人工"]')
     expect(handoffNew).not.toBeNull()
     expect(handoffNew?.disabled).toBe(true)
     expect(cs2Api.fetchCustomerContext).toHaveBeenCalled()
+  })
+
+  it('点击快捷入口 chip 直接发送对应话术', async () => {
+    const c = await mount()
+    const chip = Array.from(c.querySelectorAll('[aria-label="快捷入口"] button')).find(
+      (b) => b.textContent?.includes('查询订单'),
+    )
+    expect(chip).not.toBeNull()
+    await act(async () => {
+      chip?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    // 用户消息入列（开场白气泡随之让位给真实消息流）
+    expect(c.textContent).toContain('帮我查一下我的订单状态')
+    expect(c.textContent).not.toContain('很高兴为您服务')
+  })
+
+  it('SSE 断流导致空回复时展示友好重试卡而非「（空）」占位，重试重发上一条话术', async () => {
+    // error 事件路径由 reducer 兜底为系统提示；这里模拟的是流直接抛异常（断网/网关 503）
+    chatApi.streamChat.mockImplementationOnce(async function* () {
+      throw new Error('tunnel reset')
+    })
+    const c = await mount()
+    const chip = Array.from(c.querySelectorAll('[aria-label="快捷入口"] button')).find(
+      (b) => b.textContent?.includes('查询订单'),
+    )
+    await act(async () => {
+      chip?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    expect(c.textContent).not.toContain('（空）')
+    expect(c.textContent).toContain('刚才的回复没有生成成功')
+    const retry = Array.from(c.querySelectorAll('button')).find((b) => b.textContent?.includes('重试'))
+    expect(retry).not.toBeNull()
+    chatApi.streamChat.mockClear()
+    await act(async () => {
+      retry?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    // 重试 = 用上一条用户话术重新发起一轮 SSE
+    expect(chatApi.streamChat).toHaveBeenCalledTimes(1)
+    expect(chatApi.streamChat.mock.calls[0]?.[0]).toMatchObject({
+      question: '帮我查一下我的订单状态',
+    })
   })
 
   it('会话下拉恢复历史会话并显示消息', async () => {
@@ -115,7 +165,7 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
   it('历史会话中转人工按钮可用（有消息）', async () => {
     const c = await mount()
     await openConversation(c, '退款咨询')
-    const handoff = c.querySelector('button[aria-label="转人工"]')
+    const handoff = c.querySelector<HTMLButtonElement>('button[aria-label="转人工"]')
     expect(handoff?.disabled).toBe(false)
     await act(async () => {
       handoff?.click()
