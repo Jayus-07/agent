@@ -71,6 +71,15 @@ sudo certbot renew --dry-run
 
 域名 anyanyan.me 的国内链路存在 SNI 拦截（海外正常），国内统一改用 IP 直访：`https://<服务器公网IP>`（主站，443）、`https://<服务器公网IP>:3443`（客服端/坐席端）、`:3444`（管理端），证书为 Let's Encrypt IP 证书（acme.sh shortlived profile，有效期约 6 天，reloadcmd 自动 reload nginx）。模板见 `部署/prod-4c8g/nginx/ip-entry.conf`，安装到 `/etc/nginx/sites-available/ip-entry`；其中 `$connection_upgrade` map 依赖 `agent-platform.conf`，两文件需同时安装。UFW 与云安全组需放行 TCP 80、443、3443、3444。
 
+**ip-entry 的 SSL listen 必须显式 `default_server`（2026-11-21 事故）**：浏览器按 RFC 6066 对 IP 直访不发 SNI，无 SNI 请求由该端口第一个 server 块兜底。sites-enabled 按字母序加载，`agent-platform` 排在 `ip-entry` 之前——上面的 certbot 流程会给 agent-platform.conf 补 443 块，一旦发生，隐式默认被它抢走，IP 直访拿到域名证书（SAN 不含 IP）：浏览器出现证书告警，点「继续访问」后页面能打开，但 fetch/XHR 全部失败，移动端企业助手表现为「历史加载失败：Network request failed」、个人额度永远停在「正在读取额度…」。修复：ip-entry 三个 SSL listen 写成 `listen 443 ssl default_server;` 等（80 端口不带——系统 default 站点已是 80 default_server，重复声明会 nginx -t 失败；ACME http-01 靠 Host 头匹配，不受影响）。
+
+变更后验证（`openssl s_client` 不带 `-servername` 即模拟 IP 直访的无 SNI 请求，应返回 IP 证书而非 `CN=anyanyan.me`）：
+
+```bash
+echo | openssl s_client -connect <服务器公网IP>:443 2>/dev/null | openssl x509 -noout -subject -dates
+echo | openssl s_client -connect <服务器公网IP>:443 -servername anyanyan.me 2>/dev/null | openssl x509 -noout -subject -dates
+```
+
 ## 生产启动
 
 自动发布工作流、GitHub Environment/Variables/Secret 和专用 runner 的配置要求见[发布质量与 GitHub Actions 生产发布](../../docs/operations/release-quality.md#github-actions-生产发布)。首次启用前，必须在生产主机准备好 `.env.production`、评测运行目录、备份目录和只允许部署使用的 runner；流水线不会创建数据目录或修改服务器权限。
