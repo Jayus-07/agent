@@ -9,7 +9,7 @@
 | 服务 | 内存上限 MiB | CPU 上限 | 说明 |
 | --- | ---: | ---: | --- |
 | PostgreSQL | 1024 | 1.5 | max_connections=120、shared_buffers=256MB、work_mem=4MB |
-| Redis 缓存/控制面 | 384 | 0.4 | maxmemory=192mb，volatile-LRU 只淘汰带 TTL 的缓存键，保护无 TTL Stream/位点；给 AOF/分配器留余量 |
+| Redis 缓存/控制面 | 384 | 0.4 | maxmemory=192mb，volatile-LRU 只淘汰带 TTL 的缓存，保护无 TTL Stream/位点；给 AOF/分配器留余量 |
 | Redis broker/result | 192 | 0.2 | maxmemory=128mb，noeviction |
 | Auth Redis | 96 | 0.2 | maxmemory=48mb，noeviction |
 | APISIX | 288 | 0.5 | 实测常驻约 228MiB |
@@ -20,7 +20,7 @@
 | RAG 服务 | 512 | 1.0 | 与当前 remote 请求链路一致 |
 | MCP 服务 | 224 | 0.4 | 工具接入 |
 | 维护 worker | 384 | 0.3 | 并发 1，常驻实测约 280MiB |
-| 报表 worker | 512 | 0.5 | 1.0 | 与 Agent worker 调整分配，整机总预算不变 |
+| 报表 worker | 512 | 0.5 | 并发 1；与 Agent worker 调整分配，整机总预算不变 |
 | Beat | 128 | 0.2 | 单实例调度 |
 | 客服 dispatcher | 192 | 0.3 | 单副本；不保留单机多副本冗余 |
 | PostgreSQL 备份 | 96 | 0.2 | 每日基础备份；外部异地备份仍需配置 |
