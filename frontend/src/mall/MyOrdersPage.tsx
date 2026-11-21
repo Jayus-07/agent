@@ -6,6 +6,7 @@ import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useRouter } from 'next/navigation'
 import SiteNav from './SiteNav'
+import SiteTabBar from './SiteTabBar'
 import CartModal from './CartModal'
 import {
   cancelUnpaidOrder,
@@ -70,9 +71,14 @@ function MyOrdersInner() {
   }
 
   const prefillCs = (orderNo: string, kind: 'refund' | 'consult') => {
-    const text = kind === 'refund'
-      ? `我要为订单 ${orderNo} 申请退款`
-      : `我想咨询订单 ${orderNo} 的情况`
+    if (kind === 'consult') {
+      // M1 深链：订单号直达客服页订单抽屉（预选高亮，用户点发送确认），
+      // 替代旧的纯文本预填（cs2-prefill）；退款话术走旧通道
+      window.sessionStorage.setItem('cs2-order-ref', orderNo)
+      router.push('/customer-service')
+      return
+    }
+    const text = `我要为订单 ${orderNo} 申请退款`
     window.sessionStorage.setItem('cs2-prefill', text)
     router.push('/customer-service')
   }
@@ -111,7 +117,7 @@ function MyOrdersInner() {
   return (
     <div className="flex h-screen flex-col bg-slate-100">
       <SiteNav />
-      <div className="min-h-0 flex-1 overflow-auto p-5">
+      <div className="min-h-0 flex-1 overflow-auto p-5 pb-20 md:pb-5">
         <div className="mb-3 flex flex-wrap items-center gap-2.5">
           <h2 className="text-base text-slate-900">我的订单</h2>
           <span className="rounded-full bg-slate-200/60 px-2 py-0.5 text-[11.5px] text-slate-500">
@@ -254,6 +260,7 @@ function MyOrdersInner() {
           {notice}
         </div>
       )}
+      <SiteTabBar />
     </div>
   )
 }

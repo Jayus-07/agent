@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import SiteNav from './SiteNav'
+import SiteTabBar from './SiteTabBar'
 import CartModal from './CartModal'
 import { useCart } from './cart'
 import { listProducts, money, type MallProduct } from './api'
@@ -55,7 +56,7 @@ export default function MallPage() {
   return (
     <div className="flex h-screen flex-col bg-slate-100">
       <SiteNav />
-      <div className="min-h-0 flex-1 overflow-auto p-5">
+      <div className="min-h-0 flex-1 overflow-auto p-5 pb-20 md:pb-5">
         <div className="mb-3 flex flex-wrap items-center gap-2.5">
           <h2 className="text-base text-slate-900">商品中心</h2>
           <span className="rounded-full bg-slate-200/60 px-2 py-0.5 text-[11.5px] text-slate-500">
@@ -214,6 +215,7 @@ export default function MallPage() {
           {toast}
         </div>
       )}
+      <SiteTabBar />
     </div>
   )
 }
