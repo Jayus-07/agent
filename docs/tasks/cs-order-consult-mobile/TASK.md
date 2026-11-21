@@ -1,7 +1,20 @@
 # TASK: 智能客服 × 商城「我的订单」移动端联动（订单咨询/发单给客服）
 
-> 设计文档（2026-11-21 起草，未施工）。参考淘宝淘小蜜「发订单给客服」交互。
-> Worktree：`agent-cs-order-consult`，分支 `feat/cs-order-consult-mobile`，基于 dfc120a（#498 合并后）。
+> 设计文档（2026-11-21 起草）。参考淘宝淘小蜜「发订单给客服」交互。
+> Worktree：`agent-cs-order-consult`。
+>
+> **施工状态（2026-11-22 更新）：M1/M2/M3 全部完成并上线生产。**
+> - M1（抽屉+双入口+深链+三入口导航）→ PR #508（75d7b2c）
+> - 开场白/常驻 chip/空回复重试 → PR #503（f44be4f）
+> - M2（order_no 归属校验+订单槽承接+card 落库）+ M3（坐席订单卡）→ PR #509（1bfd0ff）
+> - M2 收尾修复（cs_admin 三处 REST 序列化透传 attachments）→ PR #510（6f598f5）
+> - 生产验收：404/422 统一口径 ✅、DB card+attachments 落库 ✅、坐席接口透传 ✅、渲染逻辑 vitest ✅
+>
+> **遗留（既有问题，非本任务回归，另行处理）：**
+> 1. 生产商城下单 INTERNAL_ERROR：用户在 business 库无 customer 行（fk_orders_customer 拒绝）——影响「真实下单→发单卡」正路径演示，发单卡验收用人工态附件通道完成
+> 2. 坐席工作台「我的会话」整页刷新后丢失：前端 queue 拉取无参默认不含 human_active（认领后刷新看不到进行中会话）
+> 3. 会话管理详情面板点击行不展开（消息回放不可达）
+> 4. 用户端历史会话回放 card 消息渲染为纯文本（MyMessageRow 未消费 attachments，增强项）
 
 ## 1. 背景与目标
 
