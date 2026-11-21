@@ -429,8 +429,14 @@ try {
         throw '已确认 PR 合并，但分支 HEAD 不是 origin/main 的祖先（常见于 squash merge）；为避免强删，本次只允许保留本地分支并移除工作树。'
     }
 
-    if (-not $PSCmdlet.ShouldProcess($target.Path, '移除已合并且干净的 Git 工作树')) {
-        Write-Output 'WHATIF: 检查通过，但未删除。'
+    # 2026-11-21：不用 $PSCmdlet.ShouldProcess —— ConfirmImpact='High' 会让它
+    # 在 ConfirmPreference=High（默认）下必然渲染交互确认，而以 -File 从非交互
+    # 宿主（Git Bash 管道/CI）调用时 Host 无 UI，ShouldProcess 内部抛
+    # NullReferenceException（PowerShell 5.1 实测，最小复现确认 -Confirm:$false
+    # 可绕过）。本脚本的删除确认已由 -Apply + -ConfirmInactive 双开关显式承担，
+    # -WhatIf 语义改用 $WhatIfPreference 保留，不再依赖宿主交互能力。
+    if ($WhatIfPreference) {
+        Write-Output "WHATIF: 将移除工作树 $($target.Path)（检查通过；去掉 -WhatIf 并加 -Apply -ConfirmInactive 执行）。"
         exit 0
     }
 
