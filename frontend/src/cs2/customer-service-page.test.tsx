@@ -75,38 +75,47 @@ async function mount() {
   return container
 }
 
+// 会话切换已收进头像抽屉（顶栏不再有下拉）：点头像 → 点抽屉里的会话项
+async function openConversation(c: HTMLElement, label: string) {
+  const avatar = c.querySelector('button[aria-label="打开个人中心"]')
+  expect(avatar).not.toBeNull()
+  await act(async () => {
+    avatar?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  const item = Array.from(c.querySelectorAll('aside[aria-label="个人中心"] button')).find(
+    (b) => b.textContent?.includes(label),
+  )
+  expect(item).not.toBeNull()
+  await act(async () => {
+    item?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+}
+
 describe('CustomerServicePage（/customer-service，P8 切换）', () => {
   it('欢迎态：AI 徽章/免责语/演示标记/四个快捷入口/转人工禁用', async () => {
     const c = await mount()
     expect(c.textContent).toContain('AI 智能客服')
-    expect(c.textContent).toContain('由人工智能生成')
-    expect(c.textContent).toContain('演示沙盒')
+    expect(c.textContent).toContain('回复由 AI 生成，仅供参考。')
+    expect(c.textContent).toContain('演示环境 · 数据为示例')
     expect(c.querySelectorAll('button').length).toBeGreaterThanOrEqual(4)
-    const handoffNew = Array.from(c.querySelectorAll('button')).find((b) => b.textContent?.includes('转接人工'))
+    // 转人工入口已移至输入栏（aria-label 图标按钮），新会话态禁用
+    const handoffNew = c.querySelector('button[aria-label="转人工"]')
+    expect(handoffNew).not.toBeNull()
     expect(handoffNew?.disabled).toBe(true)
     expect(cs2Api.fetchCustomerContext).toHaveBeenCalled()
   })
 
   it('会话下拉恢复历史会话并显示消息', async () => {
     const c = await mount()
-    const select = c.querySelector('select[aria-label="切换会话"]') as HTMLSelectElement
-    expect(select).not.toBeNull()
-    await act(async () => {
-      select.value = 'conv-a'
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-    })
+    await openConversation(c, '退款咨询')
     expect(c.textContent).toContain('我要退款')
     expect(c.textContent).toContain('好的，请说明订单号')
   })
 
   it('历史会话中转人工按钮可用（有消息）', async () => {
     const c = await mount()
-    const select = c.querySelector('select[aria-label="切换会话"]') as HTMLSelectElement
-    await act(async () => {
-      select.value = 'conv-a'
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    const handoff = Array.from(c.querySelectorAll('button')).find((b) => b.textContent?.trim() === '转人工')
+    await openConversation(c, '退款咨询')
+    const handoff = c.querySelector('button[aria-label="转人工"]')
     expect(handoff?.disabled).toBe(false)
     await act(async () => {
       handoff?.click()
@@ -127,11 +136,7 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
       confirmable: false,
     })
     const c = await mount()
-    const select = c.querySelector('select[aria-label="切换会话"]') as HTMLSelectElement
-    await act(async () => {
-      select.value = 'conv-a'
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-    })
+    await openConversation(c, '退款咨询')
     await act(async () => {})
     expect(cs2Api.fetchPendingSnapshot).toHaveBeenCalledWith('conv-a')
     expect(c.textContent).toContain('待确认信息尚未补全')
