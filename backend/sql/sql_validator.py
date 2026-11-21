@@ -54,6 +54,10 @@ POSITIVE_FUNCTION_ALLOWLIST: frozenset = frozenset({
     "TIMESTOSTR", "TIMETOSTR", "TIME_TO_STR",
     # 聚合/数组的 sqlglot 类名变体（string_agg→GROUPCONCAT 等）
     "GROUPCONCAT", "ARRAYAGG", "SPLITPART", "STRPOSITION",
+    # 集合生成（PG 标准只读表值函数；sql_v7 完整日趋势 SC-107 使用）。
+    # postgres 方言下 sqlglot 解析为专属类：类名口径 EXPLODINGGENERATESERIES、
+    # sql_name 口径 EXPLODING_GENERATE_SERIES、SQL 文本口径 GENERATE_SERIES 三键齐备。
+    "GENERATE_SERIES", "EXPLODINGGENERATESERIES", "EXPLODING_GENERATE_SERIES",
     # 存在性（exp.Exists 是 Func 子类会被遍历，类名口径需键）
     "EXISTS",
 })
@@ -250,6 +254,11 @@ class SQLValidator:
                 if table_name is None:
                     # _check_alias_defined 已给出更准确的错误。
                     continue
+                if table_name in cte_names:
+                    # CTE 引用（含别名，如 `FROM days d` 后的 d.*）：CTE 输出
+                    # 列不在数据字典，按文件头约定交给 SQL 引擎解析
+                    # （sql_v7 SC-107 实测：d.refund_date 被误判）。
+                    continue
                 if name not in visible_columns.get(table_name, set()):
                     available = sorted(visible_columns.get(table_name, set()))
                     raise ValidationError(
@@ -264,6 +273,16 @@ class SQLValidator:
                 if name in columns
             ]
             if not matches and name not in select_aliases:
+                # 含 CTE 的语句里，无限定列可能来自 CTE 输出或 CTE 体内
+                # 表值函数别名列（generate_series(...) AS calendar(day_value)
+                # 的 day_value，sql_v7 SC-107 实测）：仅当列名确实出现在
+                # 某个 CTE 的列引用中才放行给 SQL 引擎，幻觉列仍拒绝。
+                if cte_names and name in {
+                    col.name.lower()
+                    for cte in stmt.find_all(exp.CTE)
+                    for col in cte.find_all(exp.Column)
+                }:
+                    continue
                 raise ValidationError(
                     f"未找到列 '{name}'（已选表: {sorted(table_names)}）",
                     layer=3, reason="column_undefined",
@@ -280,9 +299,20 @@ class SQLValidator:
         """
         tables = set()
         stmt = parsed[0]
+        # CTE 名不是库表：`WITH bounds AS (...) SELECT * FROM bounds` 里
+        # `FROM bounds` 同样解析为 exp.Table，混进白名单校验会把合法查询
+        # 误判为越权（sql_v7 SC-112 实测）。带 schema 限定的同名表仍是真实
+        # 表（CTE 无法被 schema 限定），照常校验；CTE 定义体内的真实表
+        # 由各自的 exp.Table 节点覆盖，不受影响。
+        cte_names = {cte.alias.lower() for cte in stmt.find_all(exp.CTE)}
         for table in stmt.find_all(exp.Table):
             name = table.name.lower()
             db = (table.db or "").lower() if hasattr(table, "db") else ""
+            # 空名节点不是表：表值函数别名带列定义（generate_series(...) AS
+            # calendar(day_value)）会解析出空名 exp.Table（SC-107 实测）。
+            # 无 schema 限定的 CTE 引用也不是真实表（SC-112 实测）。
+            if not name or (name in cte_names and not db):
+                continue
             if db:
                 qname = f"{db}.{name}"
             else:

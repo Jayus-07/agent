@@ -60,16 +60,16 @@ class TestG04SevenBannedSystemFunctions:
         assert ei.value.reason == "dangerous_function"
 
     def test_set_config_inside_cte_blocked(self, guard):
-        """CTE 内藏 set_config：CTE 别名先被第②层表白名单拦下（实测 layer=2）。
-        安全语义=任一层拦下即拦截成立；层位锁定当前实现，若 L2 放开
-        CTE 别名解析，此用例必须转为 layer=4 断言而不是删除。"""
+        """CTE 内藏 set_config：2026-11-21 CTE/表值函数表提取修复后，L2 不再
+        把 CTE 别名误当表名，改由第④层函数黑名单拦截（原实测 layer=2）。
+        按本用例注释预留的演进指引转为 layer=4 断言，用例保留不删除。"""
         ctx = build_ctx(**EDITOR_CTX)
         with pytest.raises(ValidationError) as ei:
             guard.validate_and_rewrite(
                 "WITH s AS (SELECT set_config('app.user_id','1',false)) "
                 "SELECT * FROM s LIMIT 1", ctx)
-        assert ei.value.layer == 2
-        assert ei.value.reason == "table_forbidden"
+        assert ei.value.layer == 4
+        assert ei.value.reason == "dangerous_function"
 
 
 class TestLegacyPentestPosture:
@@ -97,9 +97,11 @@ class TestLegacyPentestPosture:
         ("SELECT password FROM customer LIMIT 1", 2, "table_forbidden"),
         ("SELECT * FROM customer LIMIT 1", 2, "table_forbidden"),
         ("SELECT phone FROM customer LIMIT 1", 2, "table_forbidden"),
-        # 函数表 pg_ls_dir() 被按表名解析 → 第②层拒
-        ("SELECT * FROM pg_ls_dir()", 2, "table_forbidden"),
-        ("SELECT * FROM dblink('host=x dbname=y','SELECT 1')", 2, "table_forbidden"),
+        # FROM 位置的表值函数（2026-11-21 CTE/表值函数表提取修复后）不再
+        # 被当表名误解析进第②层，改由第④层函数白名单按函数精确判定；
+        # 拒绝语义不变（任一层拦下即拦截成立）。
+        ("SELECT * FROM pg_ls_dir()", 4, "unapproved_system_function"),
+        ("SELECT * FROM dblink('host=x dbname=y','SELECT 1')", 4, "dangerous_function"),
         # 子查询逃逸读系统表
         ("SELECT (SELECT count(*) FROM pg_user) FROM orders LIMIT 1",
          2, "table_forbidden"),

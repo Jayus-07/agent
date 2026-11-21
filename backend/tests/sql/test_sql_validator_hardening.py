@@ -35,14 +35,16 @@ class TestLimitEnforcement:
             sql_validator.validate(sql)
         assert exc_info.value.layer == 5
 
-    def test_cte_as_table_rejected_by_allowlist_first(self):
-        """既有行为：CTE 作为 FROM 源会被 Layer 2 表名白名单拒绝
-        （见 test_sql_validator_alias.py 注释），到不了 LIMIT 层。"""
+    def test_cte_source_limit_semantics_preserved(self):
+        """2026-11-21 CTE/表值函数表提取修复后，CTE 作为 FROM 源合法通过
+        Layer 2（此前被误拒、到不了 LIMIT 层，见 test_sql_validator_alias.py
+        同期更新）；锁定 CTE 查询 LIMIT 语义：体内 LIMIT 5 保留，顶层缺
+        LIMIT 时仍强制覆写为 max_limit。"""
         sql = ('WITH top5 AS (SELECT id FROM product.products LIMIT 5) '
                "SELECT id FROM top5")
-        with pytest.raises(ValidationError) as exc_info:
-            sql_validator.validate(sql)
-        assert exc_info.value.layer == 2
+        safe_sql, _, _ = sql_validator.validate(sql)
+        assert "LIMIT 5" in safe_sql
+        assert "LIMIT 100" in safe_sql
 
     def test_limit_all_forced_to_max(self):
         """LIMIT ALL 解析不出数值（expression 非数字字面量）→ 强制覆写
