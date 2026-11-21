@@ -9,6 +9,10 @@ $modelLogs = Join-Path $modelRoot 'logs'
 $modelPort = 8088
 if ($env:LOCAL_MODEL_PORT) { $modelPort = [int]$env:LOCAL_MODEL_PORT }
 if ($modelPort -ne 8088) { $modelLogs = Join-Path $modelLogs "local-model-$modelPort" }
+# 本机模型服务是生产组件：embedding/rerank 容器经 Tailscale
+# (http://100.117.4.3:8088) 访问，127.0.0.1 只够本机自检。未显式设置时
+# 固化监听所有网卡，暴露面由 Windows 防火墙（入站规则）控制。
+if (-not $env:LOCAL_MODEL_HOST) { $env:LOCAL_MODEL_HOST = '0.0.0.0' }
 $modelPidFile = Join-Path $modelLogs 'local_model_server.pid'
 $modelLog = Join-Path $modelLogs 'local_model_server.log'
 $modelPython = $env:LOCAL_MODEL_PY

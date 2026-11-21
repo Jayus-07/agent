@@ -136,7 +136,9 @@ jobs:
             org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
           build-args: |
             API_URL=http://apisix:9080
-            NEXT_PUBLIC_WS_ORIGIN=${{ vars.PRODUCTION_CS_WS_ORIGIN || 'wss://cs.anyanyan.me' }}
+            # 未设置 vars.PRODUCTION_CS_WS_ORIGIN 时传空值：前端回退页面同源
+            # （wss://<当前访问域名>/ws/），不把生产域名锁死进镜像。
+            NEXT_PUBLIC_WS_ORIGIN=${{ vars.PRODUCTION_CS_WS_ORIGIN }}
           cache-from: type=gha,scope=frontend-cs
           cache-to: type=gha,mode=max,scope=frontend-cs
           provenance: false

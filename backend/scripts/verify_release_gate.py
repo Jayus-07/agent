@@ -9,8 +9,8 @@
   Gate 4  Chat            一轮 chat 200 + done
   Gate 5  RAG             知识问句 200 + 非空
   Gate 6  SQL             数据问句 200 + 非空（权限门在链路内生效）
-  Gate 7  CS              客服问句 200 + cs_graph_node 执行
-  Gate 8  Travel          旅游问句 200 + travel_graph_node 执行
+  Gate 7  CS              客服专属入口（/chat/customer-service/stream）200 + cs_graph_node
+  Gate 8  Travel          旅游专属直达流 /api/travel/plan/stream 200 + done 终帧
   Gate 10 Task Runtime    Celery 在线 worker 响应且消费 agent 队列
   Gate 11 Model           当前主问答角色可用且最近 24h 有真实调用探测成功
   Gate 12 Observability   /metrics 指标族在册 + prometheus targets up
@@ -115,7 +115,7 @@ def claims_of(tok: str) -> dict:
 
 
 def chat(token: str, session: str, question: str, direct=False, actor=None,
-         timeout=240) -> tuple[int, str, list[str], str, bool]:
+         timeout=240, cs_entry: bool = False) -> tuple[int, str, list[str], str, bool]:
     prefix = "" if direct else "/api"
     body = {"question": question, "session_id": session,
             "request_id": f"gate-{session}-{int(time.time()*1000)}",
@@ -124,8 +124,11 @@ def chat(token: str, session: str, question: str, direct=False, actor=None,
     if direct and actor:
         headers = {"X-Auth-Type": "jwt", "X-User-Id": actor["user_id"],
                    "X-Tenant-Id": actor["tenant_id"], "X-User-Roles": "editor"}
-    st, raw = _request("POST", f"{GATEWAY if not direct else 'http://127.0.0.1:8001'}{prefix}/chat/stream"
-                       if False else f"{GATEWAY}{prefix}/chat/stream",
+    # 产品身份由 FastAPI 注册路径决定（chat._product_for_chat_route）：
+    # /chat/customer-service/stream → customer_service（域锁入口），
+    # /chat/stream → public（仅一般对话，域节点不可达）。
+    entry = "customer-service/stream" if cs_entry else "stream"
+    st, raw = _request("POST", f"{GATEWAY}{prefix}/chat/{entry}",
                        body=body, token=token, headers=headers, timeout=timeout)
     if st != 200:
         return st, "", [], "", False
@@ -237,15 +240,68 @@ def g3_tenant(tok_a: str, tok_b: str) -> bool:
     return st == 404
 
 
-def g_domain(token: str, gate: str, question: str, expect_node: str | None):
+def g_domain(token: str, gate: str, question: str, expect_node: str | None,
+             cs_entry: bool = False):
     session = f"gate-{gate}-{int(time.time())}"
-    st, answer, nodes, error_code, done = chat(token, session, question)
+    st, answer, nodes, error_code, done = chat(token, session, question,
+                                               cs_entry=cs_entry)
     ok = st == 200 and done and not error_code and len(answer.strip()) >= 8
     if expect_node:
         ok = ok and bool(nodes) and expect_node in nodes
     DETAIL[gate] = (
         f"http={st} done={done} nodes={nodes[:4]} ans={len(answer)}字"
+        + (" entry=cs" if cs_entry else "")
         + (f" error={error_code}" if error_code else "")
+    )
+    return ok
+
+
+def g8_travel_direct(token: str) -> bool:
+    """旅游域经专属直达端点验证（Gate8，2026-11-21 语义对齐）。
+
+    产品身份由 FastAPI 注册路径决定：/chat/stream → public（仅一般对话，
+    域节点不可达），/chat/agent → agent（主助手隔离，2026-10-08 拍板不执行
+    专属域图）。旧"通用 chat 问句进 travel_graph_node"的期望与产品契约冲突。
+    旅游域的专属入口是旅游页直达端点 /api/travel/plan/stream，Gate8 改为
+    验证该入口真实可用：HTTP 200 + 事件流以 done 终帧收口且 status 非 failed。
+    """
+    session = f"gate-g8-{int(time.time())}"
+    body = {"message": "帮我规划厦门2天的行程，两人出行",
+            "session_id": session, "mode": "plan",
+            "client_run_id": f"gate-{session}"}
+    # V1 /travel/plan/stream 已退役且整组路由未挂载（生产实测 404 NOT_FOUND），
+    # 旅游页现役规划流入口是 V2 路径。
+    st, raw = _request("POST", f"{GATEWAY}/api/travel/v2/plan/stream",
+                       body=body, token=token, timeout=240)
+    if st != 200:
+        DETAIL["g8"] = (
+            f"http={st} (travel direct stream) body={raw[:120]}"
+        )
+        return False
+    done = False
+    done_status = ""
+    error_frame = ""
+    ev = None
+    for line in raw.splitlines():
+        line = line.rstrip("\r")
+        if line.startswith("event:"):
+            ev = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            try:
+                d = json.loads(line.split(":", 1)[1].strip())
+            except ValueError:
+                continue
+            if not isinstance(d, dict):
+                continue
+            if ev == "done":
+                done = True
+                done_status = str(d.get("status") or "")
+            if ev == "error":
+                error_frame = str(d.get("error_type") or d.get("message") or "error")
+    ok = done and done_status != "failed" and not error_frame
+    DETAIL["g8"] = (
+        f"http={st} done={done} status={done_status} (travel direct stream)"
+        + (f" error={error_frame}" if error_frame else "")
     )
     return ok
 
@@ -459,13 +515,24 @@ def main() -> int:
                                        "查一下最近一个月每天的销售额", None)),
         ("Gate7_CS", lambda: g_domain(editor, "g7",
                                       "帮我查一下这个订单的物流进度，到底什么时候到",
-                                      "cs_graph_node")),
-        ("Gate8_Travel", lambda: g_domain(editor, "g8", "帮我规划厦门的行程",
-                                          "travel_graph_node")),
+                                      "cs_graph_node", cs_entry=True)),
+        ("Gate8_Travel", lambda: g8_travel_direct(editor)),
         ("Gate10_TaskRuntime", g10_task),
         ("Gate11_Model", lambda: g11_model(editor)),
         ("Gate12_Observability", g12_observability),
     ]
+    # 配置自检（fail-fast）：checks 项必须零参可调用——#496 部署实测
+    # 「g8_travel_direct 漏包 lambda → 门禁 ERROR → 部署失败」的教训，
+    # 配置错误应在任何真实门禁调用之前崩出，而不是跑一半留 ERROR 详情。
+    import inspect as _inspect
+
+    for _name, _fn in checks:
+        try:
+            _inspect.signature(_fn).bind()
+        except TypeError as _exc:
+            raise SystemExit(
+                f"checks 配置错误：{_name} 不是零参可调用（漏包 lambda？）: {_exc}"
+            )
     for name, fn in checks:
         try:
             RESULTS[name] = fn()
