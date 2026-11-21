@@ -6,6 +6,7 @@
 // 目标态对照 prototypes/agent-workstation.html 的 workspace 视图。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { Package } from 'lucide-react'
 import {
   acceptOffer,
   claimConversation,
@@ -936,7 +937,17 @@ function ConversationRow({
   )
 }
 
+/** M2：card 消息且附件为订单引用 → 坐席端渲染只读订单卡 */
+function orderRefOf(message: MessageDTO): { order_no: string } | null {
+  if (message.content_type !== 'card') return null
+  const first = (message.attachments ?? [])[0]
+  if (!first || first.type !== 'order_ref') return null
+  const orderNo = String(first.order_no ?? '').trim()
+  return orderNo ? { order_no: orderNo } : null
+}
+
 function AgentBubble({ message }: { message: MessageDTO }) {
+  const orderRef = orderRefOf(message)
   const role = msgRole(message.sender_type)
   const align =
     role === 'agent' ? 'self-end' : role === 'sys' ? 'self-center max-w-[88%]' : 'self-start'
@@ -960,9 +971,24 @@ function AgentBubble({ message }: { message: MessageDTO }) {
           )}
         </div>
       )}
-      <div className={`whitespace-pre-wrap text-[13px] leading-relaxed text-slate-800 ${bubble}`}>
-        {message.content}
-      </div>
+      {orderRef ? (
+        <div className="rounded-xl border border-indigo-200 bg-white px-3 py-2.5">
+          <div className="flex items-center gap-1.5">
+            <Package size={15} className="text-indigo-500" aria-hidden />
+            <b className="text-[13px] text-slate-900">订单 {orderRef.order_no}</b>
+            <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-600">
+              订单卡
+            </span>
+          </div>
+          <div className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-slate-600">
+            {message.content}
+          </div>
+        </div>
+      ) : (
+        <div className={`whitespace-pre-wrap text-[13px] leading-relaxed text-slate-800 ${bubble}`}>
+          {message.content}
+        </div>
+      )}
     </div>
   )
 }

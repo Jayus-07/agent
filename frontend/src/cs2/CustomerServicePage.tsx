@@ -145,7 +145,7 @@ export default function CustomerServicePage() {
   }, [draft.messages, draft.liveTimeline])
 
   const runTurn = useCallback(
-    async (question: string) => {
+    async (question: string, opts?: { orderNo?: string }) => {
       const sessionDraft = draftRef.current
       const sessionId = sessionDraft.id === 'new' ? newSessionId() : sessionDraft.id
       if (sessionDraft.id === 'new') {
@@ -186,7 +186,12 @@ export default function CustomerServicePage() {
       let terminal = false
       try {
         for await (const evt of streamChat(
-          { question, session_id: sessionId, request_id: requestId },
+          {
+            question,
+            session_id: sessionId,
+            request_id: requestId,
+            ...(opts?.orderNo ? { order_no: opts.orderNo } : {}),
+          },
           controller.signal,
           'customer-service',
         )) {
@@ -231,7 +236,13 @@ export default function CustomerServicePage() {
   )
 
   const send = useCallback(
-    (text: string) => {
+    (
+      text: string,
+      opts?: {
+        orderNo?: string
+        attachments?: Array<Record<string, string>>
+      },
+    ) => {
       const t = text.trim()
       if (!t || busy) return
       // P3：人工服务态消息直达坐席（不进 AI 图），其余走 SSE 聊天流
@@ -247,7 +258,7 @@ export default function CustomerServicePage() {
             createdAt: Date.now(),
           })
         })
-        void postMyMessage(id, t).catch(() => {
+        void postMyMessage(id, t, opts?.attachments).catch(() => {
           patchDraft((d) => {
             d.messages.push({
               id: makeId(),
@@ -260,7 +271,7 @@ export default function CustomerServicePage() {
         return
       }
       setInput('')
-      void runTurn(t)
+      void runTurn(t, opts?.orderNo ? { orderNo: opts.orderNo } : undefined)
     },
     [busy, patchDraft, runTurn],
   )
@@ -371,13 +382,18 @@ export default function CustomerServicePage() {
     }
   }, [draft.id, handoffState, patchDraft])
 
-  // M1：发订单给客服——结构化文本协议（AI 与坐席均可见可解析），
-  // 经既有 send() 通道（AI 态走 SSE，人工态直达坐席）；M2 换 content_type='card'
+  // M2：发订单给客服——结构化文本 + 服务端订单引用（order_no 校验归属后
+  // 注入会话订单槽；AI 态经 streamChat 透传，人工态经 postMyMessage 附件），
+  // 用户消息落库 content_type=card + [order_ref]，坐席端渲染订单卡
   const sendOrderRef = useCallback(
     (order: MallOrder) => {
       setOrderSheetOpen(false)
       send(
         `【订单咨询】订单号 ${order.order_no}｜${order.product_summary}｜${money(order.total_amount)}｜${ORDER_STATUS_ZH[order.status] ?? order.status}`,
+        {
+          orderNo: order.order_no,
+          attachments: [{ type: 'order_ref', order_no: order.order_no }],
+        },
       )
     },
     [send],

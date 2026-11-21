@@ -996,6 +996,9 @@ async def list_my_conversations(
 
 class MyMessageBody(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
+    # M2：人工服务态发送订单卡等结构化附件（[{"type":"order_ref","order_no":...}]）；
+    # 非空时 content_type=card 落库并随 message.created 广播。上限 4 条防滥用。
+    attachments: list[dict] | None = None
 
 
 @router.post("/my/{conversation_id}/messages")
@@ -1029,6 +1032,11 @@ async def post_my_message(
     content = body.content.strip()
     if not content:
         raise HTTPException(422, detail="消息内容不能为空")
+    # M2：附件非空 → card 落库；条数与单条体积设上限防滥用
+    msg_attachments = body.attachments or None
+    if msg_attachments and len(msg_attachments) > 4:
+        raise HTTPException(422, detail="附件数量超出上限")
+    msg_content_type = "card" if msg_attachments else "text"
 
     from datetime import datetime, timezone
 
@@ -1071,6 +1079,8 @@ async def post_my_message(
             message_id = run_sync(
                 _async_save_my_message(
                     conversation_id, user_id, tenant_id, content, now,
+                    content_type=msg_content_type,
+                    attachments=msg_attachments,
                 ),
                 cancel_on_timeout=True,
             )
@@ -1089,7 +1099,8 @@ async def post_my_message(
                 "message_id": str(message_id),
                 "sender_type": "user",
                 "content": content,
-                "content_type": "text",
+                "content_type": msg_content_type,
+                "attachments": msg_attachments,
                 "created_at": now.isoformat(),
             },
         )
@@ -1107,7 +1118,11 @@ async def post_my_message(
             run_authenticated_mutation,
             request,
             "cs_my_message_send",
-            {"conversation_id": conversation_id, "content": content},
+            {
+                "conversation_id": conversation_id,
+                "content": content,
+                "attachments": msg_attachments,
+            },
             _persist_and_notify,
         )
     except HTTPException:
@@ -1119,6 +1134,8 @@ async def post_my_message(
 
 async def _async_save_my_message(
     conversation_id: str, user_id: str, tenant_id: str, content: str, now,
+    content_type: str = "text",
+    attachments: list | None = None,
 ) -> str:
     from sqlalchemy import select
 
@@ -1139,7 +1156,11 @@ async def _async_save_my_message(
         if handoff is not None and str(handoff.user_id) != str(user_id):
             raise HTTPException(403, detail="无权向该会话发送消息")
         mgr = MessageManager(db)
-        msg = await mgr.save_user_message(conversation_id, content)
+        msg = await mgr.save_user_message(
+            conversation_id, content,
+            content_type=content_type,
+            attachments=attachments,
+        )
         return msg.id
 
 

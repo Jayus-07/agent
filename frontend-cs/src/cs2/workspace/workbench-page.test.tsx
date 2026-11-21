@@ -3,7 +3,18 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
-const api = vi.hoisted(() => ({
+const api = vi.hoisted(() => {
+  // mock 消息 DTO：显式标注（含 M2 attachments），避免 mockResolvedValueOnce
+  // 按 vi.fn 初始实现的窄字面量推断报多余属性（CI TS2353）
+  type WorkbenchMsgDTO = {
+    message_id: string
+    sender_type: string
+    content: string
+    content_type: string
+    attachments?: Array<Record<string, unknown>> | null
+    created_at: string
+  }
+  return {
   getHandoffQueue: vi.fn(async () => ({
     items: [
       {
@@ -21,14 +32,23 @@ const api = vi.hoisted(() => ({
     created_at: '2026-10-31T10:00:00Z', last_activity_at: '2026-10-31T10:05:00Z',
     messages: [],
   })),
-  getHandoffMessages: vi.fn(async () => ({
+  getHandoffMessages: vi.fn(
+    async (): Promise<{
+      conversation_id: string
+      handoff_state: string
+      last_id: number
+      messages: WorkbenchMsgDTO[]
+      agent_typing: boolean
+      handoff_meta: null
+    }> => ({
     conversation_id: 'conv-q1', handoff_state: 'waiting_human', last_id: 3,
     messages: [
       { message_id: '2', sender_type: 'user', content: '我要退款', content_type: 'text', created_at: '2026-10-31T10:01:00Z' },
       { message_id: '3', sender_type: 'assistant', content: '好的，请说明订单号', content_type: 'text', created_at: '2026-10-31T10:01:05Z' },
     ],
     agent_typing: false, handoff_meta: null,
-  })),
+    }),
+  ),
   getConversationEvents: vi.fn(async () => ({ conversation_id: 'conv-q1', after_seq: 0, events: [] })),
   claimConversation: vi.fn(async () => ({ conversation_id: 'conv-q1', handoff_state: 'human_active', agent_id: 'a1', already_claimed: false })),
   closeConversation: vi.fn(async () => ({ conversation_id: 'conv-q1', handoff_state: 'closed', closed_by: 'a1' })),
@@ -65,7 +85,8 @@ const api = vi.hoisted(() => ({
   })),
   updateCanned: vi.fn(async () => ({ id: 1, scope: 'personal', title: 't', content: 'c', category: '通用', enabled: true })),
   deleteCanned: vi.fn(async () => undefined),
-}))
+  }
+})
 
 vi.mock('./api', () => api)
 vi.mock('./useAgentSocket', () => ({
@@ -111,6 +132,34 @@ describe('WorkbenchPage（/cs2/workspace）', () => {
     expect(c.textContent).toContain('我要退款')
     const claim = Array.from(c.querySelectorAll('button')).find((b) => b.textContent === '认领')
     expect(claim).toBeDefined()
+  })
+
+  it('card+order_ref 消息渲染为订单卡（坐席端可见订单号）', async () => {
+    api.getHandoffMessages.mockResolvedValueOnce({
+      conversation_id: 'conv-q1', handoff_state: 'human_active', last_id: 4,
+      messages: [
+        {
+          message_id: '4', sender_type: 'user', content_type: 'card',
+          content: '【订单咨询】订单号 MO-AAA111｜蓝牙降噪耳机 Pro｜¥299.00｜已发货',
+          attachments: [{ type: 'order_ref', order_no: 'MO-AAA111' }],
+          created_at: '2026-10-31T10:02:00Z',
+        },
+      ],
+      agent_typing: false, handoff_meta: null,
+    })
+    const c = await mount()
+    const queueTab = Array.from(c.querySelectorAll('[role="tab"]')).find((b) => b.textContent?.includes('待接入'))
+    await act(async () => {
+      queueTab?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const claim = Array.from(c.querySelectorAll('button')).find((b) => b.textContent === '认领')
+    await act(async () => {
+      claim?.click()
+    })
+    await act(async () => {})
+    expect(c.textContent).toContain('订单 MO-AAA111')
+    expect(c.textContent).toContain('订单卡')
+    expect(c.textContent).toContain('【订单咨询】订单号 MO-AAA111')
   })
 
   it('认领后进入我的会话并加载消息流', async () => {

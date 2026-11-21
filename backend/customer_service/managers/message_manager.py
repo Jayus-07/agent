@@ -108,8 +108,14 @@ class MessageManager:
         intent_name: str | None = None,
         confidence: float | None = None,
         trace_id: str | None = None,
+        question_content_type: str = "text",
+        question_attachments: list | None = None,
     ) -> tuple[CSMessage, CSMessage]:
-        q = await self.save_user_message(conversation_id, question)
+        q = await self.save_user_message(
+            conversation_id, question,
+            content_type=question_content_type,
+            attachments=question_attachments,
+        )
         a = await self.save_assistant_message(
             conversation_id, answer,
             intent_domain=intent_domain,

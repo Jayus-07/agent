@@ -421,6 +421,97 @@ class TestProductChatEntrypoints:
         assert kwargs["tenant_id"] == "tenant-a"
         assert kwargs["persist_memory"] is True
 
+    def test_customer_service_entry_order_no_injected_and_recorded(
+        self, client, monkeypatch,
+    ):
+        """M2：CS 入口 order_no 校验归属后注入会话订单槽并随流透传。"""
+        from backend.config.auth import GATEWAY_TRUST_HEADER
+        import backend.app.api.routes.chat as chat_mod
+        import backend.customer_service.context_resolver as ctx_resolver
+        from backend.customer_service.service import order_service as order_service_mod
+
+        agent = _CapturingAgent()
+        monkeypatch.setattr(chat_mod, "get_multi_agent", lambda: agent)
+        recorded: list[tuple] = []
+
+        def _fake_record(tenant_id, user_id, session_id, order_id, source_intent=""):
+            recorded.append((tenant_id, user_id, session_id, order_id, source_intent))
+
+        monkeypatch.setattr(ctx_resolver, "record_recent_order", _fake_record)
+        monkeypatch.setattr(
+            order_service_mod.OrderService, "query_orders",
+            lambda self, user_id, order_id, query_type="list": None,
+        )
+        response = client.post(
+            "/chat/customer-service/stream",
+            json={
+                "question": "这个订单什么时候发货", "session_id": "order-entry-sess",
+                "request_id": "order-entry-request", "order_no": "MO-ABC123",
+            },
+            headers={
+                "X-API-Key": "test", "X-User-Id": "trusted-user",
+                "X-Tenant-Id": "tenant-a", "X-Auth-Type": "jwt",
+                GATEWAY_TRUST_HEADER: "test-gateway-trust",
+            },
+        )
+
+        assert response.status_code == 200
+        assert agent.calls
+        _, _, kwargs = agent.calls[0]
+        assert kwargs["cs_entry_order_no"] == "MO-ABC123"
+        assert len(recorded) == 1
+        assert recorded[0][0] == "tenant-a"
+        assert recorded[0][1] == "trusted-user"
+        assert recorded[0][3] == "MO-ABC123"
+        assert recorded[0][4] == "chat_entry"
+
+    def test_customer_service_entry_order_no_rejects_invalid_format(self, client):
+        from backend.config.auth import GATEWAY_TRUST_HEADER
+
+        response = client.post(
+            "/chat/customer-service/stream",
+            json={
+                "question": "你好", "session_id": "bad-order-sess",
+                "order_no": "订单号!@#",
+            },
+            headers={
+                "X-API-Key": "test", "X-User-Id": "trusted-user",
+                "X-Tenant-Id": "tenant-a", "X-Auth-Type": "jwt",
+                GATEWAY_TRUST_HEADER: "test-gateway-trust",
+            },
+        )
+        assert response.status_code == 422
+        assert response.json()["message"] == "订单号格式有误，请检查后重试。"
+
+    def test_customer_service_entry_order_no_not_found_unified_message(
+        self, client, monkeypatch,
+    ):
+        """归属校验失败统一「未找到该订单」口径，不泄漏订单存在性。"""
+        from backend.config.auth import GATEWAY_TRUST_HEADER
+        from backend.customer_service.errors import OrderNotFoundError
+        from backend.customer_service.service import order_service as order_service_mod
+
+        monkeypatch.setattr(
+            order_service_mod.OrderService, "query_orders",
+            lambda self, user_id, order_id, query_type="list": (
+                (_ for _ in ()).throw(OrderNotFoundError("no such order"))
+            ),
+        )
+        response = client.post(
+            "/chat/customer-service/stream",
+            json={
+                "question": "退款", "session_id": "missing-order-sess",
+                "order_no": "MO-NOPE99",
+            },
+            headers={
+                "X-API-Key": "test", "X-User-Id": "trusted-user",
+                "X-Tenant-Id": "tenant-a", "X-Auth-Type": "jwt",
+                GATEWAY_TRUST_HEADER: "test-gateway-trust",
+            },
+        )
+        assert response.status_code == 404
+        assert response.json()["message"] == "未找到该订单，请确认后重试。"
+
     def test_agent_route_rejects_missing_tenant(self, client):
         from backend.config.auth import GATEWAY_TRUST_HEADER
 
