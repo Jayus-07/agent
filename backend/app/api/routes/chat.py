@@ -414,6 +414,47 @@ async def chat_stream(
     session_id = req.session_id
     product_session_id = _product_session_id(product, session_id)
 
+    # M2：商城「发订单给客服」入口订单号——仅 CS 路由生效。服务端校验
+    # 格式与归属（OrderService 双模式均 fail-closed，归属由网关/SQL 内联
+    # 判定），通过后写入会话订单槽（本轮 cs_prefilter 经 resolve_turn_
+    # reference 即承接，继承语义与「唯一物流查询写槽」一致）；cs_entry_
+    # order_no 随流透传，落库时用户消息标 card + order_ref 附件。
+    # 校验失败统一「未找到该订单」口径，不泄漏订单存在性。
+    cs_entry_order_no = ""
+    if product is CUSTOMER_SERVICE_PRODUCT and str(req.order_no or "").strip():
+        from backend.customer_service.errors import OrderNotFoundError as _OrderNotFound
+        from backend.customer_service.errors import ValidationError as _CsValidationError
+        from backend.customer_service.security.permission import PermissionChecker
+        from backend.customer_service.service.order_service import OrderService
+        from backend.customer_service.context_resolver import record_recent_order
+        try:
+            cs_entry_order_no = PermissionChecker.validate_order_id(req.order_no)
+            await asyncio.to_thread(
+                OrderService().query_orders, user_id, cs_entry_order_no, "detail",
+            )
+        except _CsValidationError:
+            envelope = ErrorEnvelope(
+                code=ErrorCode.INVALID_PARAM,
+                retryable=False,
+                handoff_available=False,
+                message="订单号格式有误，请检查后重试。",
+                source="http",
+            )
+            return JSONResponse(status_code=422, content=_http_payload(envelope))
+        except _OrderNotFound:
+            envelope = ErrorEnvelope(
+                code=ErrorCode.NOT_FOUND,
+                retryable=False,
+                handoff_available=False,
+                message="未找到该订单，请确认后重试。",
+                source="http",
+            )
+            return JSONResponse(status_code=404, content=_http_payload(envelope))
+        record_recent_order(
+            ident.tenant_id or "", user_id, product_session_id,
+            cs_entry_order_no, source_intent="chat_entry",
+        )
+
     task_handoff = None
     if product == AGENT_PRODUCT:
         from backend.app.api.routes.agent_chat_tasks import (
@@ -554,6 +595,7 @@ async def chat_stream(
                 model=req.model or "",
                 domain_hint=product.domain_hint,
                 tenant_id=ident.tenant_id,
+                cs_entry_order_no=cs_entry_order_no,
                 idempotency_key=_product_idempotency_key(
                     product,
                     r.headers.get("Idempotency-Key"),

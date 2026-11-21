@@ -22,6 +22,9 @@ export interface MessageDTO {
   sender_type: string
   content: string
   content_type: string
+  /** M2：card 消息附件（如 [{"type":"order_ref","order_no":...}]），随
+   *  message.created WS 与轮询/断线补发同构透传 */
+  attachments?: Array<Record<string, unknown>> | null
   intent_domain?: string | null
   intent_name?: string | null
   confidence?: number | null

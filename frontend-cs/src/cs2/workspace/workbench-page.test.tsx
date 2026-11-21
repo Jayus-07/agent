@@ -113,6 +113,34 @@ describe('WorkbenchPage（/cs2/workspace）', () => {
     expect(claim).toBeDefined()
   })
 
+  it('card+order_ref 消息渲染为订单卡（坐席端可见订单号）', async () => {
+    api.getHandoffMessages.mockResolvedValueOnce({
+      conversation_id: 'conv-q1', handoff_state: 'human_active', last_id: 4,
+      messages: [
+        {
+          message_id: '4', sender_type: 'user', content_type: 'card',
+          content: '【订单咨询】订单号 MO-AAA111｜蓝牙降噪耳机 Pro｜¥299.00｜已发货',
+          attachments: [{ type: 'order_ref', order_no: 'MO-AAA111' }],
+          created_at: '2026-10-31T10:02:00Z',
+        },
+      ],
+      agent_typing: false, handoff_meta: null,
+    })
+    const c = await mount()
+    const queueTab = Array.from(c.querySelectorAll('[role="tab"]')).find((b) => b.textContent?.includes('待接入'))
+    await act(async () => {
+      queueTab?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const claim = Array.from(c.querySelectorAll('button')).find((b) => b.textContent === '认领')
+    await act(async () => {
+      claim?.click()
+    })
+    await act(async () => {})
+    expect(c.textContent).toContain('订单 MO-AAA111')
+    expect(c.textContent).toContain('订单卡')
+    expect(c.textContent).toContain('【订单咨询】订单号 MO-AAA111')
+  })
+
   it('认领后进入我的会话并加载消息流', async () => {
     const c = await mount()
     const queueTab = Array.from(c.querySelectorAll('[role="tab"]')).find((b) => b.textContent?.includes('待接入'))

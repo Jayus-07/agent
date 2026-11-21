@@ -17,6 +17,7 @@ class ChatRequest(BaseModel):
     department: Optional[str] = Field("", description="员工部门ID（检索授权用；空=未声明，按对客最严格集合处理）")
     model: Optional[str] = Field(None, description="按请求模型覆盖（须为已注册模型名，空 = 全局默认）")
     domain_hint: Optional[str] = Field("", description="兼容旧客户端的字段；服务端忽略，产品身份和路由范围由注册 API 路径确定")
+    order_no: Optional[str] = Field(None, description="客服入口携带的订单号引用（商城「发订单给客服」）；仅 CS 路由生效，服务端校验归属后注入会话订单槽")
 
 class ChatResponse(BaseModel):
     answer: str

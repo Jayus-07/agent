@@ -29,6 +29,45 @@ class TestRecordCsTurn:
                 tenant_id="default",
             )
 
+    @patch("backend.customer_service.conversation_store.run_sync", create=True)
+    def test_question_content_type_and_attachments_passthrough(self, mock_run_sync):
+        """M2：question_content_type/question_attachments 透传到落库协程。"""
+        from backend.customer_service import conversation_store
+
+        with patch.object(conversation_store, "_async_record_turn") as mock_async:
+            mock_async.return_value = "fake_coro"
+            conversation_store.record_cs_turn(
+                conversation_id="conv-1",
+                user_id="user-1",
+                question="【订单咨询】订单号 MO-1",
+                answer="好的",
+                tenant_id="default",
+                question_content_type="card",
+                question_attachments=[{"type": "order_ref", "order_no": "MO-1"}],
+            )
+            kwargs = mock_async.call_args.kwargs
+            assert kwargs["content_type"] == "card"
+            assert kwargs["attachments"] == [
+                {"type": "order_ref", "order_no": "MO-1"},
+            ]
+
+    @patch("backend.customer_service.conversation_store.run_sync", create=True)
+    def test_question_content_type_defaults_to_text(self, mock_run_sync):
+        from backend.customer_service import conversation_store
+
+        with patch.object(conversation_store, "_async_record_turn") as mock_async:
+            mock_async.return_value = "fake_coro"
+            conversation_store.record_cs_turn(
+                conversation_id="conv-1",
+                user_id="user-1",
+                question="你好",
+                answer="你好！",
+                tenant_id="default",
+            )
+            kwargs = mock_async.call_args.kwargs
+            assert kwargs["content_type"] == "text"
+            assert kwargs["attachments"] is None
+
     def test_soft_fail_on_run_sync_error(self):
         """If run_sync raises, record_cs_turn swallows the exception."""
         from backend.customer_service import conversation_store

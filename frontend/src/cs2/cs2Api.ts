@@ -113,11 +113,13 @@ export async function requestHandoff(conversationId: string): Promise<{ handoff_
 export async function postMyMessage(
   conversationId: string,
   content: string,
+  /** M2：结构化附件（订单卡 [order_ref]），非空时后端按 card 落库并广播 */
+  attachments?: Array<Record<string, string>>,
 ): Promise<{ message_id: string; handoff_state: string }> {
   return request(`/api/cs/conversations/my/${conversationId}/messages`, {
     method: 'POST',
     headers: { 'Idempotency-Key': nanoid(21) },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, ...(attachments ? { attachments } : {}) }),
   })
 }
 

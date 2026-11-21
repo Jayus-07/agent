@@ -342,6 +342,40 @@ def test_my_message_persists_in_human_states(db, messages_client, monkeypatch):
     assert rows and rows[0][0] == "user" and "DEMO-1001" in rows[0][1]
 
 
+def test_my_message_card_attachments_persisted(db, messages_client, monkeypatch):
+    """M2：人工服务态发送订单卡（attachments 非空 → content_type=card 落库）。"""
+    import json as _json
+
+    conversation_id = _PREFIX + uuid.uuid4().hex[:10]
+    _seed_conversation(conversation_id, "p3t-auth-user")
+    _seed_handoff(conversation_id, "p3t-auth-user", state="waiting_human")
+    monkeypatch.setattr(
+        lifecycle_mod, "load_active_handoff_sync",
+        lambda tenant_id, conversation_id, **kw: {"handoff_state": "waiting_human"},
+    )
+
+    response = messages_client.post(
+        f"/cs/conversations/my/{conversation_id}/messages",
+        json={
+            "content": "【订单咨询】订单号 DEMO-1001",
+            "attachments": [{"type": "order_ref", "order_no": "DEMO-1001"}],
+        },
+        headers={"Idempotency-Key": uuid.uuid4().hex},
+    )
+    assert response.status_code == 200, response.text
+    with _pg() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT sender_type, content_type, attachments"
+            " FROM customer_service.messages WHERE conversation_id = %s",
+            (conversation_id,),
+        )
+        rows = cur.fetchall()
+    assert rows and rows[0][0] == "user"
+    assert rows[0][1] == "card"
+    assert rows[0][2] == [{"type": "order_ref", "order_no": "DEMO-1001"}]
+    assert "DEMO-1001" in rows[0][2][0]["order_no"] or _json.dumps(rows[0][2])
+
+
 def test_my_message_rejected_in_ai_state(db, messages_client, monkeypatch):
     import backend.customer_service.handoff.lifecycle as lifecycle_mod
 

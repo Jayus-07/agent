@@ -194,6 +194,7 @@ class MultiAgentSystem:
         product_source: str = "internal_call",
         persist_memory: bool = True,
         task_handoff=None,
+        cs_entry_order_no: str = "",
     ) -> Generator[dict, None, None]:
         """SSE 流式处理。委托 GraphRunner 统一执行核心，过滤内部事件。
 
@@ -217,7 +218,8 @@ class MultiAgentSystem:
                 product_id=product_id,
                 product_source=product_source,
                 persist_memory=persist_memory,
-                task_handoff=task_handoff):
+                task_handoff=task_handoff,
+                cs_entry_order_no=cs_entry_order_no):
             if evt.get("event") == _ANSWER_EVENT:
                 continue  # 内部事件（ask 用），不属于 SSE 协议
             yield evt

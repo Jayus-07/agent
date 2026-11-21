@@ -33,8 +33,14 @@ def record_cs_turn(
     cs_route: dict | None = None,
     *,
     tenant_id: str = "",
+    question_content_type: str = "text",
+    question_attachments: list | None = None,
 ) -> None:
     """Persist one user+assistant message pair with optional trace linkage.
+
+    M2：``question_content_type``/``question_attachments`` 支持用户消息以
+    card 落库（商城「发订单给客服」入口，attachments=[order_ref]）；默认
+    text 保持既有行为，两条写路径（java/_async）同步透传。
 
     Idempotent upsert: get_or_create the conversation, then save both messages.
     Safe to call from sync graph-node context — internally dispatches to the
@@ -60,12 +66,16 @@ def record_cs_turn(
             _java_record_turn(
                 conversation_id, user_id, question, answer, trace_id, cs_route,
                 tenant_id=tenant_id,
+                content_type=question_content_type,
+                attachments=question_attachments,
             )
         else:
             from backend.customer_service._db_loop import run_sync
             operation = _async_record_turn(
                 conversation_id, user_id, question, answer, trace_id, cs_route,
                 tenant_id=tenant_id,
+                content_type=question_content_type,
+                attachments=question_attachments,
             )
             try:
                 run_sync(operation)
@@ -86,6 +96,8 @@ def _java_record_turn(
     cs_route: dict | None,
     *,
     tenant_id: str = "",
+    content_type: str = "text",
+    attachments: list | None = None,
 ) -> None:
     """java 写权模式：question/answer 拆两条消息代理到 business-service"""
     from backend.infra.http.business_client import BusinessServiceError, post_json_sync
@@ -105,7 +117,7 @@ def _java_record_turn(
         "user_id": user_id,
         "tenant_id": tenant_id,
         "trace_id": trace_id,
-        "content_type": "text",
+        "content_type": content_type,
         "private": False,
     }
     try:
@@ -113,6 +125,7 @@ def _java_record_turn(
             **body_common,
             "sender_type": "user",
             "content": question,
+            **({"attachments": attachments} if attachments else {}),
         })
         post_json_sync("/internal/messages", {
             **body_common,
@@ -158,6 +171,8 @@ async def _async_record_turn(
     cs_route: dict | None,
     *,
     tenant_id: str = "",
+    content_type: str = "text",
+    attachments: list | None = None,
 ) -> None:
     from datetime import datetime, timezone
 
@@ -197,6 +212,8 @@ async def _async_record_turn(
             intent_name=intent_name,
             confidence=confidence,
             trace_id=trace_id,
+            question_content_type=content_type,
+            question_attachments=attachments,
         )
 
         values: dict = {
@@ -226,6 +243,7 @@ async def _async_record_turn(
                 "sender_type": msg.sender_type,
                 "content": msg.content,
                 "content_type": msg.content_type,
+                "attachments": msg.attachments,
                 "created_at": (
                     msg.created_at.isoformat() if msg.created_at else ""
                 ),

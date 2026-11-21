@@ -20,6 +20,9 @@ export interface ChatRequest {
   domain_hint?: string;
   /** 当前逻辑发送操作的幂等键；重试时保持不变。 */
   idempotency_key?: string;
+  /** M2：客服入口携带的订单号引用（商城「发订单给客服」）。仅 CS 路由
+   * 消费：服务端校验归属后注入会话订单槽，用户消息落库为 card。 */
+  order_no?: string;
   /** 会话级模型覆盖（B.9 决策②）：仅本次请求生效，不改动全局默认。
    *  后端 API 边界会校验（未注册 / provider Key 缺失 → 400 fail-fast），
    *  非法值不会被静默吞掉再跑全局模型。 */

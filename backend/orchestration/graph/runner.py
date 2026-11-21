@@ -404,6 +404,7 @@ class GraphRunner:
         product_source: str = "internal_call",
         persist_memory: bool = True,
         task_handoff=None,
+        cs_entry_order_no: str = "",
     ) -> Generator[dict, None, None]:
         """执行图并产出统一事件流。
 
@@ -777,6 +778,9 @@ class GraphRunner:
             "worker_error": False,  # 图执行异常（worker 已 yield error 事件）
             "worker_paused": False,  # 用户个人用量余额不足，暂停本轮
             "memory_persisted": False,
+            # M2：客服入口携带的订单号引用（商城「发订单给客服」）——
+            # 落库时用户消息标 card + order_ref 附件；空串表示非订单入口
+            "cs_entry_order_no": cs_entry_order_no,
         }
         streamed = [False]  # 本轮是否发生过真流式 delta
 
@@ -1210,6 +1214,7 @@ class GraphRunner:
 
             _persist_cs_turn_if_needed(
                 ctx["cs_context_snapshot"], session_id, question, answer, trace.id,
+                entry_order_no=ctx.get("cs_entry_order_no") or "",
                 tenant_id=tenant_id,
             )
 
@@ -1432,6 +1437,7 @@ def _persist_cs_turn_if_needed(
     answer: str,
     trace_id: str,
     tenant_id: str = "",
+    entry_order_no: str = "",
 ) -> None:
     """Fire-and-forget CS turn persistence — no-op when not a CS request.
 
@@ -1451,6 +1457,11 @@ def _persist_cs_turn_if_needed(
             trace_id=trace_id,
             cs_route=cs_context.get("cs_route"),
             tenant_id=str(tenant_id or cs_context.get("tenant_id") or ""),
+            question_content_type="card" if entry_order_no else "text",
+            question_attachments=(
+                [{"type": "order_ref", "order_no": entry_order_no}]
+                if entry_order_no else None
+            ),
         )
     except Exception:
         logger.debug("[GraphRunner] CS turn persistence failed", exc_info=True)
