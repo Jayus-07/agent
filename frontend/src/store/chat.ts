@@ -46,7 +46,7 @@ interface ChatState {
   fileOps: { path: string; node: string; step_id: string; ts: number }[]
   /** 工具选择未收敛时的结构化澄清卡片 */
   clarification: ClarificationEvent | null
-  /** 域引导交接卡（多域隔离 M1：handoff 帧，ChatView 渲染 HandoffCard）。
+  /** 域引导交接卡（多域隔离 M1：handoff 帧，AgentWorkspace 渲染 HandoffPanel）。
    *  与 clarification 同生命周期：done 后保留（答完再点跳转是正常动线），
    *  下一轮流开始 resetStream 清空。 */
   handoff: HandoffEvent | null

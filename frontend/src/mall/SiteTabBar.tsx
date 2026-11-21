@@ -1,8 +1,9 @@
 'use client'
 
 // cs-workstation-v2 P2：移动端底部三入口 Tab（智能客服/商品中心/我的订单），
-// 仅 <md 显示（≥md 由 SiteNav 顶部导航承担）。与 SiteNav 共用条目定义的
-// 事实源；safe-area 适配，客服页不用（保持沉浸式聊天布局，导航在顶栏）。
+// 仅 <md 显示（≥md 由 SiteNav 顶部导航承担）。条目与 SiteNav 各自维护
+// （移动端 label 语境不同：客服/商城/订单 vs 智能客服/商品中心/我的订单），
+// 路由目标保持一致靠约定；safe-area 适配，客服页不用（保持沉浸式聊天布局，导航在顶栏）。
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Headphones, Package, ShoppingBag } from 'lucide-react'
