@@ -387,12 +387,12 @@ export default function CustomerServicePage() {
       <SiteNav />
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* 会话头 */}
+          {/* 会话头：精简版（转人工入口移至输入栏，避免窄屏挤压） */}
           <header className="flex h-12 flex-none items-center gap-2 border-b border-slate-200 bg-white px-4">
-            <Headphones size={16} className="text-indigo-600" aria-hidden />
-            <b className="text-sm text-slate-900">智能客服</b>
+            <Headphones size={16} className="shrink-0 text-indigo-600" aria-hidden />
+            <b className="shrink-0 text-sm text-slate-900">智能客服</b>
             <select
-              className="h-7 max-w-56 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700"
+              className="h-7 min-w-0 max-w-40 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 sm:max-w-56"
               aria-label="切换会话"
               value={draft.id === 'new' ? '' : draft.id}
               onChange={(e) => selectSession(e.target.value)}
@@ -404,15 +404,7 @@ export default function CustomerServicePage() {
             </select>
             <button
               type="button"
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-45"
-              disabled={draft.id === 'new' || draft.messages.length === 0}
-              onClick={() => void requestHuman()}
-            >
-              转人工
-            </button>
-            <button
-              type="button"
-              className="ml-auto rounded-lg px-3 py-1 text-xs text-slate-500 hover:bg-slate-50"
+              className="ml-auto shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
               onClick={startNewSession}
             >
               + 新会话
@@ -428,31 +420,23 @@ export default function CustomerServicePage() {
                 </span>
                 <h3 className="mb-1.5 text-[15px] text-slate-900">您好，我是演示商城的智能客服</h3>
                 <p className="mb-2.5 text-xs leading-relaxed text-slate-500">
-                  回复由人工智能生成，仅供参考，请注意甄别真实性。
+                  回复由 AI 生成，仅供参考。
                 </p>
                 <div className="mb-2.5 rounded-lg bg-amber-50 px-2.5 py-1 text-[11.5px] text-amber-600">
-                  🧪 演示沙盒：使用演示业务数据，可安全体验全部流程
+                  🧪 演示环境 · 数据为示例
                 </div>
-                <div className="mb-2.5 grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {QUICK_ENTRIES.map((q) => (
                     <button
                       key={q.title}
                       type="button"
-                      className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-left text-xs text-slate-700 hover:border-indigo-400"
+                      className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2.5 text-left text-xs text-slate-700 hover:border-indigo-400"
                       onClick={() => send(q.text)}
                     >
                       <b className="block">{q.icon} {q.title}</b>
-                      <span className="text-[11px] text-slate-500">{q.hint}</span>
                     </button>
                   ))}
                 </div>
-                <button
-                  type="button"
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-500"
-                  disabled
-                >
-                  👤 转接人工（请先发送一条消息）
-                </button>
               </div>
             )}
 
@@ -572,12 +556,26 @@ export default function CustomerServicePage() {
             {draft.pausedText && <span className="text-amber-600">{draft.pausedText}</span>}
           </div>
 
-          {/* 输入区 */}
+          {/* 输入区：转人工为图标入口（有会话且有消息时可用），布局对齐商城客服习惯 */}
           <div className="flex flex-none items-end gap-2 border-t border-slate-200 bg-white px-3.5 pb-3 pt-2">
+            <button
+              type="button"
+              aria-label="转人工"
+              title="转人工"
+              className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl border ${
+                draft.id !== 'new' && draft.messages.length > 0
+                  ? 'border-indigo-200 bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                  : 'border-slate-200 bg-slate-50 text-slate-400'
+              }`}
+              disabled={draft.id === 'new' || draft.messages.length === 0}
+              onClick={() => void requestHuman()}
+            >
+              <Headphones size={18} aria-hidden />
+            </button>
             <textarea
               className="min-h-11 max-h-32 flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-base text-slate-900 outline-none focus:border-indigo-500"
               rows={1}
-              placeholder="请描述您的问题…（Enter 发送）"
+              placeholder="请描述您的问题…"
               aria-label="咨询输入框"
               value={input}
               onChange={(e) => setInput(e.target.value)}

@@ -79,10 +79,12 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
   it('欢迎态：AI 徽章/免责语/演示标记/四个快捷入口/转人工禁用', async () => {
     const c = await mount()
     expect(c.textContent).toContain('AI 智能客服')
-    expect(c.textContent).toContain('由人工智能生成')
-    expect(c.textContent).toContain('演示沙盒')
+    expect(c.textContent).toContain('回复由 AI 生成，仅供参考。')
+    expect(c.textContent).toContain('演示环境 · 数据为示例')
     expect(c.querySelectorAll('button').length).toBeGreaterThanOrEqual(4)
-    const handoffNew = Array.from(c.querySelectorAll('button')).find((b) => b.textContent?.includes('转接人工'))
+    // 转人工入口已移至输入栏（aria-label 图标按钮），新会话态禁用
+    const handoffNew = c.querySelector('button[aria-label="转人工"]')
+    expect(handoffNew).not.toBeNull()
     expect(handoffNew?.disabled).toBe(true)
     expect(cs2Api.fetchCustomerContext).toHaveBeenCalled()
   })
@@ -106,7 +108,7 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
       select.value = 'conv-a'
       select.dispatchEvent(new Event('change', { bubbles: true }))
     })
-    const handoff = Array.from(c.querySelectorAll('button')).find((b) => b.textContent?.trim() === '转人工')
+    const handoff = c.querySelector('button[aria-label="转人工"]')
     expect(handoff?.disabled).toBe(false)
     await act(async () => {
       handoff?.click()
