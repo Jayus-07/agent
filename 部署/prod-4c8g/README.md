@@ -9,7 +9,7 @@
 | 服务 | 内存上限 MiB | CPU 上限 | 说明 |
 | --- | ---: | ---: | --- |
 | PostgreSQL | 1024 | 1.5 | max_connections=120、shared_buffers=256MB、work_mem=4MB |
-| Redis 缓存/控制面 | 384 | 0.4 | maxmemory=192mb，volatile-LRU 只淘汰带 TTL 的缓存，保护无 TTL Stream/位点；给 AOF/分配器留余量 |
+| Redis 缓存/控制面 | 384 | 0.4 | maxmemory=192mb，volatile-LRU 只淘汰带 TTL 的缓存键，保护无 TTL Stream/位点；给 AOF/分配器留余量 |
 | Redis broker/result | 192 | 0.2 | maxmemory=128mb，noeviction |
 | Auth Redis | 96 | 0.2 | maxmemory=48mb，noeviction |
 | APISIX | 288 | 0.5 | 实测常驻约 228MiB |
@@ -20,7 +20,7 @@
 | RAG 服务 | 512 | 1.0 | 与当前 remote 请求链路一致 |
 | MCP 服务 | 224 | 0.4 | 工具接入 |
 | 维护 worker | 384 | 0.3 | 并发 1，常驻实测约 280MiB |
-| 报表 worker | 512 | 0.5 | 并发 1；与 Agent worker 调整分配，整机总预算不变 |
+| 报表 worker | 512 | 0.5 | 1.0 | 与 Agent worker 调整分配，整机总预算不变 |
 | Beat | 128 | 0.2 | 单实例调度 |
 | 客服 dispatcher | 192 | 0.3 | 单副本；不保留单机多副本冗余 |
 | PostgreSQL 备份 | 96 | 0.2 | 每日基础备份；外部异地备份仍需配置 |
@@ -46,7 +46,7 @@ API/worker 的每进程数据库池为 min=1/max=2；请求全局闸门为 12。
 
 生产前端使用以下 DNS 名称；三个 A 记录都应解析到服务器公网 IP：
 
-- 主站：`anyanyan.me`
+- 主站：`anyanyan.me` / `www.anyanyan.me`
 - 管理端：`admin.anyanyan.me`
 - 客服端：`cs.anyanyan.me`
 
@@ -59,11 +59,17 @@ sudo install -m 0644 部署/prod-4c8g/nginx/agent-platform.conf /etc/nginx/sites
 sudo ln -sfn /etc/nginx/sites-available/agent-platform /etc/nginx/sites-enabled/agent-platform
 sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx --non-interactive --agree-tos --register-unsafely-without-email --redirect \
-  -d anyanyan.me -d admin.anyanyan.me -d cs.anyanyan.me
+  -d anyanyan.me -d www.anyanyan.me -d admin.anyanyan.me -d cs.anyanyan.me
 sudo certbot renew --dry-run
 ```
 
 无联系邮箱签发证书，因此不会收到到期邮件；Certbot timer 仍会自动续期。客服端与坐席端的 WebSocket 由前端回退页面同源（`wss://<当前访问域名>/ws/`），入口 Nginx 必须按 HTTPS 域名转发 `/ws/*` 到 APISIX。
+
+主站证书必须包含 `www.anyanyan.me`（certbot 按 `-d` 清单签发；`--nginx` 会为已有 server_name 补 443 块）。若已按旧清单签发过、需要补 www，先在 agent-platform 主站 vhost 的 `server_name` 加入 `www.anyanyan.me`，再用相同 `-d` 清单重跑 certbot 扩展证书（生成 `anyanyan.me-000N` 并自动改写证书引用）。
+
+### IP 直访入口（国内）
+
+域名 anyanyan.me 的国内链路存在 SNI 拦截（海外正常），国内统一改用 IP 直访：`https://<服务器公网IP>`（主站，443）、`https://<服务器公网IP>:3443`（客服端/坐席端）、`:3444`（管理端），证书为 Let's Encrypt IP 证书（acme.sh shortlived profile，有效期约 6 天，reloadcmd 自动 reload nginx）。模板见 `部署/prod-4c8g/nginx/ip-entry.conf`，安装到 `/etc/nginx/sites-available/ip-entry`；其中 `$connection_upgrade` map 依赖 `agent-platform.conf`，两文件需同时安装。UFW 与云安全组需放行 TCP 80、443、3443、3444。
 
 ## 生产启动
 
