@@ -17,11 +17,11 @@ export default function SiteNav() {
   const count = useCart((s) => s.items.reduce((n, i) => n + i.quantity, 0))
 
   return (
-    <header className="flex h-12 flex-none items-center gap-2.5 border-b border-slate-200 bg-white px-4">
-      <span className="grid h-6 w-6 place-items-center rounded-lg bg-indigo-600 text-xs text-white">演</span>
-      <b className="text-sm text-slate-900">演示商城</b>
-      <span className="rounded-full border border-slate-200 px-2 py-px text-[11px] text-slate-500">🧪 演示数据</span>
-      <nav className="ml-3 flex gap-1" aria-label="站点导航">
+    <header className="flex h-12 flex-none min-w-0 items-center gap-2.5 border-b border-slate-200 bg-white px-4">
+      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-indigo-600 text-xs text-white">演</span>
+      <b className="shrink-0 text-sm text-slate-900">演示商城</b>
+      <span className="hidden rounded-full border border-slate-200 px-2 py-px text-[11px] text-slate-500 sm:inline-flex">🧪 演示数据</span>
+      <nav className="ml-3 flex min-w-0 gap-1 overflow-x-auto" aria-label="站点导航">
         {NAV_ITEMS.map((item) => {
           const active = pathname === item.href
           return (
@@ -29,7 +29,7 @@ export default function SiteNav() {
               key={item.href}
               href={item.href}
               aria-current={active ? 'page' : undefined}
-              className={`rounded-lg px-2.5 py-1.5 text-xs ${
+              className={`shrink-0 rounded-lg px-2.5 py-1.5 text-xs ${
                 active ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:bg-slate-50'
               }`}
             >
@@ -43,7 +43,7 @@ export default function SiteNav() {
           )
         })}
       </nav>
-      <div className="ml-auto flex items-center gap-2.5">
+      <div className="ml-auto flex shrink-0 items-center gap-2.5">
         <Link
           href="/my-orders?cart=1"
           className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
