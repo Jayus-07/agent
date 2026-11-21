@@ -4,7 +4,7 @@
 // 目标态对照 docs/tasks/cs-workstation-v2/prototypes/user-portal.html 的客服视图；
 // 聊天链路复用既有 SSE 契约（/api/chat/customer-service/stream，含断线续播与中止）。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Headphones, Send, ShoppingBag, Square } from 'lucide-react'
+import { Headphones, Package, Send, Square } from 'lucide-react'
 import Link from 'next/link'
 import { abortChat, streamChat } from '@/api/chat'
 import { nanoid } from 'nanoid'
@@ -30,6 +30,9 @@ import {
 import { newConversationDraft, type Cs2ConversationDraft, type Cs2Message } from './types'
 import ConfirmCard from './ConfirmCard'
 import FoldCards from './FoldCards'
+import OrderPickerSheet from './OrderPickerSheet'
+import { money, type MallOrder } from '@/mall/api'
+import SiteNav from '@/mall/SiteNav'
 
 // 快捷入口话术不携带具体订单号：订单号由懒种子按用户生成（MO- 前缀、
 // 无法预知），通用话术会触发后端候选点选/订单列表，任何账号都能走通
@@ -76,6 +79,9 @@ export default function CustomerServicePage() {
   } | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const [foldKey, setFoldKey] = useState(0)
+  // M1：订单选择抽屉（淘宝式「发订单给客服」）
+  const [orderSheetOpen, setOrderSheetOpen] = useState(false)
+  const [preselectOrderNo, setPreselectOrderNo] = useState<string | null>(null)
 
   const handoffStateRef = useRef(handoffState)
   handoffStateRef.current = handoffState
@@ -108,6 +114,13 @@ export default function CustomerServicePage() {
     if (prefill) {
       window.sessionStorage.removeItem('cs2-prefill')
       setInput(prefill)
+    }
+    // 商城「我的订单」深链：带订单号直达订单抽屉（仅预选高亮，需用户点发送确认）
+    const orderRef = window.sessionStorage.getItem('cs2-order-ref')
+    if (orderRef) {
+      window.sessionStorage.removeItem('cs2-order-ref')
+      setPreselectOrderNo(orderRef)
+      setOrderSheetOpen(true)
     }
     fetchMyConversations(10)
       .then((items) => {
@@ -358,6 +371,25 @@ export default function CustomerServicePage() {
     }
   }, [draft.id, handoffState, patchDraft])
 
+  // M1：发订单给客服——结构化文本协议（AI 与坐席均可见可解析），
+  // 经既有 send() 通道（AI 态走 SSE，人工态直达坐席）；M2 换 content_type='card'
+  const sendOrderRef = useCallback(
+    (order: MallOrder) => {
+      setOrderSheetOpen(false)
+      send(
+        `【订单咨询】订单号 ${order.order_no}｜${order.product_summary}｜${money(order.total_amount)}｜${ORDER_STATUS_ZH[order.status] ?? order.status}`,
+      )
+    },
+    [send],
+  )
+  const sendSheetText = useCallback(
+    (text: string) => {
+      setOrderSheetOpen(false)
+      send(text)
+    },
+    [send],
+  )
+
   const rate = useCallback(
     async (star: number, note: string) => {
       const id = draftRef.current.id
@@ -397,36 +429,12 @@ export default function CustomerServicePage() {
     <div className="flex h-screen flex-col bg-slate-100">
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* 会话头：返回 + 居中标题 + 头像（个人中心抽屉）/商城入口 */}
-          <header className="flex h-12 flex-none items-center gap-2 border-b border-slate-200 bg-white px-3">
-            <Link
-              href="/"
-              aria-label="返回门户"
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-700 hover:bg-slate-100"
-            >
-              <ArrowLeft size={18} />
-            </Link>
-            <div className="min-w-0 flex-1 text-center">
-              <b className="block truncate text-sm text-slate-900">智能客服</b>
-            </div>
-            <button
-              type="button"
-              aria-label="打开个人中心"
-              title="打开个人中心"
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-indigo-600 text-xs text-white hover:opacity-90"
-              onClick={() => setDrawerOpen(true)}
-            >
-              {customerCtx ? customerCtx.customer.display_name.slice(0, 1) : '演'}
-            </button>
-            <Link
-              href="/mall"
-              aria-label="逛商城"
-              title="逛商城"
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-700 hover:bg-slate-100"
-            >
-              <ShoppingBag size={17} />
-            </Link>
-          </header>
+          {/* 会话头：统一三入口 SiteNav（智能客服/商城/我的订单），头像接个人中心抽屉；
+              顶部导航即返回/去商城的通道，聊天区保持沉浸 */}
+          <SiteNav
+            avatarOnClick={() => setDrawerOpen(true)}
+            avatarChar={customerCtx ? customerCtx.customer.display_name.slice(0, 1) : '演'}
+          />
 
           {/* 消息流 */}
           <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-auto px-4 py-3.5">
@@ -596,6 +604,14 @@ export default function CustomerServicePage() {
             className="flex flex-none items-center gap-2 overflow-x-auto px-3.5 pb-1.5 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             aria-label="快捷入口"
           >
+            <button
+              type="button"
+              className="relative shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-100"
+              onClick={() => setOrderSheetOpen(true)}
+            >
+              📦 发订单给客服
+              <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-rose-500" aria-hidden />
+            </button>
             {QUICK_ENTRIES.map((q) => (
               <button
                 key={q.title}
@@ -616,6 +632,15 @@ export default function CustomerServicePage() {
 
           {/* 输入区：转人工为图标入口（有会话且有消息时可用），布局对齐商城客服习惯 */}
           <div className="flex flex-none items-end gap-2 border-t border-slate-200 bg-white px-3.5 pb-3 pt-2">
+            <button
+              type="button"
+              aria-label="发订单给客服"
+              title="发订单给客服"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-indigo-200 bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+              onClick={() => setOrderSheetOpen(true)}
+            >
+              <Package size={18} aria-hidden />
+            </button>
             <button
               type="button"
               aria-label="转人工"
@@ -758,6 +783,15 @@ export default function CustomerServicePage() {
           </div>
         </aside>
       </div>
+      <OrderPickerSheet
+        open={orderSheetOpen}
+        onClose={() => setOrderSheetOpen(false)}
+        onSendOrder={sendOrderRef}
+        onSendText={sendSheetText}
+        faqEntries={QUICK_ENTRIES}
+        preselectOrderNo={preselectOrderNo}
+      />
+
       {drawerOpen && (
         <>
           {/* 抽屉：个人中心 + 历史会话/新咨询（替代顶栏的切换会话下拉） */}

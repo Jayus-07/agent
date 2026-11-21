@@ -45,8 +45,18 @@ const cs2Api = vi.hoisted(() => ({
   listMyTickets: vi.fn(async () => []),
 }))
 
+const mallApi = vi.hoisted(() => ({
+  listMyOrders: vi.fn(async () => [
+    { order_no: 'MO-AAA111', total_amount: 299, status: 'shipped', payment_status: 'paid', created_at: '2026-11-20T09:06:00Z', product_summary: '蓝牙降噪耳机 Pro' },
+    { order_no: 'MO-BBB222', total_amount: 1299, status: 'paid', payment_status: 'paid', created_at: '2026-11-14T08:00:00Z', product_summary: '机械键盘 87 键' },
+  ]),
+  ORDER_STATUS_ZH: { pending: '待付款', paid: '待发货', shipped: '已发货' },
+  money: (v: string | number | null | undefined) => `¥${Number(v ?? 0).toFixed(2)}`,
+  topUp: vi.fn(async () => ({ balance: 1000, currency: 'CNY', ledger: [] })),
+}))
 vi.mock('@/api/chat', () => chatApi)
 vi.mock('./cs2Api', () => cs2Api)
+vi.mock('@/mall/api', () => mallApi)
 
 import CustomerServicePage from './CustomerServicePage'
 
@@ -62,6 +72,7 @@ afterEach(() => {
   mounted.container.remove()
   mounted = null
   vi.clearAllMocks()
+  window.sessionStorage.clear()
 })
 
 async function mount() {
@@ -191,5 +202,82 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     expect(cs2Api.fetchPendingSnapshot).toHaveBeenCalledWith('conv-a')
     expect(c.textContent).toContain('待确认信息尚未补全')
     expect(Array.from(c.querySelectorAll('button')).some((b) => b.textContent?.includes('确认退款'))).toBe(false)
+  })
+
+  it('「发订单给客服」chip 打开订单抽屉，点发送带结构化文本走既有通道', async () => {
+    const c = await mount()
+    const chip = Array.from(c.querySelectorAll('[aria-label="快捷入口"] button')).find(
+      (b) => b.textContent?.includes('发订单给客服'),
+    )
+    expect(chip).not.toBeNull()
+    await act(async () => {
+      chip?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    const sheet = c.querySelector('[aria-label="订单选择"]')
+    expect(sheet).not.toBeNull()
+    expect(mallApi.listMyOrders).toHaveBeenCalledWith(20)
+    expect(sheet?.textContent).toContain('MO-AAA111')
+    expect(sheet?.textContent).toContain('已发货')
+    const sendBtn = Array.from(sheet?.querySelectorAll('button') ?? []).find(
+      (b) => b.textContent === '发送',
+    )
+    expect(sendBtn).not.toBeNull()
+    await act(async () => {
+      sendBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    expect(c.textContent).toContain('【订单咨询】订单号 MO-AAA111')
+    expect(c.querySelector('[aria-label="订单选择"]')).toBeNull()
+  })
+
+  it('订单抽屉搜索本地过滤 + 常见问题 Tab + 兜底关闭', async () => {
+    const c = await mount()
+    const chip = Array.from(c.querySelectorAll('[aria-label="快捷入口"] button')).find(
+      (b) => b.textContent?.includes('发订单给客服'),
+    )
+    await act(async () => {
+      chip?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    const sheet = c.querySelector('[aria-label="订单选择"]') as HTMLElement
+    const input = sheet.querySelector('input[type="search"]') as HTMLInputElement
+    expect(input).not.toBeNull()
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      'value',
+    )?.set
+    await act(async () => {
+      setter?.call(input, '耳机')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(sheet.textContent).toContain('MO-AAA111')
+    expect(sheet.textContent).not.toContain('MO-BBB222')
+    const faqTab = Array.from(sheet.querySelectorAll('[role="tab"]')).find(
+      (b) => b.textContent?.includes('常见问题'),
+    )
+    await act(async () => {
+      faqTab?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(sheet.textContent).toContain('物流追踪')
+    const closeBtn = Array.from(sheet.querySelectorAll('button')).find(
+      (b) => b.textContent?.includes('没有我想问的问题'),
+    )
+    await act(async () => {
+      closeBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(c.querySelector('[aria-label="订单选择"]')).toBeNull()
+  })
+
+  it('商城深链 cs2-order-ref：自动开抽屉并预选订单但不自动发送', async () => {
+    window.sessionStorage.setItem('cs2-order-ref', 'MO-BBB222')
+    const c = await mount()
+    await act(async () => {})
+    const sheet = c.querySelector('[aria-label="订单选择"]')
+    expect(sheet).not.toBeNull()
+    const row = sheet?.querySelector('[data-order-no="MO-BBB222"]')
+    expect(row?.getAttribute('aria-selected')).toBe('true')
+    // 预选只高亮：不自动发送
+    expect(chatApi.streamChat).not.toHaveBeenCalled()
   })
 })
