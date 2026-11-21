@@ -125,6 +125,17 @@ export default function ConfirmCard({
     }
   }
 
+  // need_info（缺订单号等槽位）：不渲染完整确认卡——避免"没有订单也弹退款卡"的
+  // 空壳体验（2026-11-21）；只保留一行轻提示（含倒计时），补全信息重新发起后才出完整卡。
+  if (snapshot.confirmable === false) {
+    return (
+      <div className="mx-auto w-full max-w-md rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-slate-500">
+        待确认信息尚未补全，按客服指引回复后可提交{label}（
+        {secondsLeft != null ? `有效期 ${fmt(secondsLeft)}` : '暂无有效期'}）；本卡暂不可确认。
+      </div>
+    )
+  }
+
   return (
     <div className="mx-auto w-full max-w-md rounded-xl border border-slate-200 bg-white p-3 text-xs">
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
@@ -169,13 +180,6 @@ export default function ConfirmCard({
               返回确认
             </button>
           </div>
-        </div>
-      ) : confirmable === false ? (
-        // need_info 提案（缺订单号等槽位）：后端权威判定不可确认，
-        // 只提示补充信息，不渲染可执行按钮（2026-11-03 修复空目标卡）。
-        <div className="mt-2.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-slate-500">
-          待确认信息尚未补全，请按客服指引回复（如订单号）后重新发起；
-          本卡暂不可确认。
         </div>
       ) : (
         <div className="mt-2.5 flex flex-wrap gap-2">

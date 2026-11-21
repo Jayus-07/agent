@@ -4,7 +4,7 @@
 // 目标态对照 docs/tasks/cs-workstation-v2/prototypes/user-portal.html 的客服视图；
 // 聊天链路复用既有 SSE 契约（/api/chat/customer-service/stream，含断线续播与中止）。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Headphones, Send, ShoppingBag } from 'lucide-react'
+import { ArrowLeft, Headphones, Send, ShoppingBag, Square } from 'lucide-react'
 import Link from 'next/link'
 import { abortChat, streamChat } from '@/api/chat'
 import { nanoid } from 'nanoid'
@@ -370,9 +370,12 @@ export default function CustomerServicePage() {
 
   const showWelcome = draft.messages.length === 0 && !busy
   const lastMsg = draft.messages[draft.messages.length - 1]
+  // 满意度评价只在有人工介入的会话结束后出现（纯 AI 自动回复轮次不弹，
+  // 对齐商城客服惯例：AI 对话轮次不打扰用户）；评分或跳过后本会话不再弹。
   const showCsat =
     draft.id !== 'new' && !draft.rated && !busy && !draft.candidateOptions &&
-    !!lastMsg && lastMsg.role === 'assistant' && !lastMsg.streaming
+    !!lastMsg && lastMsg.role === 'assistant' && !lastMsg.streaming &&
+    draft.messages.some((m) => m.role === 'agent')
 
   const convOptions = useMemo(
     () =>
