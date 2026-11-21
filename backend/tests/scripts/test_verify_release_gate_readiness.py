@@ -284,3 +284,104 @@ def test_request_separates_platform_and_prometheus_authentication(monkeypatch):
 
     assert (status, body) == (200, "ok")
     assert captured[1][0].get_header("X-api-key") == "platform-secret"
+
+
+def test_domain_gate_cs_entry_uses_customer_service_stream(monkeypatch):
+    """Gate7 语义（2026-11-21）：客服域经专属入口验证。
+
+    产品身份由注册路径决定：/chat/stream → public（域节点不可达），
+    /chat/customer-service/stream → customer_service（域锁入口）。
+    """
+    captured = {}
+
+    def fake_chat(token, session, question, **kwargs):
+        captured["kwargs"] = kwargs
+        return 200, "回答内容足够长可以过关", ["router", "cs_graph_node"], "", True
+
+    monkeypatch.setattr(gate, "chat", fake_chat)
+    gate.DETAIL.clear()
+
+    assert gate.g_domain(
+        "token", "g7", "帮我查一下订单物流", "cs_graph_node",
+        cs_entry=True,
+    ) is True
+    assert captured["kwargs"]["cs_entry"] is True
+    assert "entry=cs" in gate.DETAIL["g7"]
+
+
+def test_chat_cs_entry_targets_customer_service_stream(monkeypatch):
+    """cs_entry=True 时 URL 必须指向客服专属路径（产品身份靠路径判定）。"""
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured["url"] = url
+        return 503, ""
+
+    monkeypatch.setattr(gate, "_request", fake_request)
+
+    gate.chat("token", "s", "q", cs_entry=True)
+
+    assert captured["url"].endswith("/chat/customer-service/stream")
+
+
+def test_chat_default_entry_targets_public_stream(monkeypatch):
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured["url"] = url
+        return 503, ""
+
+    monkeypatch.setattr(gate, "_request", fake_request)
+
+    gate.chat("token", "s", "q")
+
+    assert captured["url"].endswith("/chat/stream")
+    assert "customer-service" not in captured["url"]
+
+
+def test_g8_travel_direct_requires_done_with_ok_status(monkeypatch):
+    """Gate8 语义（2026-11-21）：旅游域经专属直达流验证。
+
+    产品路由按路径判定（/chat/stream → public，域节点不可达）；Gate8
+    改走 /api/travel/plan/stream，断言 done 终帧且 status 非 failed。
+    """
+    body = (
+        'event: ping\ndata: {"event":"ping"}\n\n'
+        'event: done\ndata: {"event":"done","status":"success",'
+        '"result":{"result_kind":"plan"}}\n\n'
+    )
+    monkeypatch.setattr(gate, "_request", lambda *_args, **_kwargs: (200, body))
+    gate.DETAIL.clear()
+
+    assert gate.g8_travel_direct("token") is True
+    assert "status=success" in gate.DETAIL["g8"]
+
+
+def test_g8_travel_direct_fails_on_error_frame(monkeypatch):
+    body = (
+        'event: done\ndata: {"event":"done","status":"failed"}\n\n'
+        'event: error\ndata: {"event":"error","error_type":"plan_failed"}\n\n'
+    )
+    monkeypatch.setattr(gate, "_request", lambda *_args, **_kwargs: (200, body))
+    gate.DETAIL.clear()
+
+    assert gate.g8_travel_direct("token") is False
+    assert "error=plan_failed" in gate.DETAIL["g8"]
+
+
+def test_g8_travel_direct_fails_without_done(monkeypatch):
+    body = 'event: ping\ndata: {"event":"ping"}\n\n'
+    monkeypatch.setattr(gate, "_request", lambda *_args, **_kwargs: (200, body))
+    gate.DETAIL.clear()
+
+    assert gate.g8_travel_direct("token") is False
+
+
+def test_g8_travel_direct_fails_on_non_200(monkeypatch):
+    monkeypatch.setattr(
+        gate, "_request", lambda *_args, **_kwargs: (503, ""),
+    )
+    gate.DETAIL.clear()
+
+    assert gate.g8_travel_direct("token") is False
+    assert "http=503" in gate.DETAIL["g8"]
