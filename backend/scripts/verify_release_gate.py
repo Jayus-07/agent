@@ -512,11 +512,23 @@ def main() -> int:
         ("Gate7_CS", lambda: g_domain(editor, "g7",
                                       "帮我查一下这个订单的物流进度，到底什么时候到",
                                       "cs_graph_node", cs_entry=True)),
-        ("Gate8_Travel", g8_travel_direct),
+        ("Gate8_Travel", lambda: g8_travel_direct(editor)),
         ("Gate10_TaskRuntime", g10_task),
         ("Gate11_Model", lambda: g11_model(editor)),
         ("Gate12_Observability", g12_observability),
     ]
+    # 配置自检（fail-fast）：checks 项必须零参可调用——#496 部署实测
+    # 「g8_travel_direct 漏包 lambda → 门禁 ERROR → 部署失败」的教训，
+    # 配置错误应在任何真实门禁调用之前崩出，而不是跑一半留 ERROR 详情。
+    import inspect as _inspect
+
+    for _name, _fn in checks:
+        try:
+            _inspect.signature(_fn).bind()
+        except TypeError as _exc:
+            raise SystemExit(
+                f"checks 配置错误：{_name} 不是零参可调用（漏包 lambda？）: {_exc}"
+            )
     for name, fn in checks:
         try:
             RESULTS[name] = fn()
