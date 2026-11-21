@@ -46,7 +46,7 @@ API/worker 的每进程数据库池为 min=1/max=2；请求全局闸门为 12。
 
 生产前端使用以下 DNS 名称；三个 A 记录都应解析到服务器公网 IP：
 
-- 主站：`anyanyan.me`
+- 主站：`anyanyan.me` / `www.anyanyan.me`
 - 管理端：`admin.anyanyan.me`
 - 客服端：`cs.anyanyan.me`
 
@@ -59,11 +59,26 @@ sudo install -m 0644 部署/prod-4c8g/nginx/agent-platform.conf /etc/nginx/sites
 sudo ln -sfn /etc/nginx/sites-available/agent-platform /etc/nginx/sites-enabled/agent-platform
 sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx --non-interactive --agree-tos --register-unsafely-without-email --redirect \
-  -d anyanyan.me -d admin.anyanyan.me -d cs.anyanyan.me
+  -d anyanyan.me -d www.anyanyan.me -d admin.anyanyan.me -d cs.anyanyan.me
 sudo certbot renew --dry-run
 ```
 
 无联系邮箱签发证书，因此不会收到到期邮件；Certbot timer 仍会自动续期。客服端与坐席端的 WebSocket 由前端回退页面同源（`wss://<当前访问域名>/ws/`），入口 Nginx 必须按 HTTPS 域名转发 `/ws/*` 到 APISIX。
+
+主站证书必须包含 `www.anyanyan.me`（certbot 按 `-d` 清单签发；`--nginx` 会为已有 server_name 补 443 块）。若已按旧清单签发过、需要补 www，先在 agent-platform 主站 vhost 的 `server_name` 加入 `www.anyanyan.me`，再用相同 `-d` 清单重跑 certbot 扩展证书（生成 `anyanyan.me-000N` 并自动改写证书引用）。
+
+### IP 直访入口（国内）
+
+域名 anyanyan.me 的国内链路存在 SNI 拦截（海外正常），国内统一改用 IP 直访：`https://<服务器公网IP>`（主站，443）、`https://<服务器公网IP>:3443`（客服端/坐席端）、`:3444`（管理端），证书为 Let's Encrypt IP 证书（acme.sh shortlived profile，有效期约 6 天，reloadcmd 自动 reload nginx）。模板见 `部署/prod-4c8g/nginx/ip-entry.conf`，安装到 `/etc/nginx/sites-available/ip-entry`；其中 `$connection_upgrade` map 依赖 `agent-platform.conf`，两文件需同时安装。UFW 与云安全组需放行 TCP 80、443、3443、3444。
+
+**ip-entry 的 SSL listen 必须显式 `default_server`（2026-11-21 事故）**：浏览器按 RFC 6066 对 IP 直访不发 SNI，无 SNI 请求由该端口第一个 server 块兜底。sites-enabled 按字母序加载，`agent-platform` 排在 `ip-entry` 之前——上面的 certbot 流程会给 agent-platform.conf 补 443 块，一旦发生，隐式默认被它抢走，IP 直访拿到域名证书（SAN 不含 IP）：浏览器出现证书告警，点「继续访问」后页面能打开，但 fetch/XHR 全部失败，移动端企业助手表现为「历史加载失败：Network request failed」、个人额度永远停在「正在读取额度…」。修复：ip-entry 三个 SSL listen 写成 `listen 443 ssl default_server;` 等（80 端口不带——系统 default 站点已是 80 default_server，重复声明会 nginx -t 失败；ACME http-01 靠 Host 头匹配，不受影响）。
+
+变更后验证（`openssl s_client` 不带 `-servername` 即模拟 IP 直访的无 SNI 请求，应返回 IP 证书而非 `CN=anyanyan.me`）：
+
+```bash
+echo | openssl s_client -connect <服务器公网IP>:443 2>/dev/null | openssl x509 -noout -subject -dates
+echo | openssl s_client -connect <服务器公网IP>:443 -servername anyanyan.me 2>/dev/null | openssl x509 -noout -subject -dates
+```
 
 ## 生产启动
 

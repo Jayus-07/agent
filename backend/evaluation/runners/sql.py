@@ -300,36 +300,42 @@ def _gold_sql_failure_result(
 
 
 def _run_live(cases: list[TestCase]) -> list[EvalResult]:
+    from backend.infra.llm.budget import scoped_request_budget
     from backend.sql.sql_agent import get_sql_agent
 
     agent = get_sql_agent()
     results: list[EvalResult] = []
     for case in cases:
-        t0 = time.time()
-        exp = case.expected
-        try:
-            result = agent.ask_struct(case.question)
-        except Exception as e:
-            results.append(EvalResult(
-                case_id=case.id, module="sql", status="error",
-                expected=exp, actual={},
-                error_msg=str(e), duration_ms=int((time.time() - t0) * 1000),
-            ))
-            continue
+        # 逐用例隔离请求预算：评测调用不绑定 request_id 时，全部用例共享
+        # 空串预算状态，累计超限后集体秒拒（2026-11-21 sql_v7 在线评测
+        # 实测 22 条同报一个累计值）。生产入口每请求有独立 request_id，
+        # 此处对齐同一语义；上限仍沿用全局配置，不在此放宽。
+        with scoped_request_budget(f"eval-sql-{case.id}"):
+            t0 = time.time()
+            exp = case.expected
+            try:
+                result = agent.ask_struct(case.question)
+            except Exception as e:
+                results.append(EvalResult(
+                    case_id=case.id, module="sql", status="error",
+                    expected=exp, actual={},
+                    error_msg=str(e), duration_ms=int((time.time() - t0) * 1000),
+                ))
+                continue
 
-        try:
-            if exp.get("should_reject"):
-                er = _eval_reject_case(case, result, exp)
-            else:
-                er = _eval_positive_case(case, result, exp)
-        except Exception as e:
-            er = EvalResult(
-                case_id=case.id, module="sql", status="error",
-                expected=exp, actual={"status": result.status},
-                error_msg=f"评测逻辑异常: {e}",
-            )
-        er.duration_ms = int((time.time() - t0) * 1000)
-        results.append(er)
+            try:
+                if exp.get("should_reject"):
+                    er = _eval_reject_case(case, result, exp)
+                else:
+                    er = _eval_positive_case(case, result, exp)
+            except Exception as e:
+                er = EvalResult(
+                    case_id=case.id, module="sql", status="error",
+                    expected=exp, actual={"status": result.status},
+                    error_msg=f"评测逻辑异常: {e}",
+                )
+            er.duration_ms = int((time.time() - t0) * 1000)
+            results.append(er)
     return results
 
 
