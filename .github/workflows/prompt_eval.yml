@@ -155,6 +155,19 @@ jobs:
           from backend.evaluation.service import EvaluationService
           from backend.evaluation.storage import persist_report
           from backend.infra.llm.registry_store import refresh_registry
+          from backend.prompts.registry import PROMPT_REGISTRY
+
+          # 2026-11-22：按 prompt category 路由评测模块。此前硬编码 module="rag"，
+          # SQL prompt 的发布门禁跑的是 RAG 题集——门禁能走通但评的不对题。
+          # SQL 无 pr_smoke suite（canonical 权威集已含分层与边界题），不传 selection。
+          spec = PROMPT_REGISTRY.get(os.environ["PROMPT_KEY"])
+          category = getattr(spec, "category", "") if spec else ""
+          if category == "sql":
+              module = "sql"
+              selection = None
+          else:
+              module = "rag"
+              selection = os.environ["PROMPT_EVAL_SUITE"]
 
           version = int(os.environ["PROMPT_VERSION"])
           dataset_version_raw = os.environ.get("DATASET_VERSION") or ""
@@ -172,11 +185,11 @@ jobs:
               if isinstance(dataset_provenance, dict) else None
           )
           config = EvalConfig(
-              module="rag",
+              module=module,
               live=mode.live,
               ragas=mode.ragas,
               no_ragas=mode.no_ragas,
-              selection=os.environ["PROMPT_EVAL_SUITE"],
+              selection=selection,
               dataset_version=dataset_version,
               run_id=os.environ["RUN_ID"],
               prompt_versions={os.environ["PROMPT_KEY"]: version},
@@ -190,9 +203,22 @@ jobs:
               run_dir = persist_report(report, run_id=os.environ["RUN_ID"])
               write_markdown_report(report, run_dir)
               print(f"evaluation report: {run_dir}")
-              gate_ok = bool(report.summaries) and all(
-                  tier.passed_threshold for tier in report.tier_summaries
-              )
+              if module == "sql":
+                  # SQL 门禁与 backend/evaluation/prompt_release_runner.py
+                  # _assemble_sql_gate 同口径：tier 绝对阈值（RAG 校准）不适用，
+                  # 改防全挂下限（smoke 层或全局通过率 >= 0.20）+ 有摘要即放行；
+                  # 候选 vs 现网对比门在后端审批侧裁决（CI 测试库无现网基线）。
+                  tier_summaries = report.tier_summaries or []
+                  smoke = next((t for t in tier_summaries if t.tier == "smoke"), None)
+                  floor_rate = (
+                      smoke.pass_rate if smoke is not None
+                      else (report.summaries[0].pass_rate if report.summaries else 0.0)
+                  )
+                  gate_ok = bool(report.summaries) and floor_rate >= 0.20
+              else:
+                  gate_ok = bool(report.summaries) and all(
+                      tier.passed_threshold for tier in report.tier_summaries
+                  )
               sys.exit(0 if gate_ok else 1)
           except Exception as exc:
               print(f"evaluation failed: {type(exc).__name__}: {exc}", file=sys.stderr)
@@ -207,6 +233,12 @@ jobs:
           import os
           from pathlib import Path
 
+          from backend.prompts.registry import PROMPT_REGISTRY
+
+          # 与 Run selected evaluation 同口径：按 category 路由 summary 过滤
+          spec = PROMPT_REGISTRY.get(os.environ["PROMPT_KEY"])
+          module = "sql" if getattr(spec, "category", "") == "sql" else "rag"
+
           run_id = os.environ["EXTERNAL_RUN_ID"]
           report_path = Path("data/eval_runs") / run_id / "report.json"
           status = "failed"
@@ -216,17 +248,30 @@ jobs:
           if report_path.exists():
               report = json.loads(report_path.read_text(encoding="utf-8"))
               summary = next(
-                  (item for item in report.get("summaries", []) if item.get("module") == "rag"),
+                  (item for item in report.get("summaries", []) if item.get("module") == module),
                   None,
               )
               metrics = (summary or {}).get("metrics") or {}
               provenance = (report.get("metadata") or {}).get("eval_provenance") or {}
-              gate_ok = bool(summary) and all(
-                  item.get("passed_threshold", False)
-                  for item in report.get("tier_summaries", [])
-              )
-              status = "passed" if gate_ok else "failed"
-              failure_reason = "" if gate_ok else "评测层级未达到阈值"
+              if module == "sql":
+                  # SQL 门禁同 runner _assemble_sql_gate 口径：tier display_only，
+                  # 防全挂下限兜底（对比门在后端审批侧裁决）
+                  tier_summaries = report.get("tier_summaries", [])
+                  smoke = next((t for t in tier_summaries if t.get("tier") == "smoke"), None)
+                  floor_rate = (
+                      smoke.get("pass_rate") if smoke is not None
+                      else (summary or {}).get("pass_rate", 0.0)
+                  )
+                  gate_ok = bool(summary) and (floor_rate or 0.0) >= 0.20
+                  status = "passed" if gate_ok else "failed"
+                  failure_reason = "" if gate_ok else "SQL 防全挂下限未通过（smoke 层或全局通过率 < 0.20）"
+              else:
+                  gate_ok = bool(summary) and all(
+                      item.get("passed_threshold", False)
+                      for item in report.get("tier_summaries", [])
+                  )
+                  status = "passed" if gate_ok else "failed"
+                  failure_reason = "" if gate_ok else "评测层级未达到阈值"
           result = {
               "release_id": os.environ["RELEASE_ID"],
               "prompt_key": os.environ["PROMPT_KEY"],
