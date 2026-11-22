@@ -64,6 +64,13 @@ RAG_INDEX_REQUEST_MAX_TOKENS = int(
 )
 if RAG_INDEX_REQUEST_MAX_TOKENS <= 0:
     raise ValueError("RAG_INDEX_REQUEST_MAX_TOKENS 必须为正整数")
+# #480：只校验正值时，手滑多打一个 0（如 1280000）会让索引任务的 Token
+# 预算形同虚设。上限取当前云端模型上下文量级的硬保护，超出直接失败而非
+# 静默钳制——配置错误应在启动时暴露。
+if RAG_INDEX_REQUEST_MAX_TOKENS > 1_000_000:
+    raise ValueError(
+        "RAG_INDEX_REQUEST_MAX_TOKENS 超出合理上限 1000000，请核对配置"
+    )
 # 临时文件目录 (atomic rename 前存这里, Docker 容器内安全)
 # 用 RAG_DATA_DIR 派生绝对路径，消除相对路径的 CWD 依赖
 from backend.config.database import RAG_DATA_DIR
