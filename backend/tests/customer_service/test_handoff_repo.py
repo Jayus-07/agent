@@ -191,6 +191,81 @@ class TestHandoffRepositoryAgentSide:
         result = await repo.list_open()
         assert result == []
 
+    @pytest.mark.asyncio
+    async def test_list_open_assigned_agent_predicate(self):
+        """mine 队列（2026-11-22 刷新丢失修复）：追加坐席归属谓词。
+
+        「我的会话」服务端数据源——assigned_agent_id 谓词与租户谓词必须
+        共存（IDOR 边界不放宽）；缺省调用不带归属谓词，可认领队列语义
+        不变（W2-1）。
+        """
+        from sqlalchemy.sql import visitors
+        from sqlalchemy.sql.elements import BindParameter, ColumnClause
+
+        repo, session = _make_repo()
+        scalars = MagicMock()
+        scalars.all.return_value = []
+        result_mock = MagicMock()
+        result_mock.scalars.return_value = scalars
+
+        captured = {}
+
+        async def _capture(stmt):
+            captured["stmt"] = stmt
+            return result_mock
+
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await repo.list_open(
+            tenant_id="tenant-b",
+            states=["human_active"],
+            assigned_agent_id="agt-42",
+        )
+        where = captured["stmt"].whereclause
+        cols, values = set(), set()
+        for node in visitors.iterate(where):
+            if isinstance(node, ColumnClause):
+                cols.add(node.name)
+            elif isinstance(node, BindParameter):
+                # IN 子句的绑定值可能是整体列表，展开为标量集合
+                value = node.value
+                if isinstance(value, (list, tuple)):
+                    values.update(value)
+                else:
+                    values.add(value)
+
+        assert {"tenant_id", "handoff_state", "assigned_agent_id"} <= cols
+        assert {"tenant-b", "human_active", "agt-42"} <= values
+
+    @pytest.mark.asyncio
+    async def test_list_open_default_has_no_assignee_predicate(self):
+        """缺省（可认领队列）不出现 assigned_agent_id 谓词。"""
+        from sqlalchemy.sql import visitors
+        from sqlalchemy.sql.elements import BindParameter, ColumnClause
+
+        repo, session = _make_repo()
+        scalars = MagicMock()
+        scalars.all.return_value = []
+        result_mock = MagicMock()
+        result_mock.scalars.return_value = scalars
+
+        captured = {}
+
+        async def _capture(stmt):
+            captured["stmt"] = stmt
+            return result_mock
+
+        session.execute = AsyncMock(side_effect=_capture)
+
+        await repo.list_open(tenant_id="tenant-b")
+        where = captured["stmt"].whereclause
+        cols = {
+            node.name
+            for node in visitors.iterate(where)
+            if isinstance(node, ColumnClause)
+        }
+        assert "assigned_agent_id" not in cols
+
 
 class TestHandoffClaimTransitionRules:
     """认领的状态机约束：仅 waiting_human → human_active 合法。"""

@@ -1663,15 +1663,48 @@ async def get_handoff_queue(
         description="逗号分隔 handoff 状态过滤，缺省=可认领"
                     "（waiting_human/agent_offered）",
     ),
+    mine: bool = Query(
+        False,
+        description="只看本人处理中（human_active）会话；与 states 互斥，"
+                    "坐席身份由服务端按 cs_agents.auth_user_id 反查",
+    ),
 ):
-    """坐席工作台待接入队列（WS 降级轮询源 / 初始全量拉取）。"""
+    """坐席工作台待接入队列（WS 降级轮询源 / 初始全量拉取）。
+
+    ``mine=true``（2026-11-22 刷新丢失修复）：工作台「我的会话」tab 的
+    服务端数据源——只返回分配给当前坐席的 human_active 会话，使乐观
+    更新（认领/接单）与刷新后重拉收敛到同一来源。
+    """
     tenant_scope = _require_operator_and_tenant(request)
-    state_list = (
-        [s.strip() for s in states.split(",") if s.strip()] if states else None
-    )
+    if mine:
+        if _is_service_channel(request):
+            raise HTTPException(
+                422, detail="mine 队列仅支持坐席 JWT 身份（服务间通道无坐席归属）",
+            )
+        from backend.app.api.identity import resolve_identity
+
+        ident = resolve_identity(request)
+        if not ident.authenticated or not ident.tenant_id:
+            raise HTTPException(403, detail="缺少可信坐席身份")
+        assigned_agent_id = await _lookup_bound_agent_id(
+            tenant_id=ident.tenant_id, user_id=ident.user_id
+        )
+        if not assigned_agent_id:
+            # 未绑定坐席的 operator 没有「我的会话」：空队列而非报错，
+            # 避免工作台轮询每 5s 刷一次 403 噪声。
+            return HandoffQueueResponse(items=[], total=0)
+        state_list = ["human_active"]
+    else:
+        assigned_agent_id = None
+        state_list = (
+            [s.strip() for s in states.split(",") if s.strip()] if states else None
+        )
     try:
         from backend.customer_service._db_loop import run_sync
-        return await _async_handoff_queue(state_list, run_sync, tenant_id=tenant_scope)
+        return await _async_handoff_queue(
+            state_list, run_sync, tenant_id=tenant_scope,
+            assigned_agent_id=assigned_agent_id,
+        )
     except Exception as e:
         logger.warning(f"[CSAdmin] handoff queue failed: {e}")
         raise HTTPException(503, detail="Database unavailable")
@@ -2431,7 +2464,10 @@ async def _async_get_trace_ids(conversation_id: str, run_sync):
         return [row[0] for row in result.all()]
 
 
-async def _async_handoff_queue(state_list, run_sync, tenant_id: str | None = None):
+async def _async_handoff_queue(
+    state_list, run_sync, tenant_id: str | None = None,
+    assigned_agent_id: str | None = None,
+):
     from sqlalchemy import select
 
     from backend.customer_service.models.message import CSMessage
@@ -2442,7 +2478,10 @@ async def _async_handoff_queue(state_list, run_sync, tenant_id: str | None = Non
 
         repo = HandoffRepository(db)
         # STOP CS-A P0-2：队列按租户隔离（服务间通道跨租户）
-        rows = await repo.list_open(states=state_list, tenant_id=tenant_id)
+        rows = await repo.list_open(
+            states=state_list, tenant_id=tenant_id,
+            assigned_agent_id=assigned_agent_id,
+        )
 
         items = []
         for h in rows:

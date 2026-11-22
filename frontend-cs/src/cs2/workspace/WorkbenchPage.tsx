@@ -93,6 +93,30 @@ export default function WorkbenchPage() {
     getHandoffQueue()
       .then((res) => setQueue(res.items ?? []))
       .catch(() => {})
+    // 「我的会话」服务端数据源（mine=true → 本人 human_active）：与认领/
+    // 接单的乐观写入收敛到同一来源，整页刷新后不再清空。合并且保留本地
+    // unread（WS 增量不被 5s 轮询清零）；失败保持现状，不清空乐观数据。
+    getHandoffQueue(undefined, true)
+      .then((res) => {
+        const fetched = (res.items ?? [])
+          .map((item) => ({
+            conversationId: item.conversation_id,
+            title: `用户 ${item.user_id.slice(0, 8)}`,
+            lastPreview: item.last_message_preview ?? '',
+            unread: 0,
+            intent: null,
+            handoffState: item.handoff_state,
+          }))
+          .reverse() // 服务端 updated_at 升序 → 最新在前，与认领前插一致
+        setMine((prev) => {
+          const unreadById = new Map(prev.map((m) => [m.conversationId, m.unread] as const))
+          return fetched.map((entry) => ({
+            ...entry,
+            unread: unreadById.get(entry.conversationId) ?? 0,
+          }))
+        })
+      })
+      .catch(() => {})
   }, [])
 
   const appendMessages = useCallback((incoming: MessageDTO[]) => {
