@@ -409,6 +409,16 @@ def _strict_fields_check(cases: list[TestCase]) -> None:
             if missing:
                 problems.append(f"{case.id}: 缺 {', '.join(missing)}")
             continue
+        if str(expected.get("gold_sql", "") or "").strip():
+            # SQL canonical 形态（datasets/sql/cases.jsonl）：可判定依据是
+            # gold_sql / expected_tables / should_reject——SQL runner 的判定
+            # 只消费这些，顶层 expected_answer/ground_truth 对 SQL 判定不
+            # 参与（#513 dual-run 对比同样基于 gold_sql）。只认 rag 形态会
+            # 让 SQL 发布评测被 strict 全量拦截（实测 15/15 拒绝，发布管线
+            # 死锁，2026-11-22）。
+            if missing:
+                problems.append(f"{case.id}: 缺 {', '.join(missing)}")
+            continue
         if not str(expected.get("expected_answer", "") or "").strip():
             missing.append("expected_answer")
         if not _has_ground_truth(expected):

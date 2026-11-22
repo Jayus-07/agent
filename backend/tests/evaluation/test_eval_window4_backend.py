@@ -162,6 +162,45 @@ def test_strict_check_accepts_v4_structured_ground_truth_context():
     _strict_fields_check(cases)  # 不抛即过
 
 
+def _sql_case(case_id: str, question: str, expected: dict) -> "TestCase":
+    from backend.evaluation.models import TestCase
+
+    return TestCase(id=case_id, question=question, module="sql", expected=expected)
+
+
+def test_strict_check_accepts_sql_gold_sql_form():
+    """2026-11-22 回归：SQL canonical（datasets/sql/cases.jsonl）的可判定
+    依据是 expected.gold_sql / expected_tables / should_reject——SQL runner
+    的判定只消费这些，顶层 expected_answer/ground_truth 对 SQL 判定不参与。
+    只认 rag 形态会让 SQL 发布评测被 strict 全量拦截（实测 15/15 拒绝，
+    发布管线死锁）。"""
+    from backend.evaluation.service import _strict_fields_check
+
+    cases = [
+        _sql_case("SC-001", "现在有多少在售商品？", {
+            "gold_sql": "SELECT COUNT(*) AS active_product_count "
+                        "FROM product.products WHERE status = 'active'",
+            "expected_tables": ["product.products"],
+            "should_reject": False,
+        }),
+        _sql_case("SC-002", "退款率最高的5个商品", {
+            "gold_sql": "SELECT ... FROM order.order_items",
+            "expected_tables": ["order.orders", "order.order_items"],
+        }),
+    ]
+    _strict_fields_check(cases)  # 不抛即过
+
+
+def test_strict_check_still_blocks_sql_form_missing_question():
+    """SQL 形态的豁免只覆盖答案字段：缺 question 仍拦截（门槛不放松）。"""
+    from backend.evaluation.service import StrictFieldValidationError, _strict_fields_check
+
+    cases = [_sql_case("SC-001", "", {"gold_sql": "SELECT 1", "expected_tables": ["t"]})]
+    with pytest.raises(StrictFieldValidationError) as exc:
+        _strict_fields_check(cases)
+    assert "SC-001" in str(exc.value) and "question" in str(exc.value)
+
+
 def test_strict_check_still_blocks_empty_context_and_answer():
     from backend.evaluation.service import StrictFieldValidationError, _strict_fields_check
 
