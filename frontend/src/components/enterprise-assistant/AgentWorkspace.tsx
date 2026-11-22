@@ -523,7 +523,9 @@ function HandoffPanel({ event, router }: { event: HandoffEvent; router: ReturnTy
   const target = {
     travel: { title: '打开旅游规划', icon: '🧭' },
     customer_service: { title: '打开智能客服', icon: '☏' },
-  }[event.target_domain]
+    // #500 防御：后端 extra=forbid 与 TS union 已收窄枚举，但运行时仍可能
+    // 出现未登记域（灰度/旧服务端），fallback 防止 undefined.title 抛 TypeError
+  }[event.target_domain] ?? { title: '打开目标页面', icon: '↗' }
   const openTarget = () => {
     void requestSilent('/api/observability/handoff/click', {
       method: 'POST', body: { target_domain: event.target_domain }, timeout: 5000,
