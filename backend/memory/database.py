@@ -109,8 +109,9 @@ async def _ensure_engine():
                 ),
             },
         )
-        # 语句级观测（慢查询/异常）：async 引擎事件挂在底层 sync engine 上生效
-        install_sql_observation(engine, engine_name="memory-async")
+        # 语句级观测（慢查询/异常）：async 引擎必须挂底层 sync_engine，
+        # 直接 listen_for(async_engine) 会抛 NotImplementedError
+        install_sql_observation(engine.sync_engine, engine_name="memory-async")
         sessionmaker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         _engines[id(loop)] = (loop, engine, sessionmaker)
         logger.info(
