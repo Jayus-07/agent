@@ -710,7 +710,15 @@ class PromptService:
             return {"version": version, "status": target_status}
 
     async def seed_defaults(self, defaults: dict[str, str]) -> dict:
-        count = 0
+        """补齐缺失的 YAML 默认模板（幂等）：只写 v1 不存在的 prompt。
+
+        2026-11-22：返回值补跳过明细——此前只返回 seeded 数，管理端按钮
+        在全部已存在时也提示「已种子 0 个」，无法区分「补齐了」还是
+        「本来就齐」（实测发现的管理端误导）。
+        """
+        seeded = 0
+        skipped_existing: list[str] = []
+        code_controlled: list[str] = []
         async with AsyncSessionLocal() as session:
             repo = PromptRepository(session)
             for key, template in defaults.items():
@@ -718,6 +726,7 @@ class PromptService:
                 if not spec:
                     continue
                 if spec.code_controlled:
+                    code_controlled.append(key)
                     continue
 
                 prompt = await repo.upsert_prompt(
@@ -745,12 +754,18 @@ class PromptService:
                         actor="seed",
                         detail={"source": "yaml_default"},
                     )
-                    count += 1
+                    seeded += 1
+                else:
+                    skipped_existing.append(key)
 
             await session.commit()
 
         await self.refresh_snapshot()
-        return {"seeded": count}
+        return {
+            "seeded": seeded,
+            "skipped_existing": skipped_existing,
+            "code_controlled": code_controlled,
+        }
 
     def load_defaults_into_memory(self, defaults: dict[str, str]) -> None:
         self._defaults.update(defaults)

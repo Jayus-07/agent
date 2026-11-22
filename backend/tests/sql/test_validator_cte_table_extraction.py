@@ -15,6 +15,7 @@
 import pytest
 
 from backend.sql.policy import SQLPolicyGuard
+from backend.sql.schema_loader import schema_loader
 from backend.sql.sql_validator import ValidationError
 
 from tests.sql.conftest import make_ctx
@@ -104,3 +105,61 @@ class TestCTEValidatorRegression:
                 "SELECT no_such_column FROM days",
                 make_ctx("all"),
             )
+
+
+class TestCTEColumnScopeTightening:
+    """L3 列放行口径收紧（2026-11-22）。
+
+    旧口径「列名出现在任意 CTE 体内的列引用中即放行」会把体内+外层
+    同名的幻觉列一并放行到执行层（实测 `WITH x AS (SELECT unit_price
+    FROM product.products) SELECT unit_price FROM x` 漏过 L3），收紧为
+    仅放行表值函数/子查询的别名列定义；CTE 输出别名由 select_aliases
+    覆盖，不受影响。
+    """
+
+    def test_cte_body_and_outer_hallucinated_column_denied(self):
+        """体内+外层同名幻觉列：L3 结构化拒绝，不再漏到执行层。"""
+        with pytest.raises(ValidationError, match="未找到列"):
+            SQLPolicyGuard().validate_and_rewrite(
+                "WITH x AS (SELECT unit_price FROM product.products) "
+                "SELECT unit_price FROM x",
+                make_ctx("all"),
+            )
+
+
+class TestSensitiveColumnFailClosed:
+    """_check_sensitive_columns 列名命中即确定性拒绝（fail-closed）。
+
+    2026-11-22 修复：full_ref 赋值原在条件分支内，限定引用到非敏感表的
+    真实同名列会先通过 allowlist、再在此处 UnboundLocalError 而非结构化
+    拒绝；修复后拒绝语义不变。敏感层遍历全 AST（含 CTE 体内），CTE 包装
+    不能绕过。
+    """
+
+    def test_qualified_to_other_table_fails_closed(self):
+        """限定引用到非敏感表的真实同名列：确定性拒绝而非 UnboundLocalError。"""
+        schema_loader.sensitive_columns.add("customer.customers.id")
+        try:
+            with pytest.raises(ValidationError, match="禁止查询敏感列"):
+                SQLPolicyGuard().validate_and_rewrite(
+                    "SELECT p.id FROM product.products p",
+                    make_ctx("all"),
+                )
+        finally:
+            schema_loader.sensitive_columns.discard("customer.customers.id")
+
+    def test_cte_body_qualified_sensitive_reference_denied(self):
+        """CTE 体内限定引用他表同名列（该列在别表被登记敏感）：敏感检查
+        覆盖全 AST（含 CTE 体），借 CTE 包装不能绕过。用 id 列构造：
+        product.products.id 在自身 browse_columns 中放行 allowlist，
+        customer.customers.id 登记敏感后由敏感层拒绝。"""
+        schema_loader.sensitive_columns.add("customer.customers.id")
+        try:
+            with pytest.raises(ValidationError, match="禁止查询敏感列"):
+                SQLPolicyGuard().validate_and_rewrite(
+                    "WITH x AS (SELECT p.id FROM product.products p) "
+                    "SELECT id FROM x",
+                    make_ctx("all"),
+                )
+        finally:
+            schema_loader.sensitive_columns.discard("customer.customers.id")
