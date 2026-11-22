@@ -278,8 +278,9 @@ describe('DocumentsPanel 文档计数刷新', () => {
     const container = mountPanel()
     await settleUi()
 
-    const goReview = findButton(container, '去处理需复核：旅游测试资料.md')
-    expect(goReview).toBeTruthy()
+    // findButton 精确匹配 textContent；按钮可见文本是「去处理」
+    const goReview = findButton(container, '去处理')
+    expect(goReview?.getAttribute('aria-label')).toContain('需复核')
     click(goReview)
 
     expect(navigation.push).toHaveBeenCalledTimes(1)
