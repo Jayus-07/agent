@@ -10,7 +10,7 @@
   Gate 5  RAG             知识问句 200 + 非空
   Gate 6  SQL             数据问句 200 + 非空（权限门在链路内生效）
   Gate 7  CS              客服专属入口（/chat/customer-service/stream）200 + cs_graph_node
-  Gate 8  Travel          旅游专属直达流 /api/travel/plan/stream 200 + done 终帧
+  Gate 8  Travel          旅游专属直达流 /api/travel/v2/plan/stream 200 + done 终帧
   Gate 10 Task Runtime    Celery 在线 worker 响应且消费 agent 队列
   Gate 11 Model           当前主问答角色可用且最近 24h 有真实调用探测成功
   Gate 12 Observability   /metrics 指标族在册 + prometheus targets up
@@ -114,21 +114,19 @@ def claims_of(tok: str) -> dict:
     return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
 
 
-def chat(token: str, session: str, question: str, direct=False, actor=None,
+def chat(token: str, session: str, question: str,
          timeout=240, cs_entry: bool = False) -> tuple[int, str, list[str], str, bool]:
-    prefix = "" if direct else "/api"
     body = {"question": question, "session_id": session,
             "request_id": f"gate-{session}-{int(time.time()*1000)}",
             "idempotency_key": f"gate-{session}-{int(time.time()*1000)}"}
     headers = {}
-    if direct and actor:
-        headers = {"X-Auth-Type": "jwt", "X-User-Id": actor["user_id"],
-                   "X-Tenant-Id": actor["tenant_id"], "X-User-Roles": "editor"}
     # 产品身份由 FastAPI 注册路径决定（chat._product_for_chat_route）：
     # /chat/customer-service/stream → customer_service（域锁入口），
     # /chat/stream → public（仅一般对话，域节点不可达）。
+    # direct/actor 死参数已删（2026-11-22：grep 无任何调用者传入，
+    # 只剩 readiness 单测直接调 chat(token, session, question)）。
     entry = "customer-service/stream" if cs_entry else "stream"
-    st, raw = _request("POST", f"{GATEWAY}{prefix}/chat/{entry}",
+    st, raw = _request("POST", f"{GATEWAY}/api/chat/{entry}",
                        body=body, token=token, headers=headers, timeout=timeout)
     if st != 200:
         return st, "", [], "", False
@@ -262,8 +260,9 @@ def g8_travel_direct(token: str) -> bool:
     产品身份由 FastAPI 注册路径决定：/chat/stream → public（仅一般对话，
     域节点不可达），/chat/agent → agent（主助手隔离，2026-10-08 拍板不执行
     专属域图）。旧"通用 chat 问句进 travel_graph_node"的期望与产品契约冲突。
-    旅游域的专属入口是旅游页直达端点 /api/travel/plan/stream，Gate8 改为
-    验证该入口真实可用：HTTP 200 + 事件流以 done 终帧收口且 status 非 failed。
+    旅游域的专属入口是旅游页直达端点 /api/travel/v2/plan/stream（V1 已退役
+    未挂载），Gate8 验证该入口真实可用：HTTP 200 + 事件流以 done 终帧收口
+    且 status 非 failed。
     """
     session = f"gate-g8-{int(time.time())}"
     body = {"message": "帮我规划厦门2天的行程，两人出行",
