@@ -263,6 +263,51 @@ describe('DocumentsPanel 文档计数刷新', () => {
     expect(badge?.getAttribute('title')).toContain('历史质量记录缺少')
     expect(badge?.getAttribute('title')).toContain('内容/解析提醒')
   })
+
+  it('需复核徽章提供去处理入口并跳转待复核页', async () => {
+    vi.spyOn(knowledgeService, 'getDocuments').mockResolvedValue({
+      documents: [{
+        ...documentFixture,
+        quality_status: 'soft_warning',
+        quality_score: 70,
+        quality_issues: 'ocr_degraded',
+      }],
+      total: 1,
+    })
+    navigation.push.mockClear()
+    const container = mountPanel()
+    await settleUi()
+
+    const goReview = findButton(container, '去处理需复核：旅游测试资料.md')
+    expect(goReview).toBeTruthy()
+    click(goReview)
+
+    expect(navigation.push).toHaveBeenCalledTimes(1)
+    const pushed = navigation.push.mock.calls[0][0] as string
+    expect(pushed).toContain('/knowledge/workbench?')
+    expect(pushed).toContain('tab=pending')
+  })
+
+  it('评测语料徽章标注属预期并提示语料特性', async () => {
+    vi.spyOn(knowledgeService, 'getDocuments').mockResolvedValue({
+      documents: [{
+        ...documentFixture,
+        quality_status: 'soft_warning',
+        quality_score: 70,
+        quality_issues: 'ocr_degraded',
+        fixture_set: 'rag_eval',
+        kb_id: 'rag_eval_kb',
+      }],
+      total: 1,
+    })
+    const container = mountPanel()
+    await settleUi()
+
+    const badge = container.querySelector('[data-testid="quality-status"]')
+    expect(badge?.textContent).toContain('属预期')
+    expect(badge?.getAttribute('title')).toContain('评测/测试语料')
+    expect(badge?.getAttribute('title')).toContain('属预期')
+  })
 })
 
 describe('DocumentsPanel 分块详情', () => {

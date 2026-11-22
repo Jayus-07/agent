@@ -252,6 +252,9 @@ async def list_documents(
                 "quality_status": d.get("quality_status") or "unknown",
                 "quality_score": d.get("quality_score", 0),
                 "quality_issues": d.get("quality_issues") or "",
+                # fixture_set=rag_eval 等标记标识评测/测试语料（前端据此给
+                # 「需复核」徽章加属预期提示，2026-11-23 待复核分层）
+                "fixture_set": d.get("fixture_set", ""),
             }
 
         return {
