@@ -463,3 +463,67 @@ it('逐题报告缺失时给出明确提示并隐藏无效重试', async () => {
     await cleanup(root, container, queryClient)
   }
 })
+
+// ── 批次 6c：台账去重 + 发布评测对比入口 ───────────────
+
+const RELEASE_WITH_RUN = {
+  release_id: 'rel-a', prompt_key: 'sql.generator', version: 4,
+  target_env: 'production', status: 'passed', eval_suite: 'sql_canonical',
+  executor: 'local', dataset_provenance: {}, metrics: {},
+  failure_reason: '', approved_by: 'user:3', published_by: '',
+  created_at: '2026-11-22T13:47:00Z', eval_run_id: 'run-a',
+}
+
+it('台账去重：prompt_publish 触发的台账默认隐藏，开关可显示全部', async () => {
+  ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([
+    { run_id: '2026-11-22T04-00', module: 'sql', pass_rate: 0.4, case_count: 15, status: 'completed', timestamp: '2026-11-22T12:05:00Z', trigger: 'manual' },
+    { run_id: '2026-11-22T07-11', module: 'sql', pass_rate: 0.4, case_count: 15, status: 'completed', timestamp: '2026-11-22T12:03:00Z', trigger: 'prompt_publish' },
+  ] as Awaited<ReturnType<typeof evaluationService.listRuns>>)
+  const { promptsService } = await import('@/api/prompts')
+  vi.spyOn(promptsService, 'listAllReleases').mockResolvedValue([])
+  const { root, container, queryClient } = await mountRunsTab()
+  try {
+    await clickText(container, '执行记录')
+    await flushQueries()
+    // 默认：manual 行保留（发起方=manual），prompt_publish 行隐藏（与发布评测来源重复）
+    expect(container.textContent).toContain('manual')
+    expect(container.textContent).not.toContain('prompt_publish')
+    // 勾选「显示全部台账」后两条都出现
+    const checkbox = Array.from(container.querySelectorAll('input[type=checkbox]')).find(box => box.closest('label')?.textContent?.includes('显示全部台账')) as HTMLInputElement
+    expect(checkbox).toBeTruthy()
+    await act(async () => { checkbox.click() })
+    expect(container.textContent).toContain('prompt_publish')
+  } finally {
+    await cleanup(root, container, queryClient)
+  }
+})
+
+it('发布评测行在同 prompt_key 有两条可选记录时出现「对比」入口', async () => {
+  ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([])
+  const { promptsService } = await import('@/api/prompts')
+  vi.spyOn(promptsService, 'listAllReleases').mockResolvedValue([
+    RELEASE_WITH_RUN,
+    { ...RELEASE_WITH_RUN, release_id: 'rel-b', eval_run_id: 'run-b', version: 3 },
+    // 另一个 prompt_key 只有单条：不出现对比按钮
+    { ...RELEASE_WITH_RUN, release_id: 'rel-solo', prompt_key: 'rag.qa', eval_run_id: 'run-solo', version: 2 },
+  ] as never)
+  const { root, container, queryClient } = await mountRunsTab()
+  try {
+    await clickText(container, '执行记录')
+    await flushQueries()
+    // 同 key 两条记录（rel-a/rel-b）各带一个"对比"入口；rag.qa 单条记录无入口
+    const compareButtons = Array.from(container.querySelectorAll('button')).filter(button => button.textContent?.trim() === '对比')
+    expect(compareButtons).toHaveLength(2)
+    await clickText(container, '对比')
+    await flushQueries()
+    const drawer = container.querySelector('[role="dialog"]')
+    expect(drawer).not.toBeNull()
+    expect(drawer?.textContent).toContain('发布评测对比')
+  } finally {
+    await cleanup(root, container, queryClient)
+  }
+})
