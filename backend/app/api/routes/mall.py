@@ -64,6 +64,7 @@ def _http_error(exc: MallError) -> HTTPException:
         "not_found": 404,
         "invalid_amount": 422,
         "invalid_items": 422,
+        "identity_invalid": 403,  # 可信身份无法映射到业务客户 id（同缺身份 403 语义）
         "gateway_error": 502,
     }.get(exc.code, 500)
     return HTTPException(status_code=status, detail=exc.user_message or str(exc))
@@ -174,6 +175,7 @@ def create_order(
         order = _SERVICE.create_order(
             user_id, identity.tenant_id,
             [item.model_dump() for item in payload.items], operation_key,
+            customer_name=identity.user_name,
         )
         return {"order": order}
     except MallError as exc:
