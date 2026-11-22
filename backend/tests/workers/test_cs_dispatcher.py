@@ -485,3 +485,76 @@ async def test_tick_records_p8_metrics(monkeypatch) -> None:
     assert recorded.count(("outbox", "published")) == 2
     assert recorded.count(("outbox", "deferred")) == 1
     assert gauge_values["lag"] == 1.5
+
+
+@pytest.mark.asyncio
+async def test_amain_loads_llm_registry_before_run_forever(monkeypatch) -> None:
+    """D5：worker 启动必须先装载 LLM 注册表再进主循环。
+
+    worker 进程原本没有注册表加载链路，reaper 诉求压缩回落代码默认模型
+    （doubao 旧拍板）→ DB 厂商映射缺失 → 按 ollama 判错端点。
+    """
+    loaded: list[bool] = []
+    spawned: list[str] = []
+
+    async def fake_refresh_registry() -> bool:
+        loaded.append(True)
+        return True
+
+    async def fake_refresh_loop() -> None:  # pragma: no cover - 周期任务替身
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(
+        "backend.infra.llm.registry_store.refresh_registry", fake_refresh_registry
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.registry_store.refresh_loop", fake_refresh_loop
+    )
+    monkeypatch.setattr(
+        "backend.infra.async_utils.spawn_background_task",
+        lambda coro, *, name=None: spawned.append(name) or asyncio.ensure_future(coro),
+    )
+
+    async def fake_run_forever(iterations: int | None = None):
+        # 主循环被替身替换：只需断言注册表在它之前已装载
+        return []
+
+    monkeypatch.setattr(cs_dispatcher, "run_forever", fake_run_forever)
+
+    await cs_dispatcher._amain()
+
+    assert loaded == [True], "启动必须先同步装载一次注册表"
+    assert "llm-registry-refresh" in spawned, "必须启动周期刷新任务"
+
+
+@pytest.mark.asyncio
+async def test_amain_registry_failure_does_not_block_start(monkeypatch) -> None:
+    """注册表装载失败 fail-open：不阻塞 worker 启动（与 API 实例同语义）。"""
+    calls: list[str] = []
+
+    async def failing_refresh() -> bool:
+        raise RuntimeError("db down")
+
+    async def fake_refresh_loop() -> None:  # pragma: no cover
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(
+        "backend.infra.llm.registry_store.refresh_registry", failing_refresh
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.registry_store.refresh_loop", fake_refresh_loop
+    )
+    monkeypatch.setattr(
+        "backend.infra.async_utils.spawn_background_task",
+        lambda coro, *, name=None: asyncio.ensure_future(coro),
+    )
+
+    async def fake_run_forever(iterations: int | None = None):
+        calls.append("run")
+        return []
+
+    monkeypatch.setattr(cs_dispatcher, "run_forever", fake_run_forever)
+
+    await cs_dispatcher._amain()
+
+    assert calls == ["run"], "装载异常后仍应进入主循环"

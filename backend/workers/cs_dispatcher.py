@@ -255,6 +255,23 @@ async def run_forever(iterations: int | None = None) -> list[TickResult]:
 
 
 async def _amain() -> None:
+    # D5（2026-11-22 实机验证）：worker 进程原本不装载 LLM 注册表（只有
+    # API 实例的 FastAPI startup 做），reaper 诉求压缩回落到代码默认模型
+    # （doubao 旧拍板）且进程内无 DB 厂商映射 → 按 ollama 判错端点连本机
+    # 被拒。这里与 API 实例同语义：启动同步装载一次（阻塞，保证首次压缩
+    # 即命中正确模型）+ 周期刷新；DB 不可用时 fail-open 不阻塞启动。
+    from backend.infra.async_utils import spawn_background_task
+    from backend.infra.llm.registry_store import refresh_loop, refresh_registry
+
+    try:
+        loaded = await refresh_registry()
+        if not loaded:
+            logger.warning(
+                "[cs-dispatcher] LLM 注册表装载失败（DB 空表/缺失），LLM 回落代码默认"
+            )
+        spawn_background_task(refresh_loop(), name="llm-registry-refresh")
+    except Exception:
+        logger.warning("[cs-dispatcher] LLM 注册表装载异常，LLM 回落代码默认", exc_info=True)
     await run_forever()
 
 
