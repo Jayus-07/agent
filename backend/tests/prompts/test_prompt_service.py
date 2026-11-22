@@ -530,3 +530,79 @@ class TestSnapshotPromptVersions:
             assert snapshot_prompt_versions() == {}
         finally:
             prompt_service._snapshot = original_snapshot
+
+
+class TestSeedDefaults:
+    """seed 返回结构（2026-11-22）：区分「补齐了」与「本来就齐」，不再只报 seeded 数。"""
+
+    def _patch_repo(self, monkeypatch, *, v1_exists: bool):
+        from backend.prompts import service as svc_module
+
+        repo = MagicMock()
+        repo.upsert_prompt = AsyncMock(return_value=SimpleNamespace(id=1))
+        repo.get_version = AsyncMock(
+            return_value=SimpleNamespace(id=99) if v1_exists else None
+        )
+        repo.create_version = AsyncMock()
+        repo.set_active_version = AsyncMock()
+        repo.write_audit = AsyncMock()
+
+        session = MagicMock()
+        session.commit = AsyncMock()
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=session)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        session_factory = MagicMock(return_value=cm)
+
+        monkeypatch.setattr(svc_module, "AsyncSessionLocal", session_factory)
+        monkeypatch.setattr(svc_module, "PromptRepository", MagicMock(return_value=repo))
+        return repo
+
+    @pytest.mark.asyncio
+    async def test_existing_prompt_goes_to_skipped_existing(self, service, monkeypatch):
+        from backend.prompts.registry import PROMPT_REGISTRY
+
+        normal_key = next(
+            k for k, s in PROMPT_REGISTRY.items()
+            if not s.code_controlled and k.startswith("rag.")
+        )
+        self._patch_repo(monkeypatch, v1_exists=True)
+        service.refresh_snapshot = AsyncMock()
+
+        result = await service.seed_defaults({normal_key: "tpl"})
+
+        assert result["seeded"] == 0
+        assert result["skipped_existing"] == [normal_key]
+        assert result["code_controlled"] == []
+
+    @pytest.mark.asyncio
+    async def test_missing_prompt_is_seeded(self, service, monkeypatch):
+        from backend.prompts.registry import PROMPT_REGISTRY
+
+        normal_key = next(
+            k for k, s in PROMPT_REGISTRY.items()
+            if not s.code_controlled and k.startswith("rag.")
+        )
+        repo = self._patch_repo(monkeypatch, v1_exists=False)
+        service.refresh_snapshot = AsyncMock()
+
+        result = await service.seed_defaults({normal_key: "tpl"})
+
+        assert result["seeded"] == 1
+        assert result["skipped_existing"] == []
+        repo.create_version.assert_awaited_once()
+        repo.set_active_version.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_code_controlled_goes_to_code_controlled_list(self, service, monkeypatch):
+        from backend.prompts.registry import PROMPT_REGISTRY
+
+        code_key = next(k for k, s in PROMPT_REGISTRY.items() if s.code_controlled)
+        repo = self._patch_repo(monkeypatch, v1_exists=False)
+        service.refresh_snapshot = AsyncMock()
+
+        result = await service.seed_defaults({code_key: "tpl"})
+
+        assert result["seeded"] == 0
+        assert result["code_controlled"] == [code_key]
+        repo.upsert_prompt.assert_not_awaited()
