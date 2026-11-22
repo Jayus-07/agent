@@ -14,12 +14,16 @@ class _HandoffRow:
 
 
 class _Result:
-    def __init__(self, row=None, rowcount=None):
+    def __init__(self, row=None, rowcount=None, scalar=None):
         self._row = row
         self.rowcount = rowcount
+        self._scalar = scalar
 
     def first(self):
         return self._row
+
+    def scalar_one_or_none(self):
+        return self._scalar
 
 
 class _FakeDB:
@@ -331,5 +335,137 @@ async def test_resolve_agent_identity_service_channel_has_no_tenant():
         _Request({AUTH_TYPE_HEADER: "api-key"}), "agent-svc"
     )
     assert (agent_id, tenant_id) == ("agent-svc", None)
+
+
+# ── D1/D2（2026-11-22 实机验证）──
+
+
+@pytest.mark.asyncio
+async def test_claim_update_writes_handoff_assignment(monkeypatch):
+    """D1：认领的原子 UPDATE 必须同步写 handoffs.assigned_agent_id。
+
+    之前只写 handoff_state，分配关系只落 conversations 表，mine=true
+    （handoff_repo 谓词查 handoffs 表）永远查不到 →「我的会话」恒空、
+    F5 刷新即丢。本用例钉住写入侧，防回归。
+    """
+    db = _CapturingDB()
+    _FakeConversationManager.calls = []
+
+    monkeypatch.setattr("backend.memory.database.AsyncSessionLocal", lambda: db)
+    monkeypatch.setattr(
+        "backend.customer_service.managers.conversation_manager.ConversationManager",
+        _FakeConversationManager,
+    )
+    monkeypatch.setattr(
+        cs_admin, "_ensure_cs_agent", _fake_ensure_cs_agent, raising=False
+    )
+    monkeypatch.setattr(
+        "backend.customer_service.handoff_store.get_handoff_store",
+        lambda: _FakeStore(),
+    )
+    monkeypatch.setattr(
+        "backend.customer_service.realtime.get_agent_hub",
+        lambda: _FakeHub(),
+    )
+
+    await cs_admin._async_claim("conv-1", "agent-1", None, None)
+
+    updates = [s for s in db.statements if "UPDATE" in s.upper()]
+    assert updates, "认领必须发出 UPDATE 语句"
+    assert any(
+        "assigned_agent_id" in s for s in updates
+    ), "UPDATE 必须写 handoffs.assigned_agent_id（D1 回归）"
+
+
+@pytest.mark.asyncio
+async def test_save_my_message_takes_latest_handoff(monkeypatch):
+    """D2：人工态发消息的 handoff 归属查询必须取最新一条。
+
+    多轮转人工的会话有多条 handoff 行，裸 scalar_one_or_none() 抛
+    MultipleRows → 用户发消息 503。
+    """
+    class _ScalarResult:
+        def __init__(self, scalar=None):
+            self._scalar = scalar
+
+        def scalar_one_or_none(self):
+            return self._scalar
+
+    class _SaveMsgDB(_FakeDB):
+        def __init__(self):
+            super().__init__()
+            self.select_statements: list[str] = []
+
+        async def execute(self, query):
+            self.execute_count += 1
+            if self.execute_count == 1:
+                self.select_statements.append(str(query))
+                return _ScalarResult(None)
+            raise AssertionError("归属校验后不应再查 handoff")
+
+        async def add(self, _entity):
+            return None
+
+        async def flush(self):
+            return None
+
+    class _FakeMessageManager:
+        def __init__(self, db):
+            self.db = db
+
+        async def save_user_message(self, conversation_id, content, **kw):
+            class _Msg:
+                id = 42
+
+            return _Msg()
+
+    db = _SaveMsgDB()
+    monkeypatch.setattr("backend.memory.database.AsyncSessionLocal", lambda: db)
+    monkeypatch.setattr(
+        "backend.customer_service.managers.message_manager.MessageManager",
+        _FakeMessageManager,
+    )
+
+    await cs_admin._async_save_my_message(
+        "conv-1", "user-1", "default", "你好", None
+    )
+
+    assert db.select_statements, "必须先查 handoff 做归属校验"
+    stmt = db.select_statements[0]
+    normalized = " ".join(stmt.upper().split())
+    assert "ORDER BY" in normalized and "DESC" in normalized, (
+        "handoff 归属查询必须按 id 倒序取最新一条（D2 回归）"
+    )
+    assert "LIMIT" in normalized, "handoff 归属查询必须 LIMIT 1（LIMIT 值为参数化占位）"
+    assert "CS_HANDOFFS" in normalized or "handoff" in normalized.lower()
+
+
+@pytest.mark.asyncio
+async def test_save_my_message_rejects_foreign_user(monkeypatch):
+    """归属校验语义不变：handoff.user_id 与当前用户不一致 → 403。"""
+
+    class _ForeignHandoffRow:
+        user_id = "user-999"
+
+    class _ForeignDB(_FakeDB):
+        def __init__(self):
+            super().__init__()
+            self.execute_count = 0
+
+        async def execute(self, query):
+            self.execute_count += 1
+            if self.execute_count == 1:
+                # 归属校验走 scalar_one_or_none()：handoff 行必须经 scalar 传回
+                return _Result(scalar=_ForeignHandoffRow())
+            raise AssertionError("403 后不应继续写消息")
+
+    db = _ForeignDB()
+    monkeypatch.setattr("backend.memory.database.AsyncSessionLocal", lambda: db)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await cs_admin._async_save_my_message(
+            "conv-1", "user-1", "default", "你好", None
+        )
+    assert exc_info.value.status_code == 403
 
 

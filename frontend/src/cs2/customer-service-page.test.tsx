@@ -10,7 +10,24 @@ const chatApi = vi.hoisted(() => ({
   abortChat: vi.fn(async () => {}),
 }))
 const cs2Api = vi.hoisted(() => ({
-  fetchMyConversations: vi.fn(async () => [
+  fetchMyConversations: vi.fn(async (): Promise<
+    Array<{
+      conversation_id: string
+      summary?: string | null
+      conversation_status: string
+      handling_mode: string
+      created_at: string
+      last_activity_at?: string | null
+      messages?: Array<{
+        message_id: string
+        sender_type: string
+        content: string
+        content_type: string
+        attachments?: Array<{ type: string; order_no?: string }> | null
+        created_at: string
+      }>
+    }>
+  > => [
     {
       conversation_id: 'conv-a',
       summary: '退款咨询',
@@ -19,12 +36,26 @@ const cs2Api = vi.hoisted(() => ({
       created_at: '2026-10-31T10:00:00Z',
       last_activity_at: '2026-10-31T10:05:00Z',
       messages: [
-        { message_id: '1', sender_type: 'user', content: '我要退款', content_type: 'text', created_at: '2026-10-31T10:00:00Z' },
-        { message_id: '2', sender_type: 'assistant', content: '好的，请说明订单号', content_type: 'text', created_at: '2026-10-31T10:00:05Z' },
+        { message_id: '1', sender_type: 'user', content: '我要退款', content_type: 'text', attachments: null, created_at: '2026-10-31T10:00:00Z' },
+        { message_id: '2', sender_type: 'assistant', content: '好的，请说明订单号', content_type: 'text', attachments: null, created_at: '2026-10-31T10:00:05Z' },
       ],
     },
   ]),
-  fetchMyMessages: vi.fn(async () => ({ conversation_id: 'conv-a', handoff_state: 'none', last_id: 2, messages: [], agent_typing: false, handoff_meta: null })),
+  fetchMyMessages: vi.fn(async (): Promise<{
+    conversation_id: string
+    handoff_state: string
+    last_id: number
+    messages: Array<{ message_id: string; sender_type: string; content: string; content_type: string; attachments?: Array<{ type: string; order_no?: string }> | null; created_at: string }>
+    agent_typing: boolean
+    handoff_meta?: { handoff_id: string; handoff_state: string; total_deadline_at: string | null; queue_position: number } | null
+  }> => ({
+    conversation_id: 'conv-a',
+    handoff_state: 'none',
+    last_id: 2,
+    messages: [],
+    agent_typing: false,
+    handoff_meta: null,
+  })),
   requestHandoff: vi.fn(async () => ({ handoff_state: 'waiting_human' })),
   submitRating: vi.fn(async () => {}),
   fetchCustomerContext: vi.fn(async () => ({
@@ -279,5 +310,54 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     expect(row?.getAttribute('aria-selected')).toBe('true')
     // 预选只高亮：不自动发送
     expect(chatApi.streamChat).not.toHaveBeenCalled()
+  })
+
+  it('D7：card+order_ref 历史消息渲染成订单卡而非纯文本', async () => {
+    cs2Api.fetchMyConversations.mockResolvedValueOnce([
+      {
+        conversation_id: 'conv-card',
+        summary: '订单咨询',
+        conversation_status: 'active',
+        handling_mode: 'ai',
+        created_at: '2026-11-22T10:00:00Z',
+        last_activity_at: '2026-11-22T10:05:00Z',
+        messages: [
+          {
+            message_id: '9',
+            sender_type: 'user',
+            content: '【订单咨询】订单号 MO-CARD1｜珍珠项链｜¥199.00｜待付款',
+            content_type: 'card',
+            attachments: [{ type: 'order_ref', order_no: 'MO-CARD1' }],
+            created_at: '2026-11-22T10:00:00Z',
+          },
+          { message_id: '10', sender_type: 'assistant', content: '已收到您的订单咨询', content_type: 'text', created_at: '2026-11-22T10:00:05Z' },
+        ],
+      },
+    ])
+    const c = await mount()
+    await openConversation(c, '订单咨询')
+    // 订单卡结构：订单号 + 徽标（而非纯文本气泡）
+    expect(c.textContent).toContain('订单 MO-CARD1')
+    expect(c.textContent).toContain('订单卡')
+    expect(c.textContent).toContain('¥199.00')
+    // 普通文本消息不受影响
+    expect(c.textContent).toContain('已收到您的订单咨询')
+  })
+
+  it('D3：选择会话后从服务端恢复 handoff 状态（人工接入横幅不再丢失）', async () => {
+    // 持续返回 human_active：恢复调用与随后的轮询 effect 都要拿到一致状态，
+    // 否则轮询的默认 mock（none）会把恢复出来的状态立刻覆盖掉
+    cs2Api.fetchMyMessages.mockResolvedValue({
+      conversation_id: 'conv-a',
+      handoff_state: 'human_active',
+      last_id: 2,
+      messages: [],
+      agent_typing: false,
+      handoff_meta: { handoff_id: 'h-1', handoff_state: 'human_active', total_deadline_at: null, queue_position: 0 },
+    })
+    const c = await mount()
+    await openConversation(c, '退款咨询')
+    expect(cs2Api.fetchMyMessages).toHaveBeenCalledWith('conv-a', 0, 1)
+    expect(c.textContent).toContain('人工客服已接入')
   })
 })
