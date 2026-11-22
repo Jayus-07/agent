@@ -54,6 +54,8 @@ E0 的模块校验由统一数据集校验器按模块契约执行：RAG 的 `an
 
 T0–T3 的选择继续由 [测试策略](../development/testing-guide.md) 决定；E0–E3 描述评测的**证据层**，不要求每个 Bug 都运行所有层。只有运行有效、必要指标达标、安全红线全过，且没有阻断项才能输出发布 PASS。可用配置将低风险功能直接发布到本机，不强制影子双跑或灰度。
 
+**Prompt 发布门禁按 prompt category 路由评测模块（2026-11-22）**：事实源 `backend/evaluation/prompt_release_runner.py`（`_CATEGORY_TO_MODULE`）与 `.github/workflows/prompt_eval.yml`（同口径内嵌路由）。SQL prompt 的门禁评测跑 SQL 题集（canonical `datasets/sql/cases.jsonl`，15 条，manifest 锁定），不再复用 RAG 的 `pr_smoke` suite。SQL 门禁不套用 RAG 校准的 tier 绝对阈值（smoke 0.95/core 0.85/hard 0.70 对 SQL 真实水位不可达，分层结果仅展示），改以「候选 vs 现网」同题集同模型双跑对比为主门禁：候选全局通过率 ≥ 现网 − 5%（GATE-11 同款降幅）+ 防全挂下限（smoke 层通过率 ≥ 0.20）+ 样本量门（GATE-12）；RAGAS 门对 SQL 不适用（N/A 落痕，publish 侧按 `gate.ragas_applicable` 跳过）。RAG prompt 门禁口径不变（tier 阈值门 + 样本量门 + baseline 回归门 + RAGAS 门）。未登记映射的 prompt category 回落 RAG 门禁并留痕，按域补齐专属评测时在 `_CATEGORY_TO_MODULE` 登记。已知限制：GitHub executor 路径评测的是 candidate commit 的 defaults 文件内容而非 DB 候选草稿（CI 测试库无 DB 数据），SQL 候选与 defaults 不一致时须走 local executor（生产容器内存受限，SQL 评测链路不加载 torch，实测可行后作为默认路径）。
+
 ## 5. 生命周期与输出
 
 - **报告时间**：面向人的报告和控制台摘要显示上海时间，精确到秒；机器字段 `timestamp` 使用带时区的 ISO 8601 UTC，另提供 `timestamp_shanghai` 便于读取。
