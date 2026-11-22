@@ -36,10 +36,19 @@ export default function PromptsPage() {
   const handleSeed = async () => {
     try {
       const res = await promptsService.seed()
-      toast.success(`已种子 ${res.seeded} 个默认 Prompt`)
+      const skippedCount =
+        (res.skipped_existing?.length ?? 0) + (res.code_controlled?.length ?? 0)
+      if (res.seeded > 0) {
+        toast.success(
+          `已补齐 ${res.seeded} 个缺失默认值` +
+            (skippedCount > 0 ? `，${skippedCount} 个已存在保持不动` : ''),
+        )
+      } else {
+        toast.info(`没有缺失项：${skippedCount} 个默认值均已存在，本次未改动任何内容`)
+      }
       load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : '种子失败')
+      toast.error(e instanceof Error ? e.message : '补齐默认值失败')
     }
   }
 
@@ -52,8 +61,12 @@ export default function PromptsPage() {
           <AssetActionButton icon={<RefreshCw size={13} className={loading ? 'animate-spin' : ''} />} onClick={() => void load()}>
             刷新
           </AssetActionButton>
-          <AssetActionButton icon={<Database size={13} />} onClick={() => void handleSeed()}>
-            种子默认值
+          <AssetActionButton
+            icon={<Database size={13} />}
+            onClick={() => void handleSeed()}
+            title="只补齐数据库里还没有的默认 Prompt；已存在的 Prompt（包括已发布版本）不会被动改动"
+          >
+            补齐缺失默认值
           </AssetActionButton>
         </>
       }

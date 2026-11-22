@@ -84,6 +84,58 @@ def test_empty_corpus_returns_actionable_safe_api_error():
     assert envelope.message == "该知识库没有已发布文档，请先完成文档发布和索引后再运行评测。"
 
 
+def test_safe_error_undefined_table_points_to_migration():
+    """UndefinedTable 不再兜成「依赖服务暂时不可用」，指向迁移补救动作。"""
+    from psycopg2.errors import UndefinedTable
+
+    with pytest.raises(HTTPException) as captured:
+        _safe_error(UndefinedTable('relation "evaluation_v2.suites" does not exist'))
+
+    assert captured.value.status_code == 503
+    assert "迁移" in captured.value.detail
+    assert "暂不可用" not in captured.value.detail
+
+
+def test_safe_error_undefined_object_points_to_role_init():
+    """UndefinedObject（如 evaluation_v2_app 角色缺失）指向角色初始化。
+
+    2026-11-21 生产评测中心全链路 503 的根因即此场景，此前被兜成
+    「依赖服务暂时不可用」误导排障方向。
+    """
+    from psycopg2.errors import UndefinedObject
+
+    with pytest.raises(HTTPException) as captured:
+        _safe_error(UndefinedObject('role "evaluation_v2_app" does not exist'))
+
+    assert captured.value.status_code == 503
+    assert "角色" in captured.value.detail
+    assert "暂不可用" not in captured.value.detail
+
+
+def test_safe_error_connection_failure_keeps_actionable_message():
+    """连接失败仍是 503，但文案区分「数据库连不上」与「服务暂不可用」。"""
+    from psycopg2.errors import OperationalError as PgOperationalError
+
+    with pytest.raises(HTTPException) as captured:
+        _safe_error(PgOperationalError("connection refused"))
+
+    assert captured.value.status_code == 503
+    assert "连接失败" in captured.value.detail
+
+
+def test_safe_error_unknown_exception_keeps_503_fallback():
+    """真正的未知异常保留 503 兜底（fail-safe 不消失）。"""
+
+    class _WeirdError(Exception):
+        pass
+
+    with pytest.raises(HTTPException) as captured:
+        _safe_error(_WeirdError("boom"))
+
+    assert captured.value.status_code == 503
+    assert "暂不可用" in captured.value.detail
+
+
 def test_missing_run_case_report_is_non_retryable_not_found(monkeypatch):
     import backend.app.api.routes.evaluation_v2 as routes
     from backend.evaluation import storage

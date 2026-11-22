@@ -170,7 +170,7 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
             </select>
             {isRag ? <select aria-label="评测方式" value={mode} onChange={e => setMode(e.target.value)} className={ctl}>
               {Object.entries(MODE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select> : <p className="self-center text-xs text-text-muted">离线评测（按方案执行）</p>}
+            </select> : <p className="self-center text-xs text-text-muted" title="非 RAG 模块的 V2 运行按设计只做离线契约校验（不调模型、不出站）；SQL 在线生成评测请用 CLI 评测或发布门禁链路">离线契约评测（非 RAG 暂不支持在线生成，见提示）</p>}
             <button type="button" className={ctlPrimary} disabled={busy || !suiteId || (isRag && !kbId)} onClick={() => void start()}><Play size={13} className="mr-1 inline" aria-hidden="true" />开始运行</button>
           </div>
           <div className="mt-3 grid gap-3 lg:grid-cols-[1.2fr_1fr_1.2fr]">
