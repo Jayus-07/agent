@@ -229,6 +229,7 @@ jobs:
             backend/tests/customer_service/test_address_change_flow.py \
             backend/tests/customer_service/test_mall_cancel_sandbox_pg.py \
             backend/tests/customer_service/test_mall_order_create_sandbox_pg.py \
+            backend/tests/customer_service/test_handoff_repo.py \
             backend/tests/customer_service/test_cs_faq_pg.py \
             backend/tests/customer_service/test_points_flow.py \
             backend/tests/customer_service/test_coupon_flow.py \

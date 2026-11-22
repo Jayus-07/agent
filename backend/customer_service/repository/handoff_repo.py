@@ -114,6 +114,7 @@ class HandoffRepository:
         *,
         states: list[str] | None = None,
         tenant_id: str | None = None,
+        assigned_agent_id: str | None = None,
         limit: int = 50,
     ) -> list[CSHandoff]:
         """列出待接入队列（坐席工作台）。
@@ -124,6 +125,8 @@ class HandoffRepository:
                 避免老会话饿死）。
             tenant_id: 租户谓词（STOP CS-A P0-2）；None=跨租户（受信任
                 服务视图），JWT 通道必须传本租户。
+            assigned_agent_id: 追加「分配给该坐席」谓词（mine 队列用）；
+                缺省 None=不加，保持可认领队列语义。
 
         W2-1（2026-11-03）：缺省从「全部未关闭」收敛为「可认领」——
         实测共享库 16 条 human_active 残留（历史会话已关但 handoff 永未
@@ -139,6 +142,8 @@ class HandoffRepository:
             q = q.where(CSHandoff.handoff_state.in_(
                 ("waiting_human", "agent_offered"),
             ))
+        if assigned_agent_id:
+            q = q.where(CSHandoff.assigned_agent_id == assigned_agent_id)
         q = q.order_by(CSHandoff.updated_at).limit(limit)
         result = await self._s.execute(q)
         return list(result.scalars().all())
