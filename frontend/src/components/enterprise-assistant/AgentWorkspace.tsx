@@ -538,7 +538,7 @@ function HandoffPanel({ event, router }: { event: HandoffEvent; router: ReturnTy
       router.push(params.size ? `/travel?${params}` : '/travel')
     } else {
       try {
-        if (event.params.prefill_question) sessionStorage.setItem('cs_handoff_prefill', event.params.prefill_question)
+        if (event.params.prefill_question) sessionStorage.setItem('cs2-prefill', event.params.prefill_question)
         window.dispatchEvent(new CustomEvent('cs-drawer:open'))
       } catch {
         router.push('/customer-service')
