@@ -76,6 +76,18 @@ class PromptReleaseRepository:
             )
             return [dict(row) for row in result.mappings().all()]
 
+    async def list_all_releases(self, limit: int = 50) -> list[dict[str, Any]]:
+        """跨 Prompt 的发布评测列表（评测中心聚合视图用，按创建时间倒序）。"""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT * FROM ai.prompt_release_records "
+                    "ORDER BY created_at DESC LIMIT :limit"
+                ),
+                {"limit": int(limit)},
+            )
+            return [dict(row) for row in result.mappings().all()]
+
     async def mark_running(self, release_id: str, external_run_id: str) -> dict[str, Any]:
         async with self._session_factory() as session:
             result = await session.execute(

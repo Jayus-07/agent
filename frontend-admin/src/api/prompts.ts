@@ -189,6 +189,13 @@ export const promptsService = {
     ).then(result => result.items)
   },
 
+  /** 跨 Prompt 发布评测列表（评测中心「运行记录」聚合视图）。 */
+  listAllReleases(limit: number = 50): Promise<PromptReleaseRecord[]> {
+    return api<{ items: PromptReleaseRecord[] }>(
+      `${BASE}/releases/all?limit=${limit}`,
+    ).then(result => result.items)
+  },
+
   getRelease(key: string, releaseId: string): Promise<PromptReleaseRecord> {
     return api(`${BASE}/${encodeURIComponent(key)}/releases/${encodeURIComponent(releaseId)}`)
   },
