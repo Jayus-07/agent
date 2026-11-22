@@ -16,9 +16,11 @@ import {
 import { createIdempotencyKey, errMessage } from '@/api/client'
 import { listKbAuthority, type KbAuthorityItem } from '@/api/knowledge'
 import { promptsService, type PromptListItem, type PromptReleaseRecord } from '@/api/prompts'
+import { PROMPT_RELEASE_SUITE } from '@/config/promptRelease'
 import { atLeast } from '@/lib/auth'
 import { Badge, Card, ctl, ctlGhost, ctlPrimary, Empty, modeShort, MODE_LABELS, StatusBadge, TableWrap, Td, Th, timeShort, fmtCost } from './evalUi'
 import RunHistoryDetail from './RunHistoryDetail'
+import EvalRunDetailPanel from './EvalRunDetailPanel'
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'blocked'])
 const RUN_PAGE_SIZE = 10
@@ -47,6 +49,8 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
   const [relMode, setRelMode] = useState('self+ragas')
   const [expandedReleaseId, setExpandedReleaseId] = useState('')
   const [detailRunId, setDetailRunId] = useState('')
+  // 发布评测 / CLI 台账的逐题详情（读报告文件口径，与 V2 详情互斥）
+  const [detailEvalRun, setDetailEvalRun] = useState('')
   const [gateRunId, setGateRunId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -162,13 +166,17 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
 
   // 2026-11-22：从评测中心发起 Prompt 发布评测（复用发布门禁链路：候选
   // 版本经评测与审批后才能发布；SQL 类 prompt 在该链路上跑真实生成评测）。
+  // suite 按类别选择：RAG 类用真实存在的发布门禁 smoke 集（pr_smoke 从未
+  // 创建过，曾致 RAG 发布评测必然 FileNotFoundError）；SQL 类不依赖 suite
+  // （canonical 内置集），其他类别回落 eval_center 元数据标记。
+  const suiteForRelease = (key: string) => key.startsWith('rag.') ? PROMPT_RELEASE_SUITE : 'eval_center'
   const startRelease = async () => {
     setBusy(true); setError(''); setMessage('')
     try {
       if (!relKey.trim()) throw new Error('请选择要评测的 Prompt。')
       if (!/^\d+$/.test(relVersion.trim())) throw new Error('请填写要评测的候选版本号（正整数）。')
       const record = await promptsService.createRelease(relKey.trim(), Number(relVersion.trim()), {
-        suite: 'eval_center',
+        suite: suiteForRelease(relKey.trim()),
         evaluation_mode: relMode as 'offline' | 'semantic' | 'ragas' | 'self+ragas',
         executor: 'local',
         dataset_version: { source: 'eval-center', evaluation_mode: relMode },
@@ -235,6 +243,8 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
           </div>
           <p className="mt-3 text-[11px] text-text-muted">
             SQL 类 Prompt：门禁按 canonical 15 条题集做「候选 vs 现网」双跑对比（候选不比现网差才放行）。
+            RAG 类 Prompt：门禁按 desktop_upload_smoke 8 条短集跑分层阈值门（smoke ≥95%）。
+            其他类别暂无专属评测模块，将回落 RAG 门禁口径并留痕。
           </p>
         </> : optionsQuery.isPending ? <Empty text="正在读取可用数据集和运行配置…" /> : <>
           <div className="grid gap-3 lg:grid-cols-[2fr_1.4fr_auto]">
@@ -266,7 +276,7 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
         </>}
       </Card>
     </section> : <section id="evaluation-run-history" role="tabpanel" aria-label="运行记录" className="space-y-4">
-      {detailRunId ? <RunHistoryDetail key={detailRunId} runId={detailRunId} onBack={() => setDetailRunId('')} onGoCompare={onGoCompare} /> : <Card
+      {detailRunId ? <RunHistoryDetail key={detailRunId} runId={detailRunId} onBack={() => setDetailRunId('')} onGoCompare={onGoCompare} /> : detailEvalRun ? <EvalRunDetailPanel key={detailEvalRun} runId={detailEvalRun} onClose={() => setDetailEvalRun('')} /> : <Card
         title="运行记录"
         subtitle="按创建时间倒序；覆盖 V2 方案评测、Prompt 发布评测与 CLI 台账三类来源。"
         actions={<button type="button" className={ctlGhost} disabled={(historySource === 'v2' && runsQuery.isFetching) || (historySource === 'release' && releasesQuery.isFetching) || (historySource === 'ledger' && ledgerQuery.isFetching)} onClick={() => { if (historySource === 'v2') void runsQuery.refetch(); else if (historySource === 'release') void releasesQuery.refetch(); else void ledgerQuery.refetch() }}><RotateCw size={12} className="mr-1 inline" aria-hidden="true" />刷新</button>}
@@ -282,11 +292,13 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
           releases={releases}
           expandedId={expandedReleaseId}
           onToggle={id => setExpandedReleaseId(current => current === id ? '' : id)}
+          onOpenRunDetail={runId => setDetailEvalRun(runId)}
           onRetryRefresh={() => void releasesQuery.refetch()}
         /> : historySource === 'ledger' ? <LedgerRunsTable
           loading={ledgerQuery.isPending}
           error={ledgerQuery.isError ? errMessage(ledgerQuery.error) : ''}
           runs={ledgerRuns}
+          onOpenRunDetail={runId => setDetailEvalRun(runId)}
         /> : <>
         {runsQuery.isPending ? <Empty text="正在读取运行记录…" /> : runsQuery.isError ? <div className="space-y-2 py-5 text-center">
           <p role="alert" className="text-xs text-red-700">{errMessage(runsQuery.error)}</p>
@@ -338,12 +350,13 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
 
 // ── 发布评测表格（Prompt 发布门禁记录，含 SQL 双跑）──────────────
 
-function ReleaseRunsTable({ loading, error, releases, expandedId, onToggle, onRetryRefresh }: {
+function ReleaseRunsTable({ loading, error, releases, expandedId, onToggle, onOpenRunDetail, onRetryRefresh }: {
   loading: boolean
   error: string
   releases: PromptReleaseRecord[]
   expandedId: string
   onToggle: (id: string) => void
+  onOpenRunDetail: (runId: string) => void
   onRetryRefresh: () => void
 }) {
   const releaseRate = (record: PromptReleaseRecord, field: 'candidate_pass_rate' | 'current_pass_rate') => {
@@ -387,6 +400,7 @@ function ReleaseRunsTable({ loading, error, releases, expandedId, onToggle, onRe
           <Td>{timeShort(record.created_at || record.updated_at || null)}</Td>
           <Td end>
             <button type="button" className={ctlGhost} onClick={() => onToggle(record.release_id)}>{expandedId === record.release_id ? '收起' : '门禁详情'}</button>
+            {!!record.eval_run_id && <button type="button" className={ctlGhost} onClick={() => onOpenRunDetail(record.eval_run_id)}>逐题详情</button>}
           </Td>
         </tr>
         {expandedId === record.release_id && <tr><td colSpan={9} className="bg-bg-elevated/50 p-3">
@@ -422,10 +436,11 @@ function ReleaseRunsTable({ loading, error, releases, expandedId, onToggle, onRe
 
 // ── CLI 台账表格（ai.eval_run_records）────────────────────────
 
-function LedgerRunsTable({ loading, error, runs }: {
+function LedgerRunsTable({ loading, error, runs, onOpenRunDetail }: {
   loading: boolean
   error: string
   runs: Awaited<ReturnType<typeof evaluationService.listRuns>>
+  onOpenRunDetail: (runId: string) => void
 }) {
   if (loading) return <Empty text="正在读取 CLI 台账…" />
   if (error) return <div className="space-y-2 py-5 text-center">
@@ -433,7 +448,7 @@ function LedgerRunsTable({ loading, error, runs }: {
   </div>
   if (runs.length === 0) return <Empty text="台账暂无记录（CLI 评测与线上采样写入此台账）。" />
   return <TableWrap minWidth={900}>
-    <thead className="bg-bg-elevated"><tr><Th>Run</Th><Th>模块</Th><Th>状态</Th><Th>通过率</Th><Th>样本</Th><Th>数据集版本</Th><Th>触发</Th><Th>时间</Th></tr></thead>
+    <thead className="bg-bg-elevated"><tr><Th>Run</Th><Th>模块</Th><Th>状态</Th><Th>通过率</Th><Th>样本</Th><Th>数据集版本</Th><Th>触发</Th><Th>时间</Th><Th end>操作</Th></tr></thead>
     <tbody className="divide-y divide-border-subtle">
       {runs.map(run => <tr key={run.run_id}>
         <Td mono>{run.run_id.slice(0, 16)}</Td>
@@ -444,6 +459,7 @@ function LedgerRunsTable({ loading, error, runs }: {
         <Td>{run.dataset_version || '—'}</Td>
         <Td>{run.trigger || run.triggered_by || '—'}</Td>
         <Td>{timeShort(run.timestamp)}</Td>
+        <Td end><button type="button" className={ctlGhost} onClick={() => onOpenRunDetail(run.run_id)}>评测详情</button></Td>
       </tr>)}
     </tbody>
   </TableWrap>
