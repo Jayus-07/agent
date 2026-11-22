@@ -38,6 +38,7 @@ from backend.config.database import (
     MEMORY_DB_CONFIG,
     pooled_pg_target,
 )
+from backend.shared.sql_obs import install_sql_observation
 
 _ENGINES: dict[str, Engine] = {}
 _ENGINES_LOCK = threading.Lock()
@@ -63,7 +64,7 @@ def _make_engine(cfg: dict) -> Engine:
         port=target["port"],
         database=target["dbname"],
     )
-    return create_engine(
+    engine = create_engine(
         url,
         pool_size=DB_POOL_MIN_CONN,
         max_overflow=max(DB_POOL_MAX_CONN - DB_POOL_MIN_CONN, 0),
@@ -76,6 +77,9 @@ def _make_engine(cfg: dict) -> Engine:
             "application_name": "agent-app",
         },
     )
+    # 语句级观测（慢查询/异常）按库名归因，与日志里的 [Access] trace_id 对上
+    install_sql_observation(engine, engine_name=f"pooled-{cfg.get('dbname', 'unknown')}")
+    return engine
 
 
 def _engine_key(cfg: dict) -> str:
