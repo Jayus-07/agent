@@ -172,3 +172,29 @@ def test_catalog_filters_special_and_tags_probe_datasets(governance):
     single = client.get("/api/evaluation/datasets", params={"module": "sql_v2"})
     assert single.status_code == 200
     assert [item["module"] for item in single.json()["items"]] == ["sql_v2"]
+
+
+def test_dataset_samples_returns_redacted_summaries(governance):
+    """评测集样例只读视图：输入/期望摘要 + 数量上限（批次 1.1，各域可看"测什么题"）。"""
+    _module, client = governance
+    response = client.get("/api/evaluation/datasets/rag/samples", params={"limit": 5})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dataset_id"] == "rag"
+    assert body["total"] == 1
+    assert len(body["samples"]) == 1
+    sample = body["samples"][0]
+    assert sample["id"] == "R-001"
+    assert sample["input_summary"] == "退货需要几天？"
+    assert sample["expected_summary"] == "七天"
+    assert sample["tier"] == "smoke"
+
+
+def test_dataset_samples_rejects_bad_identifier(governance):
+    """审计 #32 同款：路径穿越/非法字符在路由或校验层被拒（404/422 均为拒绝）；未知名 404。"""
+    _module, client = governance
+    for bad in ("..%2Fsecret", "bad%20name"):
+        assert client.get(f"/api/evaluation/datasets/{bad}/samples").status_code in (404, 422)
+    assert client.get("/api/evaluation/datasets/nonexistent/samples").status_code == 404
+    assert client.get("/api/evaluation/datasets/rag/samples", params={"limit": 99}).status_code == 422
+    assert client.get("/api/evaluation/datasets/rag/samples", params={"limit": 0}).status_code == 422

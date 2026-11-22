@@ -44,14 +44,21 @@ async function cleanup(root: ReturnType<typeof createRoot>, container: HTMLEleme
   vi.restoreAllMocks()
 }
 
-it('发起评测默认渲染 Prompt 发布评测，数据集方案入口已冻结', async () => {
+function clickText(container: HTMLElement, text: string, exact = false) {
+  const button = Array.from(container.querySelectorAll('button')).find(b => exact ? b.textContent?.trim() === text : b.textContent?.includes(text))
+  if (!button) throw new Error(`button "${text}" not found`)
+  return act(async () => { button.click() })
+}
+
+it('发起评测默认渲染确认单，数据集方案入口冻结', async () => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
   vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([])
   vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([] as unknown as Awaited<ReturnType<typeof evaluationService.listSuites>>)
   const { root, container, queryClient } = await mountRunsTab()
   try {
     expect(container.querySelector('[aria-label="发布评测 Prompt"]')).not.toBeNull()
-    // 批次 2：V2 方案评测发起入口冻结，不再出现数据集选择与对应子 tab
+    expect(container.querySelector('[aria-label="发起原因（可选）"]')).not.toBeNull()
     expect(container.querySelector('[aria-label="数据集"]')).toBeNull()
     expect(container.textContent).not.toContain('数据集方案评测')
     expect(container.textContent).not.toContain('选择已发布数据集方案')
@@ -60,14 +67,15 @@ it('发起评测默认渲染 Prompt 发布评测，数据集方案入口已冻�
   }
 })
 
-it('SQL Prompt 锁定双跑文案、不出现评测方式选择；RAG 保留四选', async () => {
+it('SQL Prompt 展示自动推导口径与锁定文案，提交 offline + 发起原因进审计', async () => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
   vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([])
   vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([] as unknown as Awaited<ReturnType<typeof evaluationService.listSuites>>)
   const { promptsService } = await import('@/api/prompts')
   vi.spyOn(promptsService, 'list').mockResolvedValue([
-    { key: 'sql.generator', name: 'SQL 生成 Prompt' },
-    { key: 'rag.qa', name: 'RAG 问答 Prompt' },
+    { key: 'sql.generator', name: 'SQL 生成 Prompt', latest_version_number: 3 },
+    { key: 'rag.qa', name: 'RAG 问答 Prompt', latest_version_number: 1 },
   ] as Awaited<ReturnType<typeof promptsService.list>>)
   const create = vi.spyOn(promptsService, 'createRelease').mockResolvedValue({
     release_id: 'rel-new-1234567890', status: 'pending',
@@ -76,26 +84,30 @@ it('SQL Prompt 锁定双跑文案、不出现评测方式选择；RAG 保留四�
   try {
     const keySelect = container.querySelector('[aria-label="发布评测 Prompt"]') as HTMLSelectElement
     const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
-    // RAG：四选评测方式真实生效（默认 self+ragas）
+    // RAG：四选评测方式真实生效
     await act(async () => { selectSetter.call(keySelect, 'rag.qa'); keySelect.dispatchEvent(new Event('change', { bubbles: true })) })
     expect(container.querySelector('[aria-label="发布评测方式"]')).not.toBeNull()
-    expect((container.querySelector('[aria-label="发布评测方式"]') as HTMLSelectElement).value).toBe('self+ragas')
-    // SQL：方式选择不出现，显示双跑锁定文案
+    // SQL：方式锁定 + 确认单摘要条
     await act(async () => { selectSetter.call(keySelect, 'sql.generator'); keySelect.dispatchEvent(new Event('change', { bubbles: true })) })
     expect(container.querySelector('[aria-label="发布评测方式"]')).toBeNull()
     expect(container.textContent).toContain('SQL 走 canonical 双跑对比门')
+    const brief = container.querySelector('[aria-label="自动推导口径"]')
+    expect(brief).not.toBeNull()
+    expect(brief!.textContent).toContain('对比基线：现网 v3')
+    expect(brief!.textContent).toContain('sql_canonical')
     const versionInput = container.querySelector('[aria-label="发布评测候选版本"]') as HTMLInputElement
     const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
-    await act(async () => { inputSetter.call(versionInput, '2'); versionInput.dispatchEvent(new Event('input', { bubbles: true })) })
-    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('开始评测'))!.click() })
-    // SQL 固定提交 offline（与 UI 锁定文案一致），suite 标记 canonical
-    expect(create).toHaveBeenCalledWith('sql.generator', 2, expect.objectContaining({
+    await act(async () => { inputSetter.call(versionInput, '4'); versionInput.dispatchEvent(new Event('input', { bubbles: true })) })
+    const noteInput = container.querySelector('[aria-label="发起原因（可选）"]') as HTMLInputElement
+    await act(async () => { inputSetter.call(noteInput, '修复退款率口径回归'); noteInput.dispatchEvent(new Event('input', { bubbles: true })) })
+    await clickText(container, '开始评测')
+    expect(create).toHaveBeenCalledWith('sql.generator', 4, expect.objectContaining({
       executor: 'local', evaluation_mode: 'offline', suite: 'sql_canonical',
+      dataset_version: expect.objectContaining({ note: '修复退款率口径回归' }),
     }))
-    // 提交成功后自动切到运行记录的发布评测来源（G 项引导）
+    // 提交成功自动切执行记录（引导项）
     await flushQueries()
     expect((container.querySelectorAll('button[role="tab"]')[1] as HTMLButtonElement).getAttribute('aria-selected')).toBe('true')
-    expect(container.textContent).toContain('该域暂无发布评测记录')
   } finally {
     await cleanup(root, container, queryClient)
   }
@@ -104,6 +116,7 @@ it('SQL Prompt 锁定双跑文案、不出现评测方式选择；RAG 保留四�
 it('domain 过滤：SQL 域只显示 sql.* Prompt，全部域按域分组渲染', async () => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
   vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([])
   vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([] as unknown as Awaited<ReturnType<typeof evaluationService.listSuites>>)
   const { promptsService } = await import('@/api/prompts')
   vi.spyOn(promptsService, 'list').mockResolvedValue([
@@ -123,85 +136,115 @@ it('domain 过滤：SQL 域只显示 sql.* Prompt，全部域按域分组渲染'
   }
 })
 
-it('发布评测运行记录按域过滤并显示域徽标', async () => {
+it('执行记录统一列表：三来源混排按时间倒序 + 来源徽标', async () => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
-  vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([] as unknown as Awaited<ReturnType<typeof evaluationService.listSuites>>)
+  const v2Run = {
+    run_id: 'run-v2-1', suite_version_id: 'suite-1', suite_name: '客服基线', suite_key: 'cs-baseline', suite_version: '2',
+    job_status: 'completed', total_cases: 4, completed_cases: 4, passed_cases: 2, evaluation_mode: 'offline',
+    module: 'cs', prompt_versions: {}, created_by: 'user:3', created_at: '2026-11-22T08:00:00Z', finished_at: '2026-11-22T08:01:00Z',
+  } as Awaited<ReturnType<typeof evaluationService.listV2Runs>>[number]
+  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([v2Run])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([
+    { run_id: '2026-11-22T04-00', module: 'sql', pass_rate: 0.4, case_count: 15, status: 'completed', timestamp: '2026-11-22T12:05:00Z', trigger: 'manual' },
+    { run_id: '2026-11-22T07-11', module: 'rag', pass_rate: 0.0, case_count: 8, status: 'completed', timestamp: '2026-11-22T15:13:00Z', trigger: 'prompt_publish' },
+  ] as Awaited<ReturnType<typeof evaluationService.listRuns>>)
   const { promptsService } = await import('@/api/prompts')
   vi.spyOn(promptsService, 'listAllReleases').mockResolvedValue([
     {
-      release_id: 'rel-sql-1', prompt_key: 'sql.generator', version: 2,
-      target_env: 'production', status: 'passed', eval_suite: 'sql_canonical_r3',
-      executor: 'local', dataset_provenance: {}, metrics: { candidate_pass_rate: 0.4, current_pass_rate: 0.4 },
+      release_id: 'rel-b4677e33', prompt_key: 'sql.generator', version: 4,
+      target_env: 'production', status: 'passed', eval_suite: 'sql_canonical',
+      executor: 'local', dataset_provenance: {}, metrics: { candidate_pass_rate: 0.533, current_pass_rate: 0.4 },
       failure_reason: '', approved_by: 'user:3', published_by: '',
-      created_at: '2026-11-22T03:16:00Z',
+      created_at: '2026-11-22T13:47:00Z',
     },
     {
-      release_id: 'rel-rag-1', prompt_key: 'rag.qa', version: 2,
+      release_id: 'rel-rag-run', prompt_key: 'rag.qa', version: 2,
       target_env: 'production', status: 'running', eval_suite: 'desktop_upload_smoke',
       executor: 'local', dataset_provenance: {}, metrics: {},
       failure_reason: '', approved_by: 'user:3', published_by: '',
-      created_at: '2026-11-22T07:11:00Z',
+      created_at: '2026-11-22T15:11:00Z',
+    },
+  ] as never)
+  const { root, container, queryClient } = await mountRunsTab()
+  try {
+    await clickText(container, '执行记录')
+    await flushQueries()
+    // 三来源徽标全部出现
+    expect(container.textContent).toContain('发布评测')
+    expect(container.textContent).toContain('CLI 台账')
+    expect(container.textContent).toContain('V2 运行')
+    // 时间倒序：15:11 的 rag.qa release 排在 13:47 的 sql release 之前
+    const body = container.querySelector('tbody')
+    const rowTexts = Array.from(body?.querySelectorAll('tr') ?? []).map(tr => tr.textContent || '')
+    const ragIdx = rowTexts.findIndex(t => t.includes('rag.qa') && t.includes('desktop_upload_smoke'))
+    const sqlIdx = rowTexts.findIndex(t => t.includes('sql.generator') && t.includes('sql_canonical'))
+    expect(ragIdx).toBeGreaterThanOrEqual(0)
+    expect(sqlIdx).toBeGreaterThan(ragIdx)
+  } finally {
+    await cleanup(root, container, queryClient)
+  }
+})
+
+it('SQL 域过滤：执行记录只显示 sql.* 行', async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([
+    { run_id: '2026-11-22T04-00', module: 'sql', pass_rate: 0.4, case_count: 15, status: 'completed', timestamp: '2026-11-22T12:05:00Z', trigger: 'manual' },
+    { run_id: '2026-11-22T07-11', module: 'rag', pass_rate: 0.0, case_count: 8, status: 'completed', timestamp: '2026-11-22T15:13:00Z', trigger: 'prompt_publish' },
+  ] as Awaited<ReturnType<typeof evaluationService.listRuns>>)
+  const { promptsService } = await import('@/api/prompts')
+  vi.spyOn(promptsService, 'listAllReleases').mockResolvedValue([
+    {
+      release_id: 'rel-b4677e33', prompt_key: 'sql.generator', version: 4,
+      target_env: 'production', status: 'passed', eval_suite: 'sql_canonical',
+      executor: 'local', dataset_provenance: {}, metrics: { candidate_pass_rate: 0.533, current_pass_rate: 0.4 },
+      failure_reason: '', approved_by: 'user:3', published_by: '',
+      created_at: '2026-11-22T13:47:00Z',
+    },
+    {
+      release_id: 'rel-rag-run', prompt_key: 'rag.qa', version: 2,
+      target_env: 'production', status: 'running', eval_suite: 'desktop_upload_smoke',
+      executor: 'local', dataset_provenance: {}, metrics: {},
+      failure_reason: '', approved_by: 'user:3', published_by: '',
+      created_at: '2026-11-22T15:11:00Z',
     },
   ] as never)
   const { root, container, queryClient } = await mountRunsTab({ domain: 'sql' })
   try {
-    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('运行记录'))!.click() })
-    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('发布评测'))!.click() })
+    await clickText(container, '执行记录')
     await flushQueries()
+    // sql release 与 sql 台账行可见；rag 来源行被域过滤排除
     expect(container.textContent).toContain('sql.generator')
+    expect(container.textContent).toContain('sql_canonical')
+    expect(container.textContent).toContain('40.0% · 15 题')
     expect(container.textContent).not.toContain('rag.qa')
-    expect(container.textContent).toContain('SQL')
-    expect(container.textContent).toContain('候选 40.0% · 现网 40.0%')
+    expect(container.textContent).not.toContain('0.0% · 8 题')
   } finally {
     await cleanup(root, container, queryClient)
   }
 })
 
-it('门禁详情人类可读：ragas_applicable 显示不适用，candidate_regression 展开对比摘要', async () => {
+it('门禁详情行内展开人类可读，失败徽标提示原因', async () => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
   vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
-  vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([] as unknown as Awaited<ReturnType<typeof evaluationService.listSuites>>)
-  const { promptsService } = await import('@/api/prompts')
-  vi.spyOn(promptsService, 'listAllReleases').mockResolvedValue([{
-    release_id: 'rel-cbc7e63de348', prompt_key: 'sql.generator', version: 2,
-    target_env: 'production', status: 'passed', eval_suite: 'sql_canonical_r3',
-    executor: 'local', dataset_provenance: {}, metrics: {
-      candidate_pass_rate: 0.4, current_pass_rate: 0.4,
-      gate: {
-        tier_pass: true, sample_pass: true, tier_gate_mode: 'display_only',
-        ragas_applicable: false, absolute_floor_pass: true,
-        candidate_regression: { threshold: 0.05, regression_pass: true, current_pass_rate: 0.4, candidate_pass_rate: 0.4 },
-        candidate_regression_pass: true, blocked_rules: [],
-      },
-    },
-    failure_reason: '', approved_by: 'user:3', published_by: '',
-    created_at: '2026-11-22T03:16:00Z',
-  } as never])
-  const { root, container, queryClient } = await mountRunsTab()
-  try {
-    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('运行记录'))!.click() })
-    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('发布评测'))!.click() })
-    await flushQueries()
-    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('门禁详情'))!.click() })
-    expect(container.textContent).toContain('不适用（未接入 RAGAS）')
-    expect(container.textContent).toContain('候选 40.0% vs 现网 40.0%')
-    expect(container.textContent).toContain('回归通过')
-    // 字符串值不再带 JSON 引号
-    expect(container.textContent).toContain('tier_gate_mode: display_only')
-    expect(container.textContent).not.toContain('"display_only"')
-    expect(container.textContent).not.toContain('[object Object]')
-  } finally {
-    await cleanup(root, container, queryClient)
-  }
-})
-
-it('失败发布评测在状态徽标提示失败原因（含 CLI 本地执行失败区分）', async () => {
-  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
-  vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([] as unknown as Awaited<ReturnType<typeof evaluationService.listSuites>>)
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([])
   const { promptsService } = await import('@/api/prompts')
   vi.spyOn(promptsService, 'listAllReleases').mockResolvedValue([
+    {
+      release_id: 'rel-cbc7e63de348', prompt_key: 'sql.generator', version: 2,
+      target_env: 'production', status: 'passed', eval_suite: 'sql_canonical_r3',
+      executor: 'local', dataset_provenance: {}, metrics: {
+        candidate_pass_rate: 0.4, current_pass_rate: 0.4,
+        gate: {
+          tier_pass: true, sample_pass: true, tier_gate_mode: 'display_only',
+          ragas_applicable: false, absolute_floor_pass: true,
+          candidate_regression: { threshold: 0.05, regression_pass: true, current_pass_rate: 0.4, candidate_pass_rate: 0.4 },
+          candidate_regression_pass: true, blocked_rules: [],
+        },
+      },
+      failure_reason: '', approved_by: 'user:3', published_by: '',
+      created_at: '2026-11-22T03:16:00Z',
+    },
     {
       release_id: 'rel-local-fail', prompt_key: 'sql.generator', version: 3,
       target_env: 'production', status: 'failed', eval_suite: 'sql_canonical',
@@ -211,14 +254,68 @@ it('失败发布评测在状态徽标提示失败原因（含 CLI 本地执行�
       created_at: '2026-11-22T10:07:00Z',
     },
   ] as never)
-  const { root, container, queryClient } = await mountRunsTab({ domain: 'sql' })
+  const { root, container, queryClient } = await mountRunsTab()
   try {
-    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('运行记录'))!.click() })
-    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('发布评测'))!.click() })
+    await clickText(container, '执行记录')
     await flushQueries()
-    const badge = container.querySelector('span[title*="评测执行超时"]')
-    expect(badge).not.toBeNull()
-    expect(container.textContent).toContain('失败')
+    // 精确点 sql_canonical_r3 行（有 gate 数据的那条）的门禁详情
+    const gateBtn = Array.from(container.querySelectorAll('tr'))
+      .find(tr => tr.textContent?.includes('sql_canonical_r3'))
+      ?.querySelector('button')
+    expect(gateBtn).not.toBeNull()
+    await act(async () => { gateBtn!.click() })
+    expect(container.textContent).toContain('不适用（未接入 RAGAS）')
+    expect(container.textContent).toContain('候选 40.0% vs 现网 40.0%')
+    expect(container.textContent).toContain('回归通过')
+    expect(container.textContent).toContain('tier_gate_mode: display_only')
+    expect(container.textContent).not.toContain('"display_only"')
+    expect(container.textContent).not.toContain('[object Object]')
+    // 失败行 title 提示失败原因
+    expect(container.querySelector('span[title*="评测执行超时"]')).not.toBeNull()
+  } finally {
+    await cleanup(root, container, queryClient)
+  }
+})
+
+it('CLI 台账行点逐题打开右侧抽屉，可关闭返回列表', async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([
+    { run_id: '2026-11-22T04-00', module: 'sql', pass_rate: 0.4, case_count: 15, status: 'completed', timestamp: '2026-11-22T12:05:00Z', trigger: 'manual' },
+  ] as Awaited<ReturnType<typeof evaluationService.listRuns>>)
+  vi.spyOn(evaluationService, 'getRun').mockResolvedValue({
+    run_id: '2026-11-22T04-00',
+    report: {
+      timestamp: '2026-11-22T12:05:00Z', module: 'sql', mode: 'live', smoke: false, tier: 'default',
+      summaries: [{ module: 'sql', total: 15, passed: 6, failed: 9, errors: 0, skipped: 0, pass_rate: 0.4, metrics: {} }],
+      results: [
+        { case_id: 'SC-001', module: 'sql', status: 'fail', expected: { gold_sql: 'SELECT 1' }, actual: { sql: 'SELECT 2' }, metrics: { execution_match: 0 }, duration_ms: 100, error_msg: '生成 SQL 结果集与 gold_sql 不一致', error_stage: null },
+        { case_id: 'SC-004', module: 'sql', status: 'pass', expected: {}, actual: {}, metrics: {}, duration_ms: 50, error_msg: null, error_stage: null },
+      ],
+      tier_summaries: [],
+      metadata: {},
+      prompt_versions: {},
+    },
+    meta: {},
+    run_status: { status: 'completed' },
+  } as Awaited<ReturnType<typeof evaluationService.getRun>>)
+  const { root, container, queryClient } = await mountRunsTab()
+  try {
+    await clickText(container, '执行记录')
+    await flushQueries()
+    await clickText(container, '逐题')
+    await flushQueries()
+    const drawer = container.querySelector('[role="dialog"]')
+    expect(drawer).not.toBeNull()
+    expect(drawer?.textContent).toContain('评测详情')
+    expect(drawer?.textContent).toContain('SC-001')
+    expect(drawer?.textContent).toContain('6/15 通过')
+    // 点击抽屉遮罩关闭（天然返回列表）
+    const overlay = Array.from(container.querySelectorAll('button')).find(b => b.getAttribute('aria-label') === '关闭详情抽屉')
+    expect(overlay).not.toBeNull()
+    await act(async () => { overlay!.click() })
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(container.textContent).toContain('执行记录')
   } finally {
     await cleanup(root, container, queryClient)
   }
@@ -230,10 +327,10 @@ it('展示线上采样与 Gate 裁决，并提交最新 PASS 的 Gate 审批', a
     run_id: 'run-online-1', suite_version_id: 'suite-1', suite_name: '线上评测', suite_key: 'online-suite', suite_version: '1',
     job_status: 'completed', source: 'online', gate_verdict: 'PASS', gate_reason: [{ metric: 'pass_rate', value: 1 }],
     total_cases: 1, completed_cases: 1, passed_cases: 1, evaluation_mode: 'offline', cost_amount: 0,
-    started_at: null, finished_at: null,
+    started_at: null, finished_at: null, created_at: '2026-11-22T09:00:00Z',
   } as Awaited<ReturnType<typeof evaluationService.listV2Runs>>[number]
   vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([run])
-  vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([])
   vi.spyOn(evaluationService, 'getV2Gate').mockResolvedValue({
     run_id: run.run_id, job_status: 'completed', verdict: 'PASS', reasons: [],
     decisions: [{ decision_id: 'gate-decision-1', run_id: run.run_id, policy_hash: 'hash', verdict: 'PASS', reasons_json: [], decided_by: 'admin', decided_at: '2026-11-05T00:00:00Z' }],
@@ -245,15 +342,11 @@ it('展示线上采样与 Gate 裁决，并提交最新 PASS 的 Gate 审批', a
   })
   const { root, container, queryClient } = await mountRunsTab()
   try {
-    const historyTab = Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="tab"]')).find(button => button.textContent?.includes('运行记录'))
-    await act(async () => { historyTab!.click() })
+    await clickText(container, '执行记录')
     await flushQueries()
     expect(container.textContent).toContain('线上采样')
     expect(container.textContent).toContain('PASS')
-
-    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('Gate 审批'))
-    expect(open).toBeDefined()
-    await act(async () => { open!.click() })
+    await clickText(container, 'Gate 审批')
     expect(evaluationService.getV2Gate).toHaveBeenCalledWith(run.run_id)
 
     const reference = container.querySelector('[aria-label="Gate 发布引用"]') as HTMLInputElement
@@ -276,16 +369,17 @@ it('展示线上采样与 Gate 裁决，并提交最新 PASS 的 Gate 审批', a
   }
 })
 
-it('运行记录进入详情页面，单条用例查看打开可关闭的右侧抽屉', async () => {
+it('运行记录进入 V2 详情页，单条用例查看打开可关闭的右侧抽屉', async () => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
   const run = {
     run_id: 'run-detail-1', suite_version_id: 'suite-1', suite_name: '客服基线', suite_key: 'cs-baseline', suite_version: '2',
     job_status: 'completed', total_cases: 1, completed_cases: 1, passed_cases: 0, evaluation_mode: null,
     snapshot_json: { evaluation_mode: 'semantic' },
     cost_amount: '0.01', cost_currency: 'USD', started_at: '2026-11-12T01:00:00Z', finished_at: '2026-11-12T01:00:03Z',
+    created_at: '2026-11-12T01:00:00Z', module: 'cs', prompt_versions: {},
   } as Awaited<ReturnType<typeof evaluationService.listV2Runs>>[number]
   vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([run])
-  vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([])
   vi.spyOn(evaluationService, 'getV2Run').mockResolvedValue({ run, fingerprint: { runner: 'eval-v2', generation_model: 'doubao' } })
   vi.spyOn(evaluationService, 'listV2RunResults').mockResolvedValue([{
     result_id: 'result-1', case_id: 'case-1', case_revision: 3, status: 'fail', scores: { overall: 0.4 }, failure_stage: 'answer_quality', latency_ms: 230,
@@ -308,8 +402,7 @@ it('运行记录进入详情页面，单条用例查看打开可关闭的右侧�
 
   const { root, container, queryClient } = await mountRunsTab()
   try {
-    const historyTab = Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="tab"]')).find(button => button.textContent?.includes('运行记录'))
-    await act(async () => { historyTab!.click() })
+    await clickText(container, '执行记录')
     await flushQueries()
     const openRun = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.trim() === '运行详情')
     expect(openRun).toBeDefined()
