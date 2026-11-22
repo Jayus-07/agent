@@ -5,7 +5,7 @@
  *
  * 从 BudgetStatusBar 抽出的取数逻辑：常规 60s 轮询，任一窗口用量 ≥80%
  * 收紧到 15s；tone 变为 blocked 时经 onBlockedChange 上抛（调用方借此
- * 禁用输入）。展示组件见 BudgetRing（输入框内圆圈指示器）。
+ * 禁用输入）。
  */
 import { useEffect, useMemo, useState } from "react";
 import { budgetTone, getBudgetMe, type BudgetStatus } from "@/api/budgets";

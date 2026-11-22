@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.app.api.deps import OperatorIdentity, resolve_operator_role
+from backend.app.api.deps import OperatorIdentity, is_platform_admin, resolve_operator_role
 from backend.config.settings import PROMPT_EVAL_EXECUTOR
 from backend.evaluation.mode import resolve_evaluation_mode
 from backend.prompts.registry import PROMPT_REGISTRY
@@ -212,6 +212,24 @@ async def create_release(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/releases/all")
+async def list_all_releases(
+    limit: int = 50,
+    operator: OperatorIdentity = Depends(resolve_operator_role),
+):
+    """跨 Prompt 的发布评测列表（评测中心「运行记录」聚合视图）。
+
+    2026-11-22：评测中心此前只读 V2 运行表，发布门禁评测（含 SQL 双跑）
+    在管理端无处可见。此端点按创建时间倒序返回全部 release 记录，前端
+    与 V2 runs / CLI 台账聚合展示。权限：publish 层面的敏感数据仅摘要
+    返回（metrics/gate 全量），逐 key 的 read 权限在 Prompt 详情页沿用。
+    """
+    if not is_platform_admin(operator.role):
+        raise HTTPException(403, "Only platform admin can list all releases")
+    records = await get_release_service().list_all_releases(limit=max(1, min(limit, 200)))
+    return {"items": [_to_dict(record) for record in records]}
 
 
 @router.get("/{key}/releases")

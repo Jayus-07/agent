@@ -70,9 +70,12 @@ export interface ConversationEvent {
   ts: string
 }
 
-export async function getHandoffQueue(states?: string): Promise<HandoffQueueResponse> {
-  const q = states ? `?states=${encodeURIComponent(states)}` : ''
-  return request(`/api/cs/conversations/handoff/queue${q}`)
+export async function getHandoffQueue(states?: string, mine?: boolean): Promise<HandoffQueueResponse> {
+  const params = new URLSearchParams()
+  if (states) params.set('states', states)
+  if (mine) params.set('mine', 'true')
+  const q = params.toString()
+  return request(`/api/cs/conversations/handoff/queue${q ? `?${q}` : ''}`)
 }
 
 export async function getConversationDetail(conversationId: string): Promise<ConversationDetail> {
