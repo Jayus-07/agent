@@ -15,6 +15,8 @@
 - **批次停止状态**：RunGuard 的取消、deadline、预算和 token 熔断原因会使运行判为 `INVALID_*`；部分样本碰巧达到分数线时也不能以 `PASS` 作为完整评测证据。
 - **样本校验**：模块取值与 `ModuleKind / MODULE_KINDS` 同源；Planner 另要求每条样本有 capability、正反向约束、步骤范围及完整 DAG 依赖边。其它模块仍须由各自 Runner 和模块级契约测试验证，通用样本校验通过不代表 Live 能力已接通。
 - **Planner Live**：评测入口绕过计划缓存，输出必须有节点字段、授权 capability 和有效 DAG；期望能力、依赖边、步骤数精确匹配。模型输出契约失败是质量 `FAIL`；Provider 降级、预算/上下文不足、执行异常或 Live 样本跳过会使该次 run `INVALID`，不计入模型通过率。
+- **两套运行记录体系（现状说明，2026-11-22）**：管理端评测中心「运行记录」读 V2 表（`evaluation_v2.eval_runs`，schema 隔离）；CLI 评测（含发布门禁 local executor、生产口径对比台账）写 `ai.eval_run_records`（`backend/evaluation/storage.py`），目前仅首页「最近评测通过率」卡片消费。两套记录暂未统一，互不回填；排查一次评测时按发起入口确定查哪套：管理端发起 → V2 表；CLI/发布门禁 → `ai.eval_run_records` + `data/eval_runs/` 报告文件。统一收口为独立整改项，未完成前不得在文档或 UI 中宣称「全部运行记录可在一处查看」。
+- **V2 非 RAG 模块只支持离线契约执行（架构边界）**：`backend/evaluation_v2/runner.py::_execute_non_rag_run` 强制 `live=False`（不调模型、不出站），并以 `UnsafeRunnerEnvironmentError` 防护 live Provider（如 travel live map）——这是有意设计而非缺口。非 RAG 模块的在线生成评测（如 SQL live：真实生成 SQL → 业务库执行 → 对比 gold）走 CLI 评测或 Prompt 发布门禁链路；在 V2 开放 live 需要先设计模型调用、预算管控与业务库出站的安全边界，属独立任务。
 
 ## 2. 统一评测资产规范
 

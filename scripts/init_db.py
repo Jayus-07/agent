@@ -1036,7 +1036,13 @@ def heal_missing_readonly_role(
 
     sql = (MIGRATIONS_DIR / "004_readonly_role.sql").read_text(encoding="utf-8")
     # 004 硬编码 GRANT CONNECT ON DATABASE agent_business；存量库名可能
-    # 不同（BUSINESS_PGDATABASE），重放时对齐实际库名。
+    # 不同（BUSINESS_PGDATABASE），重放时对齐实际库名。DDL 无法参数化，
+    # dbname 来自环境变量（BUSINESS_PGDATABASE），内插前先做标识符校验
+    # quick-fail，不让配置错误变成 DDL 注入面。
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", dbname or ""):
+        raise ValueError(
+            f"BUSINESS_PGDATABASE 不是合法 PostgreSQL 标识符（无法安全内插 DDL）: {dbname!r}"
+        )
     sql = sql.replace("ON DATABASE agent_business", f"ON DATABASE {dbname}")
     with conn.cursor() as cur:
         cur.execute(sql)

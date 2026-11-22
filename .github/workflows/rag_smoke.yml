@@ -134,6 +134,9 @@ jobs:
       MALL_SANDBOX_PG_DBNAME: agent_business_sandbox_test
       # 积分查询 sandbox 直查链路回归（B2）：复用同一隔离库，同守卫纪律。
       POINTS_SANDBOX_PG_DBNAME: agent_business_sandbox_test
+      # 商城下单 FK 回归的专属隔离库：cancel/points 套件按 003+125 建库且
+      # 直接插无档案订单，与本套件的 fk_orders_customer 断言互斥，不能共库。
+      MALL_ORDER_FK_PG_DBNAME: agent_business_fk_test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -158,6 +161,7 @@ jobs:
           # 004 只读角色迁移的兼容库；所有操作均在本 job 的临时 PG 中。
           PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE agent_business'
           PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE agent_business_sandbox_test'
+          PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE agent_business_fk_test'
           python scripts/init_db.py --host localhost --port 5432 --user postgres
 
       - name: Targeted regression tests (free, no paid API)
@@ -224,6 +228,7 @@ jobs:
             backend/tests/customer_service/test_order_cancel_flow.py \
             backend/tests/customer_service/test_address_change_flow.py \
             backend/tests/customer_service/test_mall_cancel_sandbox_pg.py \
+            backend/tests/customer_service/test_mall_order_create_sandbox_pg.py \
             backend/tests/customer_service/test_cs_faq_pg.py \
             backend/tests/customer_service/test_points_flow.py \
             backend/tests/customer_service/test_coupon_flow.py \
@@ -370,6 +375,8 @@ jobs:
             backend/tests/sql/test_sql_scope_subquery.py \
             backend/tests/sql/test_sql_router_examples.py \
             backend/tests/evaluation/test_sql_eval.py \
+            backend/tests/sql/test_validator_cte_table_extraction.py \
+            backend/tests/evaluation/test_sql_runner_budget.py \
             backend/tests/rag/test_parser_resource_budgets.py \
             backend/tests/rag/test_lifecycle_publication_guard.py \
             backend/tests/api/test_cs_dashboard_knowledge.py \
