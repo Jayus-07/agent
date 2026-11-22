@@ -370,6 +370,8 @@ jobs:
             backend/tests/sql/test_sql_scope_subquery.py \
             backend/tests/sql/test_sql_router_examples.py \
             backend/tests/evaluation/test_sql_eval.py \
+            backend/tests/sql/test_validator_cte_table_extraction.py \
+            backend/tests/evaluation/test_sql_runner_budget.py \
             backend/tests/rag/test_parser_resource_budgets.py \
             backend/tests/rag/test_lifecycle_publication_guard.py \
             backend/tests/api/test_cs_dashboard_knowledge.py \

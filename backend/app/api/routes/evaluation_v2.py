@@ -364,7 +364,20 @@ def _build_run_evaluator_snapshot(
 
 
 def _safe_error(exc: Exception) -> None:
-    from psycopg2.errors import UniqueViolation
+    """V2 评测异常 → 用户可读的 HTTP 错误（按根因分类，不再一律 503 兜底）。
+
+    2026-11-22：此前未知异常一律 503「依赖服务暂时不可用」，生产实测中
+    迁移未跑（UndefinedTable）与角色未配置（UndefinedObject，如
+    evaluation_v2_app）也被报成依赖服务故障，误导排障方向
+    （2026-11-21 生产评测中心全链路 503 实证根因即角色缺失）。
+    """
+    from psycopg2.errors import (
+        InsufficientPrivilege,
+        OperationalError as PgOperationalError,
+        UndefinedObject,
+        UndefinedTable,
+        UniqueViolation,
+    )
 
     from backend.evaluation.corpus_snapshots import EmptyCorpusError
 
@@ -375,6 +388,21 @@ def _safe_error(exc: Exception) -> None:
     if isinstance(exc, EmptyCorpusError):
         error = HTTPException(422, "知识库没有已发布文档")
         error.user_message = "该知识库没有已发布文档，请先完成文档发布和索引后再运行评测。"
+        raise error from exc
+    if isinstance(exc, (UndefinedTable, UndefinedObject, InsufficientPrivilege)):
+        # 数据库结构/权限初始化缺失：不是"服务暂不可用"，是部署初始化未完成。
+        # 保持 503（服务端尚未就绪），但文案指向具体补救动作。
+        hint = (
+            "评测 V2 数据表不存在，请先执行数据库迁移（scripts/init_db.py）"
+            if isinstance(exc, UndefinedTable)
+            else "评测 V2 数据库角色/权限未配置，请执行评测 V2 角色初始化（GRANT）"
+        )
+        error = HTTPException(503, hint)
+        error.user_message = f"评测 V2 数据库初始化不完整：{hint}"
+        raise error from exc
+    if isinstance(exc, PgOperationalError):
+        error = HTTPException(503, "评测数据库连接失败")
+        error.user_message = "评测数据库连接失败，请检查数据库服务状态后重试。"
         raise error from exc
     if isinstance(exc, repository.RepositoryExportLimitError):
         raise HTTPException(413, str(exc)) from exc
