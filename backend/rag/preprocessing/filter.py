@@ -249,10 +249,14 @@ class ChunkFilter:
             return False
 
         symbol_count = sum(1 for c in stripped if not _is_meaningful_char(c))
+        # 表格豁免与 2/4/5 条规则对齐：表格行组把空 cell 序列化成 ", , , "
+        # 分隔逗号，短 cell 行（如财务表"核销/转回"变动列）符号占比天然超
+        # 阈值，被误杀即表格数据未入库——coverage_audit 会按 fail-closed 记
+        # 真缺口拦整篇文档（2026-11-22 UF-09-01/13-01 实测）。
         if (
             len(stripped) > 0
             and symbol_count / len(stripped) > self.max_symbol_ratio
-            and not split_chunk
+            and not (split_chunk or table_chunk)
         ):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "all_symbols"

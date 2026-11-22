@@ -670,6 +670,9 @@ def build_quality_record(
             "pdf_layout_fallback_pages": list(
                 getattr(raw_ast, "pdf_layout_fallback_pages", []) or []
             ),
+            "pdf_zero_width_recovered_pages": list(
+                getattr(raw_ast, "pdf_zero_width_recovered_pages", []) or []
+            ),
             "pdf_source_text_audit": dict(
                 source_text_audit
             ),

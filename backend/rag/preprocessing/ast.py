@@ -109,6 +109,8 @@ class DocumentAST:
     pdf_layout_fallback_pages: list[int] = field(default_factory=list)
     # 独立调用 PDF 原生文字提取与 AST 页内容对账；扫描/OCR 页明确标为未验证。
     pdf_source_text_audit: dict = field(default_factory=dict)
+    # 零宽字符兜底恢复的页码（嵌入字体缺 advance width，结构化提取必丢）。
+    pdf_zero_width_recovered_pages: list[int] = field(default_factory=list)
     # 解析契约版本与实际格式，随索引代次保存。
     source_format: str = ""
     parser_version: str = ""
