@@ -593,10 +593,10 @@ def thinking_disabled_extra_body(
     """返回按供应商协议关闭思考的调用参数，并保留供应商附加字段。
 
     LangChain 的调用级 ``extra_body`` 会覆盖模型实例上的同名默认值，不能
-    在这里无条件传入另一套参数。火山方舟使用 ``thinking.type``，Qwen 等
-    兼容端点使用 ``enable_thinking``；无法解析供应商时不注入跨协议参数，
-    让模型实例继续使用供应商页保存的请求体。探测客户端可直接提供 base_url，
-    此时不需要读取运行时供应商凭据。
+    在这里无条件传入另一套参数。火山方舟与智谱（open.bigmodel.cn）使用
+    ``thinking.type``，Qwen 等兼容端点使用 ``enable_thinking``；无法解析
+    供应商时不注入跨协议参数，让模型实例继续使用供应商页保存的请求体。
+    探测客户端可直接提供 base_url，此时不需要读取运行时供应商凭据。
     """
     if not supports_thinking_flag(model_name):
         return None
@@ -621,7 +621,13 @@ def thinking_disabled_extra_body(
 
     hostname = urlparse(str(base_url or "")).hostname or ""
     thinking_value = body.get("thinking")
-    if hostname.endswith(".volces.com") or isinstance(thinking_value, Mapping):
+    if (
+        hostname.endswith(".volces.com")
+        # 智谱 GLM-4.5+/5 系 API 与火山同款 thinking.type 协议；未适配前
+        # 智谱模型无法关思考（默认开），结构化短任务元数据提取频繁超时。
+        or hostname.endswith(".bigmodel.cn")
+        or isinstance(thinking_value, Mapping)
+    ):
         thinking = dict(thinking_value) if isinstance(thinking_value, Mapping) else {}
         thinking["type"] = "disabled"
         body["thinking"] = thinking
