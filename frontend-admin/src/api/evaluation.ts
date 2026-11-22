@@ -98,6 +98,19 @@ export interface DatasetCatalogItem {
   latest_run?: Record<string, unknown> | null;
 }
 
+/** 评测集题目样例（脱敏摘要，批次 1.1 评测集查看） */
+export interface DatasetCaseSamples {
+  dataset_id: string;
+  total: number;
+  samples: Array<{
+    id: string;
+    module: string;
+    input_summary: string;
+    expected_summary: string;
+    tier: string;
+  }>;
+}
+
 export interface DatasetCandidate {
   candidate_id: string;
   module: string;
@@ -558,6 +571,13 @@ export const evaluationService = {
   getDatasetVersion(datasetId: string, version: string): Promise<DatasetVersionDetail> {
     return request<DatasetVersionDetail>(
       `${BASE}/datasets/${encodeURIComponent(datasetId)}/versions/${encodeURIComponent(version)}`,
+    );
+  },
+
+  /** 评测集样例只读视图（批次 1.1）：各域"测什么题"的脱敏摘要。 */
+  getDatasetSamples(datasetId: string, limit: number = 5): Promise<DatasetCaseSamples> {
+    return request<DatasetCaseSamples>(
+      `${BASE}/datasets/${encodeURIComponent(datasetId)}/samples?limit=${limit}`,
     );
   },
 

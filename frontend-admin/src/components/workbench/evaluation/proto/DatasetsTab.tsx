@@ -30,6 +30,7 @@ import {
 import { listKbAuthority, type KbAuthorityItem } from '@/api/knowledge'
 import { Badge, Card, ctl, ctlGhost, ctlPrimary, Drawer, Empty, Pagination, StatusBadge, TableWrap, Td, Th, timeShort } from './evalUi'
 import EvidenceSearchPicker from './EvidenceSearchPicker'
+import FileSuitesPanel from './FileSuitesPanel'
 
 type View = { kind: 'list' } | { kind: 'edit'; dataset: EvaluationV2Dataset } | { kind: 'history'; dataset: EvaluationV2Dataset }
 
@@ -209,6 +210,10 @@ export default function DatasetsTab({ onGoRuns, onGoTraces }: { onGoRuns: (datas
 
       {error && <p role="alert" className="rounded-md border border-red-200 p-2.5 text-xs text-red-700">{error}</p>}
       {message && <p role="status" className="text-xs text-text-secondary">{message}</p>}
+
+      {/* 批次 1.1：仓库治理的文件评测集（各智能体"测什么题"的权威视图），
+          先于 V2 数据集方案区块展示；样例脱敏只读。 */}
+      <FileSuitesPanel />
 
       <Card title="评测数据集" subtitle="发布后用于配置评测方案；已发布版本不可变，编辑会生成新版本。">
         {loading ? <Empty text="正在读取数据集…" /> : filtered.length === 0
