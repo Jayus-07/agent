@@ -148,7 +148,14 @@ export default function CustomerServicePage() {
   }, [draft.messages, draft.liveTimeline])
 
   const runTurn = useCallback(
-    async (question: string, opts?: { orderNo?: string }) => {
+    async (
+      question: string,
+      opts?: {
+        orderNo?: string
+        /** D7 补口：AI 态本地消息也带结构化字段，订单卡即时渲染（请求侧仍只传 order_no） */
+        attachments?: Array<{ type: string; order_no?: string }>
+      },
+    ) => {
       const sessionDraft = draftRef.current
       const sessionId = sessionDraft.id === 'new' ? newSessionId() : sessionDraft.id
       if (sessionDraft.id === 'new') {
@@ -163,6 +170,9 @@ export default function CustomerServicePage() {
           role: 'user',
           content: question,
           createdAt: Date.now(),
+          // D7 补口：AI 态本地消息与人工态/回放同构，带附件时即时渲染订单卡
+          contentType: opts?.attachments?.length ? 'card' : 'text',
+          attachments: opts?.attachments ?? null,
         })
         beginTurn(d)
       })
@@ -277,7 +287,10 @@ export default function CustomerServicePage() {
         return
       }
       setInput('')
-      void runTurn(t, opts?.orderNo ? { orderNo: opts.orderNo } : undefined)
+      void runTurn(t, {
+        orderNo: opts?.orderNo,
+        attachments: opts?.attachments,
+      })
     },
     [busy, patchDraft, runTurn],
   )
