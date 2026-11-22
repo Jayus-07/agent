@@ -15,6 +15,10 @@ export interface Cs2Message {
   interrupted?: boolean
   intentName?: string
   traceId?: string
+  /** D7：落库内容类型（card=订单卡等结构化消息），历史回放与实时流共用 */
+  contentType?: string
+  /** D7：消息附件（order_ref=订单引用），渲染成卡而非纯文本 */
+  attachments?: Array<{ type: string; order_no?: string }> | null
 }
 
 export interface Cs2CandidateOption {

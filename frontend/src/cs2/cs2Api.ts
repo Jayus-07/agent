@@ -2,11 +2,17 @@
 import { nanoid } from 'nanoid'
 import { request } from '@/api/client'
 
+export interface Cs2MessageAttachment {
+  type: string
+  order_no?: string
+}
+
 export interface MyConversationMessage {
   message_id: string
   sender_type: string
   content: string
   content_type: string
+  attachments?: Cs2MessageAttachment[] | null
   created_at: string
 }
 
@@ -29,6 +35,7 @@ export interface HandoffMessagesResponse {
     sender_type: string
     content: string
     content_type: string
+    attachments?: Cs2MessageAttachment[] | null
     created_at: string
   }>
   agent_typing: boolean
@@ -114,7 +121,7 @@ export async function postMyMessage(
   conversationId: string,
   content: string,
   /** M2：结构化附件（订单卡 [order_ref]），非空时后端按 card 落库并广播 */
-  attachments?: Array<Record<string, string>>,
+  attachments?: Cs2MessageAttachment[],
 ): Promise<{ message_id: string; handoff_state: string }> {
   return request(`/api/cs/conversations/my/${conversationId}/messages`, {
     method: 'POST',
@@ -128,6 +135,7 @@ export interface MyMessageRow {
   sender_type: string
   content: string
   content_type: string
+  attachments?: Cs2MessageAttachment[] | null
   created_at: string
 }
 

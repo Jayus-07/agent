@@ -61,6 +61,9 @@ function sessionFromItem(item: MyConversationItem): Cs2ConversationDraft {
     role: roleOf(m.sender_type),
     content: m.content,
     createdAt: Date.parse(m.created_at) || Date.now(),
+    // D7：订单卡等结构化消息随回放透传，渲染层按 card+order_ref 出卡
+    contentType: m.content_type,
+    attachments: m.attachments ?? null,
   }))
   return draft
 }
@@ -240,7 +243,7 @@ export default function CustomerServicePage() {
       text: string,
       opts?: {
         orderNo?: string
-        attachments?: Array<Record<string, string>>
+        attachments?: Array<{ type: string; order_no?: string }>
       },
     ) => {
       const t = text.trim()
@@ -256,6 +259,9 @@ export default function CustomerServicePage() {
             role: 'user',
             content: t,
             createdAt: Date.now(),
+            // D7：带附件的本地消息即时按 card 渲染（与服务端落库形态一致）
+            contentType: opts?.attachments?.length ? 'card' : 'text',
+            attachments: opts?.attachments ?? null,
           })
         })
         void postMyMessage(id, t, opts?.attachments).catch(() => {
@@ -309,6 +315,24 @@ export default function CustomerServicePage() {
       setDraft({ ...found, messages: found.messages.map((m) => ({ ...m })) })
       setHandoffState('none')
       setHandoffMeta(null)
+      // D3（2026-11-22 实机验证）：handoff 状态此前只在「转人工响应」和
+      // 「4 态轮询」两个来源里，刷新/切换会话后丢成 'none'，排队/已接入/
+      // 已结束横幅全部消失。选择会话时从服务端恢复一次（竞态防护：快速
+      // 切换时只接受仍指向当前会话的响应）。
+      fetchMyMessages(id, 0, 1)
+        .then((res) => {
+          if (draftRef.current.id !== id) return
+          setHandoffState(res.handoff_state ?? 'none')
+          if (res.handoff_meta) {
+            setHandoffMeta({
+              total_deadline_at: res.handoff_meta.total_deadline_at,
+              queue_position: res.handoff_meta.queue_position,
+            })
+          }
+        })
+        .catch(() => {
+          /* 恢复失败静默：轮询 effect 会按既有逻辑接手 */
+        })
     }
   }, [sessions])
 
@@ -362,6 +386,9 @@ export default function CustomerServicePage() {
             role: (m.sender_type === 'human_agent' ? 'agent' : 'system') as 'agent' | 'system',
             content: m.content,
             createdAt: Date.parse(m.created_at) || Date.now(),
+            // D7：结构化消息（card+order_ref）字段随增量透传
+            contentType: m.content_type,
+            attachments: m.attachments ?? null,
           }))
         if (agentMsgs.length) {
           patchDraft((d) => {
@@ -918,6 +945,15 @@ function formatCountdown(deadlineIso: string, now: number): string {
   return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
 }
 
+/** D7：card 消息且首附件为订单引用 → 用户端也渲染订单卡（对齐坐席端 WorkbenchPage 行为） */
+function orderRefOf(message: Cs2Message): { order_no: string } | null {
+  if (message.contentType !== 'card') return null
+  const first = (message.attachments ?? [])[0]
+  if (!first || first.type !== 'order_ref') return null
+  const orderNo = String(first.order_no ?? '').trim()
+  return orderNo ? { order_no: orderNo } : null
+}
+
 function MessageBubble({ message }: { message: Cs2Message }) {
   // 空回复且本轮已结束（SSE 断流/空回包）：不渲染空泡和「（空）」占位，
   // 页面的友好重试卡已接管；streaming 中的空占位泡保留（配合 typing 点点）
@@ -944,6 +980,8 @@ function MessageBubble({ message }: { message: Cs2Message }) {
         : message.role === 'system'
           ? 'rounded-full border border-dashed border-slate-200 px-3 py-1 text-xs text-slate-500'
           : 'rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3 py-2 text-slate-800'
+  // D7：card+order_ref → 订单卡（白底品牌描边，TASK.md 3.3）；否则普通气泡
+  const orderRef = orderRefOf(message)
 
   return (
     <div className={`flex max-w-[78%] flex-col gap-0.5 ${align}`}>
@@ -958,9 +996,22 @@ function MessageBubble({ message }: { message: Cs2Message }) {
           {message.interrupted && <span className="rounded-full bg-slate-100 px-1.5 text-[10px]">已停止</span>}
         </div>
       )}
-      <div className={`whitespace-pre-wrap text-[13px] leading-relaxed ${bubble}`}>
-        {message.content}
-      </div>
+      {orderRef ? (
+        <div className="rounded-2xl rounded-br-md border border-indigo-300 bg-white px-3 py-2.5 text-slate-800">
+          <div className="flex items-center gap-1.5">
+            <span className="grid h-5 w-5 place-items-center rounded-full bg-indigo-50 text-[11px]" aria-hidden>📦</span>
+            <b className="text-[13px]">订单 {orderRef.order_no}</b>
+            <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-600">订单卡</span>
+          </div>
+          <div className="mt-1 whitespace-pre-wrap text-[12px] leading-relaxed text-slate-600">
+            {message.content}
+          </div>
+        </div>
+      ) : (
+        <div className={`whitespace-pre-wrap text-[13px] leading-relaxed ${bubble}`}>
+          {message.content}
+        </div>
+      )}
       {message.csNodes && message.csNodes.length > 0 && (
         <div className="flex flex-wrap items-center gap-1 pt-0.5 text-[10.5px] text-slate-400">
           本轮处理进度：

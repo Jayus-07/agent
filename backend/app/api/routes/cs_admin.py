@@ -1149,12 +1149,18 @@ async def _async_save_my_message(
     from backend.memory.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db, db.begin():
+        # D2（2026-11-22 实机验证）：同一会话经多轮转人工会有多条 handoff 行，
+        # 裸 scalar_one_or_none() 抛 MultipleRows → 人工态发消息 503。
+        # 归属校验取最新一条（同会话各 handoff 行 user_id 一致）。
         handoff = (
             await db.execute(
-                select(CSHandoff).where(
+                select(CSHandoff)
+                .where(
                     CSHandoff.tenant_id == tenant_id,
                     CSHandoff.conversation_id == conversation_id,
                 )
+                .order_by(CSHandoff.id.desc())
+                .limit(1)
             )
         ).scalar_one_or_none()
         # 归属二次校验：handoff.user_id 必须与当前用户一致（防跨用户投递）
@@ -2628,6 +2634,21 @@ async def _async_claim(
                 await conv_mgr.assign_agent(
                     conversation_id, agent_id, assigned_by=agent_id,
                 )
+                # D1：脏状态修复同样要回填 handoffs.assigned_agent_id，
+                # 否则 mine=true（handoffs 谓词）依旧查不到该会话。
+                await db.execute(
+                    update(CSHandoff)
+                    .where(
+                        CSHandoff.conversation_id == conversation_id,
+                        CSHandoff.handoff_state != "closed",
+                        *(
+                            [CSHandoff.tenant_id == tenant_id]
+                            if tenant_id is not None
+                            else []
+                        ),
+                    )
+                    .values(assigned_agent_id=agent_id)
+                )
             return {
                 "conversation_id": conversation_id,
                 "handoff_state": current_state,
@@ -2645,7 +2666,11 @@ async def _async_claim(
         claim_result = await db.execute(
             update(CSHandoff)
             .where(*claim_where)
-            .values(handoff_state="human_active")
+            # D1（2026-11-22 实机验证）：认领必须同步写 handoffs.assigned_agent_id。
+            # 之前只写 handoff_state，分配关系只落在 conversations 表，
+            # mine=true 队列（handoff_repo 谓词查 handoffs 表）永远查不到，
+            # 坐席端「我的会话」恒空、F5 刷新即丢。
+            .values(handoff_state="human_active", assigned_agent_id=agent_id)
         )
         claimed = claim_result.rowcount > 0
         if not claimed:
