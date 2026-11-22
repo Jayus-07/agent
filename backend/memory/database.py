@@ -9,6 +9,7 @@ from backend.config import DB_CONFIG, MEMORY_ASYNC_POOL_SIZE, MEMORY_ASYNC_MAX_O
 # URL 路由与语句缓存开关可能各自取到不同代次的配置（测试 reload 场景实测）。
 from backend.config import database as _db_config
 from backend.shared.logger import logger
+from backend.shared.sql_obs import install_sql_observation
 
 # 池化路径按开关可经 PgBouncer（transaction 模式）；会话级 PG 特性使用方
 # （checkpointer_cleanup / travel 恢复锁的自建短连接）不经此 URL，始终直连。
@@ -108,6 +109,8 @@ async def _ensure_engine():
                 ),
             },
         )
+        # 语句级观测（慢查询/异常）：async 引擎事件挂在底层 sync engine 上生效
+        install_sql_observation(engine, engine_name="memory-async")
         sessionmaker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         _engines[id(loop)] = (loop, engine, sessionmaker)
         logger.info(
