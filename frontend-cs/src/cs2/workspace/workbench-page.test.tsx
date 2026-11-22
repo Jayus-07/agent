@@ -15,16 +15,21 @@ const api = vi.hoisted(() => {
     created_at: string
   }
   return {
-  getHandoffQueue: vi.fn(async () => ({
-    items: [
-      {
-        conversation_id: 'conv-q1', user_id: 'user-abc12345', handoff_state: 'waiting_human',
-        handoff_id: 'h1', trigger_type: 'manual', trigger_reason: null,
-        updated_at: new Date(Date.now() - 84_000).toISOString(), last_message_preview: '我要退款',
-      },
-    ],
-    total: 1,
-  })),
+  getHandoffQueue: vi.fn(async (_states?: string, mine?: boolean) => {
+    // 按参数分流：mine=true → 本人 human_active 队列（默认空，不影响
+    // 既有用例）；无参 → 可认领队列（waiting_human）。
+    if (mine) return { items: [], total: 0 }
+    return {
+      items: [
+        {
+          conversation_id: 'conv-q1', user_id: 'user-abc12345', handoff_state: 'waiting_human',
+          handoff_id: 'h1', trigger_type: 'manual', trigger_reason: null,
+          updated_at: new Date(Date.now() - 84_000).toISOString(), last_message_preview: '我要退款',
+        },
+      ],
+      total: 1,
+    }
+  }),
   getConversationDetail: vi.fn(async () => ({
     conversation_id: 'conv-q1', user_id: 'user-abc12345', conversation_status: 'active',
     handling_mode: 'agent', priority: 'medium', channel: 'web', summary: '退款咨询',
@@ -132,6 +137,45 @@ describe('WorkbenchPage（/cs2/workspace）', () => {
     expect(c.textContent).toContain('我要退款')
     const claim = Array.from(c.querySelectorAll('button')).find((b) => b.textContent === '认领')
     expect(claim).toBeDefined()
+  })
+
+  it('整页刷新后「我的会话」从服务端恢复（mine=true）', async () => {
+    // 刷新丢失修复（2026-11-22）：refreshQueue 双拉，mine 队列来自服务端
+    api.getHandoffQueue.mockImplementation(async (_states?: string, mine?: boolean) => {
+      if (mine) {
+        return {
+          items: [
+            {
+              conversation_id: 'conv-m9', user_id: 'user-mine12345', handoff_state: 'human_active',
+              handoff_id: 'h9', trigger_type: 'manual', trigger_reason: null,
+              updated_at: new Date(Date.now() - 42_000).toISOString(), last_message_preview: '进行中咨询',
+            },
+          ],
+          total: 1,
+        }
+      }
+      return {
+        items: [
+          {
+            conversation_id: 'conv-q1', user_id: 'user-abc12345', handoff_state: 'waiting_human',
+            handoff_id: 'h1', trigger_type: 'manual', trigger_reason: null,
+            updated_at: new Date(Date.now() - 84_000).toISOString(), last_message_preview: '我要退款',
+          },
+        ],
+        total: 1,
+      }
+    })
+    const c = await mount()
+    // 默认 tab = mine：服务端恢复的条目可见（title 取 user_id 前 8 位）
+    expect(c.textContent).toContain('用户 user-min')
+    expect(c.textContent).toContain('进行中咨询')
+    // 待接入 tab 仍只有可认领项，human_active 不混入
+    const queueTab = Array.from(c.querySelectorAll('[role="tab"]')).find((b) => b.textContent?.includes('待接入'))
+    await act(async () => {
+      queueTab?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(c.textContent).toContain('用户 user-abc')
+    expect(c.textContent).not.toContain('用户 user-mine')
   })
 
   it('card+order_ref 消息渲染为订单卡（坐席端可见订单号）', async () => {
