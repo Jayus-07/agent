@@ -262,6 +262,29 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     expect(c.querySelector('[aria-label="订单选择"]')).toBeNull()
   })
 
+  it('D7 补口：AI 态发送订单卡本地即时渲染成卡（不等刷新）', async () => {
+    const c = await mount()
+    const chip = Array.from(c.querySelectorAll('[aria-label="快捷入口"] button')).find(
+      (b) => b.textContent?.includes('发订单给客服'),
+    )
+    await act(async () => {
+      chip?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    const sheet = c.querySelector('[aria-label="订单选择"]')
+    expect(sheet).not.toBeNull()
+    const sendBtn = Array.from(sheet?.querySelectorAll('button') ?? []).find(
+      (b) => b.textContent === '发送',
+    )
+    await act(async () => {
+      sendBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {})
+    // 本地即时渲染：订单卡结构（徽标），无需等刷新/轮询
+    expect(c.textContent).toContain('订单 MO-AAA111')
+    expect(c.textContent).toContain('订单卡')
+  })
+
   it('订单抽屉搜索本地过滤 + 常见问题 Tab + 兜底关闭', async () => {
     const c = await mount()
     const chip = Array.from(c.querySelectorAll('[aria-label="快捷入口"] button')).find(
