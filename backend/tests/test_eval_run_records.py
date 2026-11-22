@@ -104,6 +104,81 @@ class TestRecordRunSoftFail:
         assert by_column["case_count"] == 5 and by_column["pass_count"] == 4
 
 
+class TestPromptReleaseLedgerContract:
+    """发布评测 → 台账回写契约锁定（2026-11-22 生产实测确认）。
+
+    prompt_release_runner 的评测报告经 persist_report → record_run 落
+    ai.eval_run_records：trigger=prompt_publish（_evaluation_env 注入
+    EVAL_TRIGGER），release_id 随 eval_provenance 进 dataset_version
+    JSONB——评测中心台账与首页「最近评测通过率」卡片据此关联发布记录。
+    断言按 INSERT 列清单序号定位参数（列清单见 run_records.record_run），
+    不解析 SQL 文本。
+    """
+
+    @staticmethod
+    def _capture_record_run(monkeypatch):
+        from backend.evaluation import run_records as mod
+
+        captured: dict = {}
+
+        class _FakeCursor:
+            def execute(self, sql, params=None):
+                captured["sql"], captured["params"] = sql, params
+
+        class _FakeRawConn:
+            def cursor(self):
+                return _FakeCursor()
+
+            def commit(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class _FakeEngine:
+            def raw_connection(self):
+                return _FakeRawConn()
+
+        import backend.infra.db as infra_db
+        monkeypatch.setattr(infra_db, "engine_for", lambda cfg: _FakeEngine())
+        monkeypatch.setattr(mod, "collect_prompt_snapshot", lambda: {})
+        monkeypatch.setattr(mod, "collect_model_binding_fingerprint", lambda: "")
+        return mod, captured
+
+    def test_release_trigger_and_release_id_reach_row(self, monkeypatch):
+        mod, captured = self._capture_record_run(monkeypatch)
+        ok = mod.record_run(_fake_report(), "run-release-1", {
+            "dataset_version": {
+                "release_id": "rel-abc123",
+                "suite": "desktop_upload_smoke",
+                "dataset_version": "6.0.0-desktop-candidate.1",
+                "prompt_snapshot": {"rag.qa": 2},
+            },
+            "env": {"trigger": "prompt_publish", "triggered_by": "user:3"},
+        })
+        assert ok is True
+        params = captured["params"]
+        # INSERT 列序：run_id(0) module(1) mode(2) smoke(3) dataset_version(4)
+        # git_sha(5) prompt_snapshot(6) model_binding_fingerprint(7)
+        # status(8) attempt_no(9) evaluation_snapshot_hash(10) validity(11)
+        # invalid_reason(12) trigger(13) triggered_by(14) metrics(15)
+        # case_count(16) pass_count(17) pass_rate(18)
+        assert params[0] == "run-release-1"
+        assert params[13] == "prompt_publish"
+        assert params[14] == "user:3"
+        # release_id 随 eval_provenance 落 dataset_version JSONB（跨系统关联键）
+        assert '"release_id": "rel-abc123"' in params[4]
+        assert '"prompt_snapshot": {"rag.qa": 2}' in params[4]
+
+    def test_default_trigger_is_manual_without_env(self, monkeypatch):
+        mod, captured = self._capture_record_run(monkeypatch)
+        assert mod.record_run(_fake_report(), "run-manual-1", {}) is True
+        assert captured["params"][13] == "manual"
+
+
 class TestEnvInfo:
     def test_triggered_by_from_env(self, monkeypatch):
         from backend.evaluation.storage import collect_env_info
