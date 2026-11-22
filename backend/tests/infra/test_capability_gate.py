@@ -119,6 +119,34 @@ def test_thinking_disabled_extra_body_uses_ark_schema(monkeypatch):
     }
 
 
+def test_thinking_disabled_extra_body_uses_zhipu_schema(monkeypatch):
+    """智谱（open.bigmodel.cn）沿用 thinking.type 协议并保留附加字段。
+
+    2026-11-22：glm-5.3-flash 未适配前无法关思考（智谱默认开），结构化
+    短任务（元数据提取/摘要/压缩）频繁超时——本用例锁定协议分支。
+    """
+    from types import SimpleNamespace
+
+    from backend.infra.llm import credentials
+
+    models.set_dynamic_models([
+        {"name": "glm-5.3-flash", "provider": "custom-api-3",
+         "capabilities": {"thinking": True}, "source": "db"},
+    ])
+    configured = SimpleNamespace(
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        extra_body={"custom_option": "preserve"},
+    )
+    monkeypatch.setattr(
+        credentials, "resolve_credentials", lambda *args, **kwargs: configured
+    )
+
+    assert models.thinking_disabled_extra_body("glm-5.3-flash") == {
+        "custom_option": "preserve",
+        "thinking": {"type": "disabled"},
+    }
+
+
 def test_thinking_disabled_extra_body_keeps_qwen_schema(monkeypatch):
     """Qwen 兼容端点保留 enable_thinking 协议及已有附加字段。"""
     from types import SimpleNamespace
