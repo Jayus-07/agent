@@ -378,6 +378,7 @@ function ReleaseRunsTable({ loading, error, releases, expandedId, onToggle, onOp
     <tbody className="divide-y divide-border-subtle">
       {releases.map(record => {
         const blocked = releaseGate(record)
+        const evalRunId = record.eval_run_id
         return (<Fragment key={record.release_id}><tr>
           <Td mono>{record.release_id.slice(0, 12)}</Td>
           <Td><span className="block text-text-primary">{record.prompt_key}</span><span className="text-[11px] text-text-muted">v{record.version} · {record.eval_suite}</span></Td>
@@ -400,7 +401,7 @@ function ReleaseRunsTable({ loading, error, releases, expandedId, onToggle, onOp
           <Td>{timeShort(record.created_at || record.updated_at || null)}</Td>
           <Td end>
             <button type="button" className={ctlGhost} onClick={() => onToggle(record.release_id)}>{expandedId === record.release_id ? '收起' : '门禁详情'}</button>
-            {!!record.eval_run_id && <button type="button" className={ctlGhost} onClick={() => onOpenRunDetail(record.eval_run_id)}>逐题详情</button>}
+            {evalRunId ? <button type="button" className={ctlGhost} onClick={() => onOpenRunDetail(evalRunId)}>逐题详情</button> : null}
           </Td>
         </tr>
         {expandedId === record.release_id && <tr><td colSpan={9} className="bg-bg-elevated/50 p-3">
