@@ -404,3 +404,112 @@ class TestRagServerGuard:
         source = inspect.getsource(server)
         assert "_get_local_pipeline" in source
         assert server._get_pipeline.__doc__ is not None
+
+
+# ==================== 7. ask 韧性（D8 止血 2026-11-23）====================
+
+class TestAskResilience:
+    """D8：rag-service OOM 重启窗口内 ask「Server disconnected → 系统繁忙」。
+
+    - 连接类失败 / 503 初始化中：有限重试（1s/2s 退避）
+    - ReadTimeout 不重试：请求可能已在服务端执行，重放叠加负载与计费
+    - 连续连接失败熔断：rag-service 宕机时快速失败，防线程雪崩堆积
+    """
+
+    @staticmethod
+    def _reset_circuit():
+        from backend.rag.client import _ask_circuit
+
+        _ask_circuit._fail_streak = 0
+        _ask_circuit._open_until = 0.0
+
+    def test_ask_retries_on_server_disconnect_then_succeeds(self, monkeypatch):
+        self._reset_circuit()
+        monkeypatch.setattr("backend.rag.client.time.sleep", lambda _s: None)
+        calls = {"n": 0}
+
+        def handler(request):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.RemoteProtocolError("Server disconnected")
+            return httpx.Response(200, json={"answer": "答案", "meta": {}})
+
+        assert _make_proxy(handler).ask("问题") == "答案"
+        assert calls["n"] == 2
+
+    def test_ask_retries_on_503_not_ready(self, monkeypatch):
+        self._reset_circuit()
+        monkeypatch.setattr("backend.rag.client.time.sleep", lambda _s: None)
+        calls = {"n": 0}
+
+        def handler(request):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(
+                    503, json={"detail": {"code": "SERVICE_NOT_READY"}})
+            return httpx.Response(200, json={"answer": "答案", "meta": {}})
+
+        assert _make_proxy(handler).ask("问题") == "答案"
+        assert calls["n"] == 2
+
+    def test_ask_no_retry_on_read_timeout(self, monkeypatch):
+        self._reset_circuit()
+        monkeypatch.setattr("backend.rag.client.time.sleep", lambda _s: None)
+        calls = {"n": 0}
+
+        def handler(request):
+            calls["n"] += 1
+            raise httpx.ReadTimeout("timed out")
+
+        with pytest.raises(RuntimeError, match="RAG 服务调用失败"):
+            _make_proxy(handler).ask("问题")
+        assert calls["n"] == 1
+
+    def test_ask_gives_up_after_max_attempts(self, monkeypatch):
+        self._reset_circuit()
+        monkeypatch.setattr("backend.rag.client.time.sleep", lambda _s: None)
+        calls = {"n": 0}
+
+        def handler(request):
+            calls["n"] += 1
+            raise httpx.ConnectError("refused")
+
+        with pytest.raises(RuntimeError, match="RAG 服务调用失败"):
+            _make_proxy(handler).ask("问题")
+        assert calls["n"] == 3  # 首次 + 2 次重试
+
+    def test_circuit_opens_after_consecutive_connect_failures(self):
+        from backend.rag.client import _ask_circuit
+
+        self._reset_circuit()
+        for _ in range(3):
+            _ask_circuit.record_connect_failure()
+        with pytest.raises(RuntimeError, match="熔断保护中"):
+            _ask_circuit.check()
+
+    def test_circuit_success_resets_streak(self):
+        from backend.rag.client import _ask_circuit
+
+        self._reset_circuit()
+        _ask_circuit.record_connect_failure()
+        _ask_circuit.record_connect_failure()
+        _ask_circuit.record_success()
+        _ask_circuit.check()  # 不抛
+        _ask_circuit.record_connect_failure()
+        _ask_circuit.record_connect_failure()
+        _ask_circuit.check()  # 连续计数已归零，2 次 < 阈值不熔断
+
+    def test_circuit_not_armed_by_503(self, monkeypatch):
+        """503=服务活着（初始化中），不计入熔断计数。"""
+        self._reset_circuit()
+        monkeypatch.setattr("backend.rag.client.time.sleep", lambda _s: None)
+
+        def handler(request):
+            return httpx.Response(
+                503, json={"detail": {"code": "SERVICE_NOT_READY"}})
+
+        with pytest.raises(RuntimeError, match="RAG 服务调用失败"):
+            _make_proxy(handler).ask("问题")
+        from backend.rag.client import _ask_circuit
+
+        assert _ask_circuit._fail_streak == 0

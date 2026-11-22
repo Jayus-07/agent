@@ -1008,3 +1008,90 @@ class TestTyping:
         resp = client.get("/cs/conversations/my/conv-1/messages")
         assert resp.status_code == 200
         assert resp.json()["agent_typing"] is True
+
+
+class TestMessagesSinceHandoffState:
+    """D11（2026-11-23 P0）：_async_messages_since 的 handoff_state 口径。
+
+    此前查询过滤 closed 行 → 关单后恒返回 "none"，用户端「人工服务已结束」
+    灰横幅/满意度卡的 closed 分支不可达（实时与回放两侧同时失效）。
+    修复后取最新一条 handoff：closed 是真实历史终态；从无人工会话仍为 none
+    （维持 2026-09-17 修复：新会话不误显示已结束）。
+    """
+
+    @staticmethod
+    def _patch_db(monkeypatch, handoff_state):
+        """桩掉 AsyncSessionLocal：按序返回 handoff 行/消息/排队计数。"""
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        handoff_row = None
+        if handoff_state:
+            handoff_row = SimpleNamespace(
+                handoff_id="hd-1",
+                handoff_state=handoff_state,
+                total_deadline_at=None,
+                # 排队计数 SQL 以 created_at 作绑定参数，None 会让
+                # SQLAlchemy 在构造比较表达式时直接抛 ArgumentError
+                created_at=datetime(2026, 11, 23, tzinfo=timezone.utc),
+                tenant_id="default",
+            )
+
+        class _Result:
+            def __init__(self, value):
+                self._value = value
+
+            def scalar_one_or_none(self):
+                return self._value
+
+            def scalar(self):
+                return self._value if isinstance(self._value, int) else 0
+
+            def scalars(self):
+                return self
+
+            def all(self):
+                return self._value if isinstance(self._value, list) else []
+
+        class _FakeDB:
+            def __init__(self):
+                self._calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def execute(self, _q):
+                self._calls += 1
+                if self._calls == 1:
+                    return _Result(handoff_row)
+                return _Result([])
+
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal", lambda: _FakeDB()
+        )
+
+    async def test_closed_handoff_returns_closed(self, monkeypatch):
+        """曾转人工且已关单 → closed（支撑前端结束态横幅+满意度卡）。"""
+        self._patch_db(monkeypatch, handoff_state="closed")
+        result = await cs_admin._async_messages_since("conv-1", 0, 100, None)
+        assert result.handoff_state == "closed"
+        # closed 不携带倒计时/排队位（只属于进行中的转人工）
+        assert result.handoff_meta is None
+
+    async def test_no_handoff_returns_none(self, monkeypatch):
+        """从无人工记录的新会话 → none（2026-09-17 修复不回归）。"""
+        self._patch_db(monkeypatch, handoff_state=None)
+        result = await cs_admin._async_messages_since("conv-1", 0, 100, None)
+        assert result.handoff_state == "none"
+        assert result.handoff_meta is None
+
+    async def test_waiting_human_keeps_meta(self, monkeypatch):
+        """进行中转人工 → 现行为保持（状态+倒计时元信息）。"""
+        self._patch_db(monkeypatch, handoff_state="waiting_human")
+        result = await cs_admin._async_messages_since("conv-1", 0, 100, None)
+        assert result.handoff_state == "waiting_human"
+        assert result.handoff_meta is not None
+        assert result.handoff_meta.handoff_state == "waiting_human"

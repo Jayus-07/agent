@@ -149,6 +149,14 @@ async def log_build_identity():
         os.getenv("GIT_DIRTY", "unknown"),
         os.getenv("ENVIRONMENT", "unknown"),
     )
+    # 超时配置统一（2026-11-23 定案）：deadline 在本进程写入 handoffs 表，
+    # 启动日志打印生效值，防 app/dispatcher env 漂移再次静默发生
+    from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
+
+    logger.info(
+        "[Startup] CS handoff 总等待上限=%ss（total_deadline_at 以此写入）",
+        CS_HANDOFF_TIMEOUT_SECONDS,
+    )
 
 
 @app.on_event("startup")

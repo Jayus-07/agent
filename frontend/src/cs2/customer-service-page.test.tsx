@@ -383,4 +383,104 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     expect(cs2Api.fetchMyMessages).toHaveBeenCalledWith('conv-a', 0, 1)
     expect(c.textContent).toContain('人工客服已接入')
   })
+
+  it('D11：已关单会话恢复时显示结束横幅，满意度卡即时出现（不等下一条消息）', async () => {
+    // 回放恢复场景（U43）：服务端最新 handoff 为 closed，最后一条消息是
+    // 关单系统消息——旧 showCsat 要求 lastMsg 为 assistant，卡要等用户再
+    // 发一条 AI 轮次后才出现（触发时机错误）
+    cs2Api.fetchMyMessages.mockResolvedValue({
+      conversation_id: 'conv-a',
+      handoff_state: 'closed',
+      last_id: 4,
+      agent_typing: false,
+      handoff_meta: null,
+      messages: [
+        { message_id: '3', sender_type: 'human_agent', content: '您好，人工已接入', content_type: 'text', attachments: null, created_at: '2026-11-23T10:00:00Z' },
+        { message_id: '4', sender_type: 'system', content: '已为您登记留言工单 GD-1，24 小时内回访', content_type: 'text', attachments: null, created_at: '2026-11-23T10:05:00Z' },
+      ],
+    })
+    // selectSession 的 draft 来自会话列表快照：showCsat 要求历史里有人工
+    // 消息（some role==='agent'），列表 mock 必须与恢复态一致
+    cs2Api.fetchMyConversations.mockResolvedValue([
+      {
+        conversation_id: 'conv-a',
+        summary: '退款咨询',
+        conversation_status: 'active',
+        handling_mode: 'human',
+        created_at: '2026-11-23T10:00:00Z',
+        last_activity_at: '2026-11-23T10:05:00Z',
+        messages: [
+          { message_id: '1', sender_type: 'user', content: '我要退款', content_type: 'text', attachments: null, created_at: '2026-11-23T10:00:00Z' },
+          { message_id: '2', sender_type: 'assistant', content: '好的，请说明订单号', content_type: 'text', attachments: null, created_at: '2026-11-23T10:00:05Z' },
+          { message_id: '3', sender_type: 'human_agent', content: '您好，人工已接入', content_type: 'text', attachments: null, created_at: '2026-11-23T10:01:00Z' },
+          { message_id: '4', sender_type: 'system', content: '已为您登记留言工单 GD-1，24 小时内回访', content_type: 'text', attachments: null, created_at: '2026-11-23T10:05:00Z' },
+        ],
+      },
+    ])
+    const c = await mount()
+    await openConversation(c, '退款咨询')
+    await act(async () => {})
+    // 灰横幅（closed 分支）与满意度卡即时渲染
+    expect(c.textContent).toContain('人工服务已结束')
+    expect(c.querySelector('[aria-label="满意度星级"]')).not.toBeNull()
+  })
+
+  it('D11：关单轮次补拉最后一轮增量（关单系统消息不丢），终态停轮询', async () => {
+    vi.useFakeTimers()
+    try {
+      const closedEmpty = {
+        conversation_id: 'conv-a',
+        handoff_state: 'closed',
+        last_id: 4,
+        messages: [],
+        agent_typing: false,
+        handoff_meta: null,
+      }
+      const responses: Array<Record<string, unknown>> = [
+        // selectSession 恢复（0,1）
+        { ...closedEmpty, handoff_state: 'human_active', last_id: 2 },
+        // poll#1（0,50）：人工消息增量
+        {
+          conversation_id: 'conv-a',
+          handoff_state: 'human_active',
+          last_id: 3,
+          agent_typing: false,
+          handoff_meta: null,
+          messages: [
+            { message_id: '3', sender_type: 'human_agent', content: '您好，人工已接入', content_type: 'text', attachments: null, created_at: '2026-11-23T10:00:00Z' },
+          ],
+        },
+        // poll#2（0,50）：关单——system 消息在 poll#1 窗口后才落库
+        {
+          conversation_id: 'conv-a',
+          handoff_state: 'closed',
+          last_id: 4,
+          agent_typing: false,
+          handoff_meta: null,
+          messages: [
+            { message_id: '4', sender_type: 'system', content: '已为您登记留言工单 GD-1，24 小时内回访', content_type: 'text', attachments: null, created_at: '2026-11-23T10:05:00Z' },
+          ],
+        },
+        // 补拉（last_id=4,50）
+        { ...closedEmpty },
+      ]
+      cs2Api.fetchMyMessages.mockImplementation(async () => {
+        const next = responses.shift()
+        return (next ?? closedEmpty) as Awaited<ReturnType<typeof cs2Api.fetchMyMessages>>
+      })
+      const c = await mount()
+      await openConversation(c, '退款咨询')
+      // handoffState 保持 human_active（值未变），等 3s 轮询 interval 触发 poll#2
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3100)
+      })
+      // 关单系统消息经补拉渲染（D10 关联），灰横幅 + 满意度卡出现
+      expect(c.textContent).toContain('已为您登记留言工单 GD-1')
+      expect(c.textContent).toContain('人工服务已结束')
+      expect(c.querySelector('[aria-label="满意度星级"]')).not.toBeNull()
+      expect(cs2Api.fetchMyMessages).toHaveBeenCalledWith('conv-a', 4, 50)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

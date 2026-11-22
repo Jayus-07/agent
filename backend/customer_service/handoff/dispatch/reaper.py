@@ -150,6 +150,17 @@ async def _build_timeout_ticket(
 
     try:
         ticket_id = f"GD-{now:%Y%m%d}-{secrets.token_hex(2).upper()}"
+        # 超时配置统一（2026-11-23 定案）：文案读 handoff 行的实际 deadline
+        # 差值（单一事实源），不再读本容器 env——deadline 由 app 写入，此前
+        # dispatcher env=120 与实际 30s 漂移，工单文案误导用户与坐席。
+        waited_seconds = CS_HANDOFF_TIMEOUT_SECONDS
+        try:
+            if handoff.total_deadline_at and handoff.created_at:
+                waited_seconds = max(1, round(
+                    (handoff.total_deadline_at - handoff.created_at).total_seconds(),
+                ))
+        except (TypeError, ValueError):
+            pass
         session.add(CSTicket(
             ticket_id=ticket_id,
             tenant_id=tenant_id,
@@ -163,7 +174,7 @@ async def _build_timeout_ticket(
             title=f"人工超时留言：{summary[:60]}",
             description=(
                 f"[超时降级] {summary}\n"
-                f"（会话 {handoff.conversation_id}，等待人工 {CS_HANDOFF_TIMEOUT_SECONDS}s 无人接入）"
+                f"（会话 {handoff.conversation_id}，等待人工 {waited_seconds}s 无人接入）"
             ),
         ))
         await session.flush()

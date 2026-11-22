@@ -452,3 +452,26 @@ async def test_compress_failure_still_creates_ticket(
 
     assert result.closed == 1
     assert _ticket_of(scenario.session) is not None
+
+
+async def test_ticket_description_reports_actual_deadline(
+    scenario: Scenario, monkeypatch,
+) -> None:
+    """工单文案读 handoff 行实际 deadline（单一事实源），不读本容器 env。
+
+    2026-11-23 定案：total_deadline_at 由 app 写入、reaper 只认 DB 值——
+    此前文案读 dispatcher 的 env（120s）而实际 30s，文案与行为矛盾。
+    """
+    # handoff 行：等了 120s 到期（_handoff 默认 created_at=NOW-120s）
+    scenario.handoff.created_at = NOW - timedelta(seconds=120)
+    scenario.handoff.total_deadline_at = NOW
+    # env 漂移为 600s：文案仍必须报实际 120s
+    monkeypatch.setattr(reaper, "CS_HANDOFF_TIMEOUT_SECONDS", 600)
+    scenario.overdue_candidates = [(TENANT, "hd-1", "conv-1")]
+
+    await reaper.reap_overdue_waiting(scenario.session, now=NOW, limit=50)
+
+    ticket = _ticket_of(scenario.session)
+    assert ticket is not None
+    assert "等待人工 120s 无人接入" in (ticket.description or "")
+    assert "600" not in (ticket.description or "")
