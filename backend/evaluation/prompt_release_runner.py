@@ -205,8 +205,12 @@ def _build_eval_config(
         # 候选模板正文显式注入（草稿不在进程快照内，仅版本号会回落发布版）
         prompt_templates=prompt_templates or None,
         release_id=release.release_id,
-        # C9-2：发布评测强制严格字段校验——不接受静默降级样本
-        strict_fields=True,
+        # C9-2：发布评测强制严格字段校验——不接受静默降级样本。
+        # 2026-11-22：strict 校验的是 RAG 数据契约（expected_answer/ground_truth）；
+        # SQL 题集的标注结构是 gold_sql/expected_tables/should_reject（E0 数据
+        # 校验器已按模块契约把关），套用 RAG strict 会误杀全部 SQL 样本
+        # （生产 rel-ebe174ee 实证：9 条 SC-* 因缺 RAG 字段被拒启动）。
+        strict_fields=(module == "rag"),
     )
 
 

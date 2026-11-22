@@ -254,3 +254,27 @@ def test_gate_dispatch_by_module():
     assert "candidate_regression" not in rag_gate
     assert rag_gate.get("ragas_applicable", True) is True
     assert sql_gate["ragas_applicable"] is False
+
+
+class TestStrictFieldsByModule:
+    """strict 校验是 RAG 数据契约（expected_answer/ground_truth）；SQL 题集
+    标注为 gold_sql/expected_tables，套用会误杀全部样本（生产 rel-ebe174ee
+    实证）。SQL 必须关闭 strict，RAG 保持强制。"""
+
+    def _build(self, module: str):
+        from backend.evaluation.mode import resolve_evaluation_mode
+        from backend.evaluation.prompt_release_runner import _build_eval_config
+
+        release = _Release(dataset_provenance={"version": "sql-canonical-15"})
+        release.eval_suite = "sql_canonical"
+        release.release_id = "rel-test"
+        release.prompt_snapshot = {}
+        return _build_eval_config(
+            release, module, resolve_evaluation_mode("self+ragas"), {}, None,
+        )
+
+    def test_rag_keeps_strict_fields(self):
+        assert self._build("rag").strict_fields is True
+
+    def test_sql_disables_strict_fields(self):
+        assert self._build("sql").strict_fields is False
