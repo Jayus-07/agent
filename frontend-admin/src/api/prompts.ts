@@ -265,7 +265,7 @@ export const promptsService = {
     return api(`${BASE}/${encodeURIComponent(key)}/audit`).then(r => (r as any).items ?? r)
   },
 
-  seed(): Promise<{ seeded: number }> {
+  seed(): Promise<{ seeded: number; skipped_existing?: string[]; code_controlled?: string[] }> {
     return api(`${BASE}/seed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
