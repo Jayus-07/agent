@@ -29,6 +29,15 @@ function displayValue(value: unknown): string {
   if (typeof value === 'number') {
     return value >= 0 && value <= 1 ? `${(value * 100).toFixed(1)}%` : String(value)
   }
+  // gate 等嵌套指标对象：直出 String() 会变成 [object Object]（缺陷 3），
+  // 有 pass_rate 时给摘要，其余紧凑 JSON。
+  if (typeof value === 'object') {
+    const nested = value as { total?: unknown; passed?: unknown; pass_rate?: unknown }
+    if (typeof nested.pass_rate === 'number') {
+      return `total ${nested.total ?? '—'} · passed ${nested.passed ?? '—'} · ${(nested.pass_rate * 100).toFixed(1)}%`
+    }
+    return JSON.stringify(value)
+  }
   return String(value)
 }
 

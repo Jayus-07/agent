@@ -1,7 +1,15 @@
 'use client'
 
 /**
- * 运行评测：发起运行与分页历史分开；历史记录进入运行详情页后逐题查看脱敏结果。
+ * 运行评测：Prompt 发布评测发起 + 分页历史分开；历史记录进入运行详情页后逐题查看脱敏结果。
+ *
+ * 批次 1（2026-11-22 评测中心改造）：
+ * - 发起评测只保留「Prompt 发布评测」一条通道（复用发布门禁链路）；
+ *   数据集方案（V2）发起入口冻结移除，历史查看与 Gate 审批不受影响。
+ * - 域导航（?domain=）传入后：发起表单按域过滤/分组 Prompt，运行记录
+ *   三来源按域归堆并展示域徽标。
+ * - 评测方式按被测域诚实展示：RAG 四选真实生效；SQL 由 canonical 双跑
+ *   链路决定；其余域走离线契约并回落 RAG 门禁口径留痕。
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -10,15 +18,20 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   evaluationService,
   type EvaluationV2Gate,
-  type EvaluationSuite,
   type EvaluationV2Run,
 } from '@/api/evaluation'
 import { createIdempotencyKey, errMessage } from '@/api/client'
-import { listKbAuthority, type KbAuthorityItem } from '@/api/knowledge'
 import { promptsService, type PromptListItem, type PromptReleaseRecord } from '@/api/prompts'
 import { PROMPT_RELEASE_SUITE } from '@/config/promptRelease'
 import { atLeast } from '@/lib/auth'
 import { Badge, Card, ctl, ctlGhost, ctlPrimary, Empty, modeShort, MODE_LABELS, StatusBadge, TableWrap, Td, Th, timeShort, fmtCost } from './evalUi'
+import {
+  EVAL_DOMAINS,
+  domainLabel,
+  moduleToDomain,
+  promptKeyToDomain,
+  type DomainFilter,
+} from '../domains'
 import RunHistoryDetail from './RunHistoryDetail'
 import EvalRunDetailPanel from './EvalRunDetailPanel'
 
@@ -28,22 +41,18 @@ const RELEASE_TERMINAL = new Set(['failed', 'passed', 'approved', 'published', '
 
 type RunPane = 'launch' | 'history'
 // 2026-11-22：评测中心是评测的统一入口——运行记录聚合三类来源
-// （V2 方案 / Prompt 发布评测 / CLI 台账），发起评测支持两种类型。
+// （V2 方案 / Prompt 发布评测 / CLI 台账），域过滤由 EvaluationCenter 传入。
 type HistorySource = 'v2' | 'release' | 'ledger'
-type LaunchKind = 'v2' | 'release'
 
-export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId, onGoCompare }: { promptPrefill?: { key: string; version: string } | null; focusRunId?: string | null; focusSuiteVersionId?: string | null; onGoCompare?: (runId: string) => void }) {
+/** SQL 发布评测的套件标记：canonical 内置集，runner 不依赖 suite 参数（仅记录可读性）。 */
+const SQL_RELEASE_SUITE = 'sql_canonical'
+
+export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onGoCompare }: { promptPrefill?: { key: string; version: string } | null; focusRunId?: string | null; domain?: DomainFilter; onGoCompare?: (runId: string) => void }) {
   const queryClient = useQueryClient()
   const allowed = atLeast('super_admin')
   const [runPane, setRunPane] = useState<RunPane>('launch')
   const [historyPage, setHistoryPage] = useState(0)
   const [historySource, setHistorySource] = useState<HistorySource>('v2')
-  const [launchKind, setLaunchKind] = useState<LaunchKind>('v2')
-  const [suiteId, setSuiteId] = useState('')
-  const [mode, setMode] = useState('self+ragas')
-  const [promptKey, setPromptKey] = useState('')
-  const [promptVersion, setPromptVersion] = useState('')
-  const [kbId, setKbId] = useState('')
   const [relKey, setRelKey] = useState('')
   const [relVersion, setRelVersion] = useState('')
   const [relMode, setRelMode] = useState('self+ragas')
@@ -60,21 +69,16 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
     queryKey: ['admin', 'evaluation-center-run-options'],
     enabled: allowed,
     queryFn: async () => {
-      const [suiteItems, kbCatalog, promptItems] = await Promise.all([
-        evaluationService.listSuites(),
-        listKbAuthority().catch(() => ({ knowledge_bases: [] as KbAuthorityItem[] })),
-        promptsService.list().catch(() => [] as PromptListItem[]),
-      ])
-      return {
-        suites: suiteItems.filter(item => item.source === 'evaluation_v2' && item.status === 'published' && item.suite_version_id),
-        kbs: kbCatalog.knowledge_bases.filter(item => item.active && !item.alias_for && !item.deprecated),
-        promptKeys: promptItems,
-      }
+      const promptItems = await promptsService.list().catch(() => [] as PromptListItem[])
+      return { promptKeys: promptItems }
     },
   })
-  const suites: EvaluationSuite[] = optionsQuery.data?.suites ?? []
-  const kbs: KbAuthorityItem[] = optionsQuery.data?.kbs ?? []
   const promptKeys: PromptListItem[] = optionsQuery.data?.promptKeys ?? []
+  // 域过滤（批次 1）：发起表单按 prompt_key 前缀；运行记录三来源按各自归域规则
+  const domainPromptKeys = useMemo(
+    () => domain === 'all' ? promptKeys : promptKeys.filter(item => promptKeyToDomain(item.key) === domain),
+    [promptKeys, domain],
+  )
   const runsQuery = useQuery({
     queryKey: ['admin', 'evaluation-v2-runs', historyPage],
     enabled: allowed && runPane === 'history' && !detailRunId,
@@ -84,7 +88,16 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
     },
     refetchInterval: query => query.state.data?.rows.some(run => !TERMINAL.has(run.job_status)) ? 3000 : false,
   })
-  const runs = runsQuery.data?.rows ?? []
+  const runs = useMemo(() => {
+    const rows = runsQuery.data?.rows ?? []
+    if (domain === 'all') return rows
+    return rows.filter(row => {
+      const firstPrompt = Object.keys(row.prompt_versions || {})[0]
+      const byPrompt = promptKeyToDomain(firstPrompt)
+      if (firstPrompt && byPrompt !== 'agent') return byPrompt === domain
+      return moduleToDomain(row.module) === domain
+    })
+  }, [runsQuery.data, domain])
 
   // 发布门禁评测记录（含 SQL 双跑等，2026-11-22 聚合进评测中心）
   const releasesQuery = useQuery({
@@ -93,7 +106,10 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
     queryFn: () => promptsService.listAllReleases(50),
     refetchInterval: query => query.state.data?.some(item => !RELEASE_TERMINAL.has(item.status)) ? 4000 : false,
   })
-  const releases = releasesQuery.data ?? []
+  const releases = useMemo(
+    () => domain === 'all' ? (releasesQuery.data ?? []) : (releasesQuery.data ?? []).filter(row => promptKeyToDomain(row.prompt_key) === domain),
+    [releasesQuery.data, domain],
+  )
 
   // CLI 台账（ai.eval_run_records：CLI / 线上采样 / 历史口径评测）
   const ledgerQuery = useQuery({
@@ -101,28 +117,17 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
     enabled: allowed && runPane === 'history' && historySource === 'ledger' && !detailRunId,
     queryFn: () => evaluationService.listRuns(50),
   })
-  const ledgerRuns = ledgerQuery.data ?? []
+  const ledgerRuns = useMemo(
+    () => domain === 'all' ? (ledgerQuery.data ?? []) : (ledgerQuery.data ?? []).filter(row => moduleToDomain(row.module) === domain),
+    [ledgerQuery.data, domain],
+  )
 
-  useEffect(() => {
-    if (focusSuiteVersionId && suites.some(item => item.suite_version_id === focusSuiteVersionId)) {
-      setSuiteId(focusSuiteVersionId)
-    }
-  }, [focusSuiteVersionId, suites])
-  useEffect(() => {
-    const firstSuiteId = suites[0]?.suite_version_id
-    if (!firstSuiteId) return
-    setSuiteId(current => suites.some(item => item.suite_version_id === current) ? current : firstSuiteId)
-  }, [suites])
-  useEffect(() => {
-    if (!kbs.length) return
-    setKbId(current => kbs.some(item => item.kb_id === current) ? current : kbs[0].kb_id)
-  }, [kbs])
   useEffect(() => {
     if (!promptPrefill) return
     const version = promptPrefill.version.trim()
     if (!/^\d+$/.test(version)) return
-    setPromptKey(promptPrefill.key)
-    setPromptVersion(version)
+    setRelKey(promptPrefill.key)
+    setRelVersion(version)
   }, [promptPrefill])
   useEffect(() => {
     if (!focusRunId) return
@@ -130,30 +135,39 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
     setRunPane('history')
   }, [focusRunId])
 
-  const selectedSuite = useMemo(() => suites.find(item => item.suite_version_id === suiteId), [suites, suiteId])
-  const isRag = selectedSuite?.module === 'rag'
+  const relDomain = promptKeyToDomain(relKey)
+  const relLatest = promptKeys.find(item => item.key === relKey)?.latest_version_number ?? null
 
-  const start = async () => {
+  // 2026-11-22：从评测中心发起 Prompt 发布评测（复用发布门禁链路：候选
+  // 版本经评测与审批后才能发布；SQL 类 prompt 在该链路上跑真实生成评测）。
+  // suite 按域标记：RAG 用真实存在的发布门禁 smoke 集；SQL 用 canonical
+  // 内置集标记；其余类别回落 eval_center 元数据标记。
+  const suiteForRelease = (key: string) => {
+    const keyDomain = promptKeyToDomain(key)
+    if (keyDomain === 'rag') return PROMPT_RELEASE_SUITE
+    if (keyDomain === 'sql') return SQL_RELEASE_SUITE
+    return 'eval_center'
+  }
+  const startRelease = async () => {
     setBusy(true); setError(''); setMessage('')
     try {
-      if (!selectedSuite) throw new Error('请选择已发布的数据集方案。')
-      if (isRag && !kbId) throw new Error('请选择有权访问的知识库。')
-      const promptVersions: Record<string, number> = {}
-      if (promptKey.trim() && /^\d+$/.test(promptVersion.trim())) promptVersions[promptKey.trim()] = Number(promptVersion.trim())
-      const result = await evaluationService.createV2Run({
-        suite_version_id: suiteId,
-        source: 'manual',
-        evaluation_mode: isRag ? mode : 'offline',
-        ...(isRag ? { kb_id: kbId } : {}),
-        request_id: createIdempotencyKey(),
-        ...(Object.keys(promptVersions).length ? { prompt_versions: promptVersions } : {}),
+      if (!relKey.trim()) throw new Error('请选择要评测的 Prompt。')
+      if (!/^\d+$/.test(relVersion.trim())) throw new Error('请填写要评测的候选版本号（正整数）。')
+      // 评测方式按被测域诚实提交：RAG 四选真实生效；其余域固定 offline
+      // 离线契约（表单上不出现方式选择，避免"显示 A 提交 B"的静默覆盖）。
+      const record = await promptsService.createRelease(relKey.trim(), Number(relVersion.trim()), {
+        suite: suiteForRelease(relKey.trim()),
+        evaluation_mode: (relDomain === 'rag' ? relMode : 'offline') as 'offline' | 'semantic' | 'ragas' | 'self+ragas',
+        executor: 'local',
+        dataset_version: { source: 'eval-center', evaluation_mode: relDomain === 'rag' ? relMode : 'offline' },
       })
-      setMessage(`运行已入队：${result.run.run_id.slice(0, 8)}，配置与语料快照由服务端冻结。`)
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'evaluation-v2-runs'] })
-    } catch (cause) { setError(cause instanceof Error ? errMessage(cause) : '创建运行失败') }
+      setMessage(`发布评测已入队：${record.release_id.slice(0, 12)}（候选 ${relKey}@v${relVersion}）。已切到“运行记录 → 发布评测”跟踪进度。`)
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'prompt-release-runs'] })
+      setRunPane('history')
+      setHistorySource('release')
+    } catch (cause) { setError(cause instanceof Error ? errMessage(cause) : '发起发布评测失败') }
     finally { setBusy(false) }
   }
-
   const cancel = async (run: EvaluationV2Run) => {
     setBusy(true); setError('')
     try {
@@ -161,29 +175,6 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
       setMessage(response.accepted ? `已发送取消请求：${run.run_id.slice(0, 8)}` : '运行已进入终态')
       await queryClient.invalidateQueries({ queryKey: ['admin', 'evaluation-v2-runs'] })
     } catch (cause) { setError(cause instanceof Error ? errMessage(cause) : '取消失败') }
-    finally { setBusy(false) }
-  }
-
-  // 2026-11-22：从评测中心发起 Prompt 发布评测（复用发布门禁链路：候选
-  // 版本经评测与审批后才能发布；SQL 类 prompt 在该链路上跑真实生成评测）。
-  // suite 按类别选择：RAG 类用真实存在的发布门禁 smoke 集（pr_smoke 从未
-  // 创建过，曾致 RAG 发布评测必然 FileNotFoundError）；SQL 类不依赖 suite
-  // （canonical 内置集），其他类别回落 eval_center 元数据标记。
-  const suiteForRelease = (key: string) => key.startsWith('rag.') ? PROMPT_RELEASE_SUITE : 'eval_center'
-  const startRelease = async () => {
-    setBusy(true); setError(''); setMessage('')
-    try {
-      if (!relKey.trim()) throw new Error('请选择要评测的 Prompt。')
-      if (!/^\d+$/.test(relVersion.trim())) throw new Error('请填写要评测的候选版本号（正整数）。')
-      const record = await promptsService.createRelease(relKey.trim(), Number(relVersion.trim()), {
-        suite: suiteForRelease(relKey.trim()),
-        evaluation_mode: relMode as 'offline' | 'semantic' | 'ragas' | 'self+ragas',
-        executor: 'local',
-        dataset_version: { source: 'eval-center', evaluation_mode: relMode },
-      })
-      setMessage(`发布评测已入队：${record.release_id.slice(0, 12)}（候选 ${relKey}@v${relVersion}）。切到“运行记录 → 发布评测”查看进度。`)
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'prompt-release-runs'] })
-    } catch (cause) { setError(cause instanceof Error ? errMessage(cause) : '发起发布评测失败') }
     finally { setBusy(false) }
   }
   const retry = async (run: EvaluationV2Run) => {
@@ -216,64 +207,44 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
     </div>
 
     {runPane === 'launch' ? <section id="evaluation-run-launch" role="tabpanel" aria-label="发起评测" className="space-y-4">
-      <Card title="发起评测" subtitle="运行固定数据集版本与模型 / Prompt / 知识库快照；两次运行在相同口径下才可直接对比。">
-        <div className="mb-4 flex gap-1 border-b border-border-subtle">
-          <button type="button" role="tab" aria-selected={launchKind === 'v2'} onClick={() => setLaunchKind('v2')} className={`-mb-px border-b-2 px-3 py-2 text-xs font-medium ${launchKind === 'v2' ? 'border-accent text-accent' : 'border-transparent text-text-secondary hover:text-text-primary'}`}>
-            数据集方案评测
-          </button>
-          <button type="button" role="tab" aria-selected={launchKind === 'release'} onClick={() => setLaunchKind('release')} className={`-mb-px border-b-2 px-3 py-2 text-xs font-medium ${launchKind === 'release' ? 'border-accent text-accent' : 'border-transparent text-text-secondary hover:text-text-primary'}`}>
-            Prompt 发布评测
-          </button>
+      <Card title="发起评测" subtitle="对候选 Prompt 版本执行发布门禁评测；运行固定数据集版本与模型 / Prompt / 知识库快照，两次运行在相同口径下才可直接对比。">
+        <p className="mb-3 text-xs text-text-secondary">
+          对候选 Prompt 版本执行发布门禁评测（复用发布链路；SQL 类 Prompt 在此链路做真实生成评测）。
+          评测通过后到「Prompt CI/CD」对应 Prompt 页完成审批与发布。
+        </p>
+        <div className="grid gap-3 lg:grid-cols-[1.4fr_auto_auto_auto]">
+          <select aria-label="发布评测 Prompt" value={relKey} onChange={e => setRelKey(e.target.value)} className={ctl}>
+            <option value="">选择 Prompt</option>
+            {domain === 'all'
+              ? EVAL_DOMAINS.map(item => {
+                const group = domainPromptKeys.filter(prompt => promptKeyToDomain(prompt.key) === item.key)
+                if (!group.length) return null
+                return <optgroup key={item.key} label={domainLabel(item.key)}>
+                  {group.map(prompt => <option key={prompt.key} value={prompt.key}>{prompt.key} · {prompt.name}</option>)}
+                </optgroup>
+              })
+              : domainPromptKeys.map(prompt => <option key={prompt.key} value={prompt.key}>{prompt.key} · {prompt.name}</option>)}
+          </select>
+          <input
+            aria-label="发布评测候选版本" type="number" min={1}
+            placeholder={relLatest ? `现网 v${relLatest}` : '候选版本'}
+            title={relLatest ? `当前已发布 v${relLatest}，评测通过后候选版本将接替该版本` : undefined}
+            value={relVersion} onChange={e => setRelVersion(e.target.value)} className={`${ctl} w-28`}
+          />
+          {relDomain === 'rag'
+            ? <select aria-label="发布评测方式" value={relMode} onChange={e => setRelMode(e.target.value)} className={ctl}>
+              {Object.entries(MODE_LABELS).map(([value, labelText]) => <option key={value} value={value}>{labelText}</option>)}
+            </select>
+            : <p className="self-center text-xs text-text-muted" title="评测方式由该域发布链路决定，无需选择">
+              {relDomain === 'sql' ? 'SQL 走 canonical 双跑对比门（方式由链路决定）' : '离线契约评测（该域专属模块建设中，回落 RAG 门禁口径留痕）'}
+            </p>}
+          <button type="button" className={ctlPrimary} disabled={busy || !relKey} onClick={() => void startRelease()}><Play size={13} className="mr-1 inline" aria-hidden="true" />开始评测</button>
         </div>
-        {launchKind === 'release' ? <>
-          <p className="mb-3 text-xs text-text-secondary">
-            对候选 Prompt 版本执行发布门禁评测（复用发布链路；SQL 类 Prompt 在此链路做真实生成评测）。
-            评测通过后到「Prompt CI/CD」对应 Prompt 页完成审批与发布。
-          </p>
-          <div className="grid gap-3 lg:grid-cols-[1.4fr_auto_auto_auto]">
-            <select aria-label="发布评测 Prompt" value={relKey} onChange={e => setRelKey(e.target.value)} className={ctl}>
-              <option value="">选择 Prompt</option>
-              {promptKeys.map(item => <option key={item.key} value={item.key}>{item.key} · {item.name}</option>)}
-            </select>
-            <input aria-label="发布评测候选版本" type="number" min={1} placeholder="候选版本" value={relVersion} onChange={e => setRelVersion(e.target.value)} className={`${ctl} w-28`} />
-            <select aria-label="发布评测方式" value={relMode} onChange={e => setRelMode(e.target.value)} className={ctl}>
-              {Object.entries(MODE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-            <button type="button" className={ctlPrimary} disabled={busy || !relKey} onClick={() => void startRelease()}><Play size={13} className="mr-1 inline" aria-hidden="true" />开始评测</button>
-          </div>
-          <p className="mt-3 text-[11px] text-text-muted">
-            SQL 类 Prompt：门禁按 canonical 15 条题集做「候选 vs 现网」双跑对比（候选不比现网差才放行）。
-            RAG 类 Prompt：门禁按 desktop_upload_smoke 8 条短集跑分层阈值门（smoke ≥95%）。
-            其他类别暂无专属评测模块，将回落 RAG 门禁口径并留痕。
-          </p>
-        </> : optionsQuery.isPending ? <Empty text="正在读取可用数据集和运行配置…" /> : <>
-          <div className="grid gap-3 lg:grid-cols-[2fr_1.4fr_auto]">
-            <select aria-label="数据集" value={suiteId} onChange={e => setSuiteId(e.target.value)} className={ctl}>
-              <option value="">选择已发布数据集方案</option>
-              {suites.map(item => <option key={item.suite_version_id} value={item.suite_version_id}>{item.name} · {item.module} · v{item.version}（{item.case_count} 条）</option>)}
-            </select>
-            {isRag ? <select aria-label="评测方式" value={mode} onChange={e => setMode(e.target.value)} className={ctl}>
-              {Object.entries(MODE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select> : <p className="self-center text-xs text-text-muted" title="非 RAG 模块的 V2 运行按设计只做离线契约校验（不调模型、不出站）；SQL 在线生成评测请切到“Prompt 发布评测”">离线契约评测（非 RAG 暂不支持在线生成，见提示）</p>}
-            <button type="button" className={ctlPrimary} disabled={busy || !suiteId || (isRag && !kbId)} onClick={() => void start()}><Play size={13} className="mr-1 inline" aria-hidden="true" />开始运行</button>
-          </div>
-          <div className="mt-3 grid gap-3 lg:grid-cols-[1.2fr_1fr_1.2fr]">
-            <div className="flex items-center gap-2">
-              <select aria-label="选择 Prompt" value={promptKey} onChange={e => setPromptKey(e.target.value)} className={`${ctl} flex-1`}>
-                <option value="">被测 Prompt（可选）</option>
-                {promptKeys.map(item => <option key={item.key} value={item.key}>{item.key} · {item.name}</option>)}
-              </select>
-              <input aria-label="Prompt 版本号" type="number" min={1} placeholder="版本" value={promptVersion} onChange={e => setPromptVersion(e.target.value)} className={`${ctl} w-20`} />
-            </div>
-            {isRag
-              ? <select aria-label="知识库快照" value={kbId} onChange={e => setKbId(e.target.value)} className={ctl}>
-                <option value="">选择知识库（运行时自动冻结）</option>
-                {kbs.map(item => <option key={item.kb_id} value={item.kb_id}>{item.name} · {item.kb_id}</option>)}
-              </select>
-              : <p className="self-center text-xs text-text-muted">非 RAG 方案：通过既有离线 Runner 执行，不调用模型与知识库。</p>}
-            <p className="self-center text-xs text-text-muted">{!isRag || mode === 'offline' ? '离线模式不调用模型，结果可复现、零成本。' : mode === 'ragas' ? 'RAGAS 每题多次 Judge 调用，慢且消耗预算。' : '在线模式将真实调用模型生成回答。'}</p>
-          </div>
-        </>}
+        <p className="mt-3 text-[11px] text-text-muted">
+          SQL 类 Prompt：门禁按 canonical 15 条题集做「候选 vs 现网」双跑对比（候选不比现网差才放行）。
+          RAG 类 Prompt：门禁按 desktop_upload_smoke 8 条短集跑分层阈值门（smoke ≥95%）。
+          其他类别暂无专属评测模块，将回落 RAG 门禁口径并留痕。
+        </p>
       </Card>
     </section> : <section id="evaluation-run-history" role="tabpanel" aria-label="运行记录" className="space-y-4">
       {detailRunId ? <RunHistoryDetail key={detailRunId} runId={detailRunId} onBack={() => setDetailRunId('')} onGoCompare={onGoCompare} /> : detailEvalRun ? <EvalRunDetailPanel key={detailEvalRun} runId={detailEvalRun} onClose={() => setDetailEvalRun('')} /> : <Card
@@ -282,8 +253,8 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
         actions={<button type="button" className={ctlGhost} disabled={(historySource === 'v2' && runsQuery.isFetching) || (historySource === 'release' && releasesQuery.isFetching) || (historySource === 'ledger' && ledgerQuery.isFetching)} onClick={() => { if (historySource === 'v2') void runsQuery.refetch(); else if (historySource === 'release') void releasesQuery.refetch(); else void ledgerQuery.refetch() }}><RotateCw size={12} className="mr-1 inline" aria-hidden="true" />刷新</button>}
       >
         <div className="mb-4 flex gap-1 border-b border-border-subtle">
-          {([['v2', 'V2 方案评测'], ['release', '发布评测'], ['ledger', 'CLI 台账']] as const).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={historySource === value} onClick={() => setHistorySource(value)} className={`-mb-px border-b-2 px-3 py-2 text-xs font-medium ${historySource === value ? 'border-accent text-accent' : 'border-transparent text-text-secondary hover:text-text-primary'}`}>
-            {label}
+          {([['v2', 'V2 方案评测'], ['release', '发布评测'], ['ledger', 'CLI 台账']] as const).map(([value, labelText]) => <button key={value} type="button" role="tab" aria-selected={historySource === value} onClick={() => setHistorySource(value)} className={`-mb-px border-b-2 px-3 py-2 text-xs font-medium ${historySource === value ? 'border-accent text-accent' : 'border-transparent text-text-secondary hover:text-text-primary'}`}>
+            {labelText}
           </button>)}
         </div>
         {historySource === 'release' ? <ReleaseRunsTable
@@ -304,11 +275,12 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
           <p role="alert" className="text-xs text-red-700">{errMessage(runsQuery.error)}</p>
           <button type="button" className={ctl} onClick={() => void runsQuery.refetch()}>重新读取</button>
         </div> : runs.length === 0 ? <Empty text={historyPage === 0 ? '还没有运行记录。切到“发起评测”开始第一次运行。' : '这一页没有运行记录。'} /> : <>
-          <TableWrap minWidth={1120}>
-            <thead className="bg-bg-elevated"><tr><Th>Run</Th><Th>数据集</Th><Th>被测配置</Th><Th>评测方式</Th><Th>状态</Th><Th>Gate</Th><Th>进度 / 结果</Th><Th end>费用</Th><Th end>耗时</Th><Th>完成时间</Th><Th end>操作</Th></tr></thead>
+          <TableWrap minWidth={1160}>
+            <thead className="bg-bg-elevated"><tr><Th>Run</Th><Th>域</Th><Th>数据集</Th><Th>被测配置</Th><Th>评测方式</Th><Th>状态</Th><Th>Gate</Th><Th>进度 / 结果</Th><Th end>费用</Th><Th end>耗时</Th><Th>完成时间</Th><Th end>操作</Th></tr></thead>
             <tbody className="divide-y divide-border-subtle">
               {runs.map(run => <Fragment key={run.run_id}><tr>
                 <Td mono>{run.run_id.slice(0, 8)}</Td>
+                <Td><Badge text={domainLabel(moduleToDomain(run.module))} tone="blue" /></Td>
                 <Td><span className="block text-text-primary">{run.suite_name || run.suite_key}</span><span className="text-[11px] text-text-muted">v{run.suite_version || '—'}</span></Td>
                 <Td>{(() => { const versions = run.prompt_versions || {}; return Object.keys(versions).length ? Object.entries(versions).map(([key, value]) => `${key}@${String(value)}`).join(' · ') : '默认配置' })()}</Td>
                 <Td>{modeShort(run.evaluation_mode)}{run.source && run.source !== 'manual' && <span className="ml-1.5"><Badge text={run.source === 'online' ? '线上采样' : run.source === 'prompt_release' ? '发布' : run.source} tone="accent" /></span>}</Td>
@@ -327,12 +299,12 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
                 <Td end>
                   <button type="button" className={`${ctlGhost} mr-1`} onClick={() => setDetailRunId(run.run_id)}>运行详情</button>
                   {run.job_status === 'completed' && <button type="button" className={`${ctlGhost} mr-1`} onClick={() => setGateRunId(current => current === run.run_id ? '' : run.run_id)}>{run.gate_verdict === 'PASS' ? 'Gate 审批' : 'Gate 详情'}</button>}
-                  {run.job_status === 'completed' && <button type="button" className={`${ctlGhost} mr-1`} onClick={() => onGoCompare?.(run.run_id)}>对比<ArrowRight size={11} className="ml-0.5 inline" aria-hidden="true" /></button>}
+                  {onGoCompare && run.job_status === 'completed' && <button type="button" className={`${ctlGhost} mr-1`} onClick={() => onGoCompare(run.run_id)}>对比<ArrowRight size={11} className="ml-0.5 inline" aria-hidden="true" /></button>}
                   {!TERMINAL.has(run.job_status) && <button type="button" className={`${ctlGhost} mr-1`} disabled={busy} onClick={() => void cancel(run)}><X size={12} className="mr-0.5 inline" aria-hidden="true" />取消</button>}
                   {run.job_status === 'failed' && <button type="button" className={ctl} disabled={busy} onClick={() => void retry(run)}><RotateCw size={12} className="mr-1 inline" aria-hidden="true" />重试</button>}
                 </Td>
               </tr>
-              {gateRunId === run.run_id && <tr><td colSpan={11} className="bg-bg-elevated/50 p-3"><GateApprovalPanel runId={run.run_id} onClose={() => setGateRunId('')} onSubmitted={() => void queryClient.invalidateQueries({ queryKey: ['admin', 'evaluation-v2-runs'] })} /></td></tr>}
+              {gateRunId === run.run_id && <tr><td colSpan={12} className="bg-bg-elevated/50 p-3"><GateApprovalPanel runId={run.run_id} onClose={() => setGateRunId('')} onSubmitted={() => void queryClient.invalidateQueries({ queryKey: ['admin', 'evaluation-v2-runs'] })} /></td></tr>}
               </Fragment>)}
             </tbody>
           </TableWrap>
@@ -349,6 +321,27 @@ export default function RunsTab({ promptPrefill, focusRunId, focusSuiteVersionId
 }
 
 // ── 发布评测表格（Prompt 发布门禁记录，含 SQL 双跑）──────────────
+
+/**
+ * 门禁字段人类可读化：ragas_applicable=false 是「未接入」而非「未通过」；
+ * candidate_regression 对象展开为对比摘要；字符串去 JSON 引号。
+ */
+function formatGateValue(key: string, value: unknown): string {
+  if (typeof value === 'boolean') {
+    if (key === 'ragas_applicable' && !value) return '不适用（未接入 RAGAS）'
+    return value ? '通过' : '未通过'
+  }
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object') {
+    const regression = value as { threshold?: number; current_pass_rate?: number; candidate_pass_rate?: number; regression_pass?: boolean }
+    if (key === 'candidate_regression' && typeof regression.regression_pass === 'boolean') {
+      const pct = (rate?: number) => typeof rate === 'number' ? `${(rate * 100).toFixed(1)}%` : '—'
+      return `候选 ${pct(regression.candidate_pass_rate)} vs 现网 ${pct(regression.current_pass_rate)}，阈值 ${regression.threshold ?? '—'}，${regression.regression_pass ? '回归通过' : '回归未通过'}`
+    }
+    return JSON.stringify(value)
+  }
+  return String(value)
+}
 
 function ReleaseRunsTable({ loading, error, releases, expandedId, onToggle, onOpenRunDetail, onRetryRefresh }: {
   loading: boolean
@@ -372,18 +365,25 @@ function ReleaseRunsTable({ loading, error, releases, expandedId, onToggle, onOp
     <p role="alert" className="text-xs text-red-700">{error}</p>
     <button type="button" className={ctl} onClick={onRetryRefresh}>重新读取</button>
   </div>
-  if (releases.length === 0) return <Empty text="还没有发布评测记录。切到“发起评测 → Prompt 发布评测”发起第一次。" />
-  return <TableWrap minWidth={1040}>
-    <thead className="bg-bg-elevated"><tr><Th>Release</Th><Th>候选 Prompt</Th><Th>方式</Th><Th>状态</Th><Th>候选 vs 现网</Th><Th>门禁</Th><Th>发起人</Th><Th>时间</Th><Th end>操作</Th></tr></thead>
+  if (releases.length === 0) return <Empty text="该域暂无发布评测记录。切到“发起评测”发起第一次。" />
+  return <TableWrap minWidth={1100}>
+    <thead className="bg-bg-elevated"><tr><Th>Release</Th><Th>域</Th><Th>候选 Prompt</Th><Th>方式</Th><Th>状态</Th><Th>候选 vs 现网</Th><Th>门禁</Th><Th>发起人</Th><Th>时间</Th><Th end>操作</Th></tr></thead>
     <tbody className="divide-y divide-border-subtle">
       {releases.map(record => {
         const blocked = releaseGate(record)
         const evalRunId = record.eval_run_id
+        const statusHint = record.failure_reason
+          || (evalRunId?.startsWith('local-') ? 'CLI 本地执行失败（非门禁拦截）' : '')
         return (<Fragment key={record.release_id}><tr>
           <Td mono>{record.release_id.slice(0, 12)}</Td>
+          <Td><Badge text={domainLabel(promptKeyToDomain(record.prompt_key))} tone="blue" /></Td>
           <Td><span className="block text-text-primary">{record.prompt_key}</span><span className="text-[11px] text-text-muted">v{record.version} · {record.eval_suite}</span></Td>
           <Td>{record.executor === 'local' ? '本机执行' : 'GitHub 执行'}</Td>
-          <Td><StatusBadge status={record.status} /></Td>
+          <Td>
+            <span title={statusHint || undefined}>
+              <StatusBadge status={record.status} />
+            </span>
+          </Td>
           <Td>{(() => {
             const candidate = releaseRate(record, 'candidate_pass_rate')
             const current = releaseRate(record, 'current_pass_rate')
@@ -404,7 +404,7 @@ function ReleaseRunsTable({ loading, error, releases, expandedId, onToggle, onOp
             {evalRunId ? <button type="button" className={ctlGhost} onClick={() => onOpenRunDetail(evalRunId)}>逐题详情</button> : null}
           </Td>
         </tr>
-        {expandedId === record.release_id && <tr><td colSpan={9} className="bg-bg-elevated/50 p-3">
+        {expandedId === record.release_id && <tr><td colSpan={10} className="bg-bg-elevated/50 p-3">
           <div className="grid gap-3 text-[11px] lg:grid-cols-2">
             <div>
               <p className="mb-1 font-medium text-text-secondary">门禁判定（metrics.gate）</p>
@@ -413,7 +413,7 @@ function ReleaseRunsTable({ loading, error, releases, expandedId, onToggle, onOp
                 if (!gate) return <p className="text-text-muted">评测未产出门禁数据（pending/running 或旧记录）。</p>
                 return <ul className="space-y-1 text-text-secondary">
                   {Object.entries(gate).filter(([key]) => !['blocked_rules', 'tiers', 'regression', 'ragas', 'sample_gate'].includes(key)).map(([key, value]) => (
-                    <li key={key}><span className="text-text-muted">{key}:</span> {typeof value === 'boolean' ? (value ? '通过' : '未通过') : JSON.stringify(value)}</li>
+                    <li key={key}><span className="text-text-muted">{key}:</span> {formatGateValue(key, value)}</li>
                   ))}
                 </ul>
               })()}
@@ -447,12 +447,13 @@ function LedgerRunsTable({ loading, error, runs, onOpenRunDetail }: {
   if (error) return <div className="space-y-2 py-5 text-center">
     <p role="alert" className="text-xs text-red-700">{error}</p>
   </div>
-  if (runs.length === 0) return <Empty text="台账暂无记录（CLI 评测与线上采样写入此台账）。" />
-  return <TableWrap minWidth={900}>
-    <thead className="bg-bg-elevated"><tr><Th>Run</Th><Th>模块</Th><Th>状态</Th><Th>通过率</Th><Th>样本</Th><Th>数据集版本</Th><Th>触发</Th><Th>时间</Th><Th end>操作</Th></tr></thead>
+  if (runs.length === 0) return <Empty text="该域暂无台账记录（CLI 评测与线上采样写入此台账）。" />
+  return <TableWrap minWidth={960}>
+    <thead className="bg-bg-elevated"><tr><Th>Run</Th><Th>域</Th><Th>模块</Th><Th>状态</Th><Th>通过率</Th><Th>样本</Th><Th>数据集版本</Th><Th>触发</Th><Th>时间</Th><Th end>操作</Th></tr></thead>
     <tbody className="divide-y divide-border-subtle">
       {runs.map(run => <tr key={run.run_id}>
         <Td mono>{run.run_id.slice(0, 16)}</Td>
+        <Td><Badge text={domainLabel(moduleToDomain(run.module))} tone="blue" /></Td>
         <Td>{run.module}</Td>
         <Td>{run.status ? <StatusBadge status={run.status} /> : <span className="text-text-muted">—</span>}</Td>
         <Td>{(run.pass_rate * 100).toFixed(1)}%</Td>
@@ -495,15 +496,13 @@ function GateApprovalPanel({ runId, onClose, onSubmitted }: { runId: string; onC
     const cleanRationale = rationale.trim()
     if (!referenceValid || !rationaleValid) { setError('请填写有效的发布引用和 8 到 2000 字审批理由。'); return }
     const key = JSON.stringify([latest.decision_id, decision, cleanReference, cleanRationale])
-    const pending = pendingRequest.current?.key === key
-      ? pendingRequest.current
-      : { key, requestId: createIdempotencyKey() }
-    pendingRequest.current = pending
+    const requestId = pendingRequest.current?.key === key ? pendingRequest.current.requestId : createIdempotencyKey()
+    pendingRequest.current = { key, requestId }
     setSaving(true); setError(''); setMessage('')
     try {
       const approval = await evaluationService.createV2GateApproval(runId, {
         gate_decision_id: latest.decision_id,
-        request_id: pending.requestId,
+        request_id: requestId,
         decision,
         release_reference: cleanReference,
         rationale: cleanRationale,
