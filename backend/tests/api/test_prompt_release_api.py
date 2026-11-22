@@ -55,6 +55,9 @@ class _FakeReleaseService:
     async def list_releases(self, _key):
         return [self.release]
 
+    async def list_all_releases(self, limit: int = 50):
+        return [self.release]
+
     async def get(self, _release_id):
         return self.release
 
@@ -184,3 +187,53 @@ def test_approve_with_foreign_key_does_not_mutate(client, monkeypatch):
 
     assert response.status_code == 404
     assert fake_service.release.status == "passed"
+
+
+class TestListAllReleases:
+    """跨 Prompt 发布评测列表（评测中心「运行记录」聚合视图）。
+
+    权限门槛 = is_platform_admin（admin/super_admin）。JWT 通道的集成
+    验证依赖 identity 落库（测试环境无 DB），此处以服务凭据通道 +
+    纯函数矩阵覆盖；editor 被拒的语义由 is_platform_admin 保证。
+    """
+
+    def test_internal_token_can_list_all(self, client):
+        fake_service = _FakeReleaseService(_release(status="published"))
+        with patch(
+            "backend.app.api.routes.prompt_releases.get_release_service",
+            return_value=fake_service,
+        ):
+            response = client.get("/api/prompts/releases/all", headers=AUTH)
+
+        assert response.status_code == 200
+        items = response.json()["items"]
+        assert items[0]["release_id"] == "rel-1"
+        assert items[0]["prompt_key"] == "rag.qa"
+        assert items[0]["status"] == "published"
+
+    def test_platform_admin_gate_matrix(self):
+        from backend.app.api.deps import is_platform_admin
+
+        assert is_platform_admin("super_admin") is True
+        assert is_platform_admin("admin") is True
+        assert is_platform_admin("editor") is False
+        assert is_platform_admin("viewer") is False
+
+    def test_editor_role_forbidden_by_gate(self, client):
+        """编辑角色（无平台管理员）访问聚合列表被 403 拒绝。
+
+        用 dependency_overrides 注入 editor 身份，绕开 JWT 通道的 DB
+        依赖，只验证路由层的权限门槛本身。
+        """
+        from backend.app.api.deps import OperatorIdentity
+        from backend.app.api.routes import prompt_releases as route
+
+        client.app.dependency_overrides[route.resolve_operator_role] = (
+            lambda: OperatorIdentity(role="editor", actor="user:9")
+        )
+        try:
+            response = client.get("/api/prompts/releases/all", headers=AUTH)
+        finally:
+            client.app.dependency_overrides.clear()
+
+        assert response.status_code == 403

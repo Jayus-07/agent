@@ -76,6 +76,11 @@ class PromptReleaseService:
         rows = await self._repository.list_releases(key)
         return [PromptReleaseRecord.from_row(row) for row in rows]
 
+    async def list_all_releases(self, limit: int = 50) -> list[PromptReleaseRecord]:
+        """跨 Prompt 发布评测列表（评测中心聚合视图）。"""
+        rows = await self._repository.list_all_releases(limit)
+        return [PromptReleaseRecord.from_row(row) for row in rows]
+
     async def get_approved_release(
         self, key: str, version: int, *, target_env: str = "production"
     ) -> PromptReleaseRecord | None:

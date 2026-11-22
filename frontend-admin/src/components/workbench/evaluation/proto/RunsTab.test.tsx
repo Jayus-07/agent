@@ -9,7 +9,13 @@ import RunsTab from './RunsTab'
 
 vi.mock('@/lib/auth', () => ({ atLeast: () => true }))
 vi.mock('@/api/knowledge', () => ({ listKbAuthority: async () => ({ knowledge_bases: [{ kb_id: 'kb', active: true }] }) }))
-vi.mock('@/api/prompts', () => ({ promptsService: { list: async () => [] } }))
+vi.mock('@/api/prompts', () => ({
+  promptsService: {
+    list: async () => [],
+    listAllReleases: async () => [],
+    createRelease: async () => ({ release_id: 'rel-new' }),
+  },
+}))
 
 function createTestQueryClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } })
@@ -239,6 +245,78 @@ it('逐题报告缺失时给出明确提示并隐藏无效重试', async () => {
 
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(message)
     expect(Array.from(container.querySelectorAll('button')).some(button => button.textContent?.includes('重新读取'))).toBe(false)
+  } finally {
+    await act(async () => root.unmount())
+    queryClient.clear()
+    container.remove()
+    vi.restoreAllMocks()
+  }
+})
+
+it('评测中心可发起 Prompt 发布评测并提交 local executor', async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([] as unknown as Awaited<ReturnType<typeof evaluationService.listSuites>>)
+  const { promptsService } = await import('@/api/prompts')
+  vi.spyOn(promptsService, 'list').mockResolvedValue([
+    { key: 'sql.generator', name: 'SQL 生成 Prompt' },
+  ] as Awaited<ReturnType<typeof promptsService.list>>)
+  const create = vi.spyOn(promptsService, 'createRelease').mockResolvedValue({
+    release_id: 'rel-new-1234567890', status: 'pending',
+  } as Awaited<ReturnType<typeof promptsService.createRelease>>)
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  const queryClient = createTestQueryClient()
+  try {
+    await act(async () => { root.render(<QueryClientProvider client={queryClient}><RunsTab /></QueryClientProvider>) })
+    await flushQueries()
+    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('Prompt 发布评测'))!.click() })
+    const keySelect = container.querySelector('[aria-label="发布评测 Prompt"]') as HTMLSelectElement
+    const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
+    await act(async () => { selectSetter.call(keySelect, 'sql.generator'); keySelect.dispatchEvent(new Event('change', { bubbles: true })) })
+    const versionInput = container.querySelector('[aria-label="发布评测候选版本"]') as HTMLInputElement
+    const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => { inputSetter.call(versionInput, '2'); versionInput.dispatchEvent(new Event('input', { bubbles: true })) })
+    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('开始评测'))!.click() })
+    expect(create).toHaveBeenCalledWith('sql.generator', 2, expect.objectContaining({ executor: 'local' }))
+  } finally {
+    await act(async () => root.unmount())
+    queryClient.clear()
+    container.remove()
+    vi.restoreAllMocks()
+  }
+})
+
+it('运行记录可切到发布评测来源并展示双跑通过率与门禁详情', async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([] as unknown as Awaited<ReturnType<typeof evaluationService.listSuites>>)
+  const { promptsService } = await import('@/api/prompts')
+  vi.spyOn(promptsService, 'listAllReleases').mockResolvedValue([{
+    release_id: 'rel-cbc7e63de348', prompt_key: 'sql.generator', version: 2,
+    target_env: 'production', status: 'passed', eval_suite: 'sql_canonical_r3',
+    executor: 'local', dataset_provenance: {}, metrics: {
+      candidate_pass_rate: 0.4, current_pass_rate: 0.4,
+      gate: { sample_pass: true, absolute_floor_pass: true, candidate_regression_pass: true, blocked_rules: [] },
+    },
+    failure_reason: '', approved_by: 'user:3', published_by: '',
+    created_at: '2026-11-22T03:16:00Z',
+  } as never])
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  const queryClient = createTestQueryClient()
+  try {
+    await act(async () => { root.render(<QueryClientProvider client={queryClient}><RunsTab /></QueryClientProvider>) })
+    await flushQueries()
+    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('运行记录'))!.click() })
+    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('发布评测'))!.click() })
+    await flushQueries()
+    expect(container.textContent).toContain('sql.generator')
+    expect(container.textContent).toContain('候选 40.0% · 现网 40.0%')
+    await act(async () => { Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('门禁详情'))!.click() })
+    expect(container.textContent).toContain('blocked_rules')
   } finally {
     await act(async () => root.unmount())
     queryClient.clear()
