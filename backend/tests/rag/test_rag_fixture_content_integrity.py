@@ -24,7 +24,7 @@ from langchain_core.documents import Document
 
 from backend.rag.indexing.indexer import _filter_index_chunks
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
-from backend.rag.preprocessing.chunking import coverage_audit
+from backend.rag.preprocessing.chunking import coverage_audit, is_table_chunk
 from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.filter import ChunkFilter
 from backend.rag.preprocessing.pipeline import parse_and_chunk_full
@@ -157,12 +157,132 @@ def test_tech_manual_english_config_content_kept():
 # - 全链路（find_tables + coverage_audit + 全预算 OCR ~157 需求页）单进程
 #   实测 30 分钟量级，曾把 xdist worker 拖过 pytest-timeout 全局预算引发
 #   node down 连环（rag 全量 96% 卡死根因，诊断栈留档）；
-# - progit_en_501p 在全预算 OCR 下仍有 4 个产品解析硬异常（纯图页 OCR 无
-#   文本产出、source_text 审计缺口、页覆盖缺口）——修 PDF 解析器属产品
-#   课题，不在测试清偿范围（移交记录见 PROGRESS.md 批十五）；
+# - progit_en_501p 的「source_text 审计缺口」已修（2026-11-22：嵌入字体缺
+#   advance width 导致结构化提取丢零宽字符，解析器现按字符级坐标恢复，
+#   见 test_zero_width_font_pdf_content_recovered）；保留排除仅剩
+#   「纯图页依赖 OCR 供应商」与耗时原因，OCR 链路由 OCR 集成测试覆盖；
 # - 长文档行为已有专门测试覆盖（test_chunk_pages_locality /
 #   test_cleaner_template_lines 等，基于 progit 实测切片）。
 LONG_BOOK_FIXTURE_IDS = frozenset({"UF-14-01", "UF-14-02"})
+
+
+FINANCIAL_TABLE_FIXTURE = (
+    REPO_ROOT / "backend" / "evaluation" / "fixtures" / "rag_eval_kb" / "files"
+    / "09_pdf_cross_page_table" / "report.pdf"
+)
+
+
+@pytest.mark.timeout(600)
+def test_financial_table_short_cell_rows_survive_all_symbols_filter():
+    """UF-09-01 回归：财务表格短 cell 行组不得被 all_symbols 规则误杀。
+
+    根因（2026-11-22 生产实测）：表格行组把空 cell 序列化成分隔逗号，
+    "核销/转回/动" 这类 1-2 字短 cell 行符号占比天然超阈值，被 all_symbols
+    过滤且表格不豁免 → coverage_audit 记真缺口 → 付费前 fail-closed 拦截。
+    all_symbols 现与 too_short/low_chinese_ratio/duplicate 同款表格豁免。
+    """
+    assert FINANCIAL_TABLE_FIXTURE.is_file(), "缺少真实 fixture: report.pdf"
+    chunks, qc = parse_and_chunk_full(str(FINANCIAL_TABLE_FIXTURE))
+    chunk_filter = ChunkFilter()
+    kept, filtered = _filter_index_chunks(
+        chunks, chunk_filter, str(FINANCIAL_TABLE_FIXTURE),
+        str(qc.get("doc_type") or ""),
+    )
+    table_filtered = [
+        d for d in filtered
+        if isinstance(d.get("chunk_type"), str) and is_table_chunk(d["chunk_type"])
+    ]
+    assert table_filtered == [], (
+        f"表格 chunk 被过滤（数据未入库）: "
+        f"{[(d['reason'], d['preview'][:40]) for d in table_filtered]}"
+    )
+    coverage = coverage_audit(
+        qc["normalized_ast"], kept,
+        normalize_pii=any(
+            (chunk.metadata or {}).get("pii_masked")
+            for chunk in kept
+            if (chunk.metadata or {}).get("granularity") == "leaf"
+        ),
+        excluded_texts=[
+            d.get("content", "") for d in filtered
+            if not (isinstance(d.get("chunk_type"), str)
+                    and is_table_chunk(d["chunk_type"]))
+        ],
+    )
+    assert coverage["uncovered_count"] == 0, (
+        f"表格行覆盖缺口: {coverage['uncovered_samples'][:3]}"
+    )
+
+
+@pytest.mark.timeout(600)
+def test_zero_width_font_pdf_content_recovered(tmp_path):
+    """UF-14-01 回归：零宽字体 PDF 的结构化提取必须有字符级兜底。
+
+    根因（2026-11-22 生产实测）：progit_en 嵌入字体缺 advance width，
+    dict/rawdict/words 把零宽 span 全部丢弃（多数正文页 dict 提取 0 字符），
+    只有 get_text("text") 保留；页级源文本审计因此记大量缺口，
+    coverage_rate 0.6987 < 0.95 → error 硬拦。解析器现从 texttrace 字符级
+    坐标恢复零宽内容，恢复页在审计端按未验证处理（与 OCR 页同语义）。
+    用 501p 原书裁剪出的无图页子集做快速回归（子集内页码已重排）。
+    """
+    import fitz
+
+    source = (
+        REPO_ROOT / "backend" / "evaluation" / "fixtures" / "rag_eval_kb"
+        / "files" / "14_long_300_500p" / "progit_en_501p.pdf"
+    )
+    assert source.is_file(), "缺少真实 fixture: progit_en_501p.pdf"
+    subset_path = tmp_path / "progit_subset.pdf"
+    doc = fitz.open(source)
+    try:
+        # 页 12-16 与 26-31（原书 1-based）：零宽正文页、无图片块、无 OCR 需求；
+        # 源 PDF 含损坏对象（insert_pdf 会挂），select 就地裁剪。不能用
+        # garbage 回收保存——MuPDF 会重写字体对象补齐 advance width，把
+        # 零宽病灶修掉，回归就测不到解析器兜底了。
+        doc.select([11, 12, 13, 14, 15, 25, 26, 27, 28, 29, 30])
+        doc.save(str(subset_path))
+    finally:
+        doc.close()
+
+    chunks, qc = parse_and_chunk_full(str(subset_path))
+    raw_ast = qc["raw_ast"]
+    recovered = set(raw_ast.pdf_zero_width_recovered_pages or [])
+    assert recovered, "零宽字体 PDF 未触发字符级恢复"
+    # 子集 11 页全部是零宽恢复页：恢复内容必须回到可检索文本。
+    # 不能逐行精确断言——text 模式对该字体做系统性双写折叠
+    # （Getting→Geting、Masood→Masod），与 texttrace 恢复路径的解码不同，
+    # 只能量级核对（恢复文本须接近 native 文字层的字符总量）。
+    import re
+
+    def _norm(value: str) -> str:
+        return re.sub(r"\s+", "", str(value or "")).casefold()
+
+    body = _norm("\n".join(
+        chunk.page_content for chunk in chunks
+        if (chunk.metadata or {}).get("granularity") == "leaf"
+    ))
+    doc = fitz.open(str(subset_path))
+    try:
+        native_total = _norm("".join(
+            page.get_text("text") for page in doc
+        ))
+    finally:
+        doc.close()
+    assert len(body) >= len(native_total) * 0.8, (
+        f"零宽恢复内容量级不足: recovered={len(body)} native={len(native_total)}"
+    )
+    # 恢复页在审计端按未验证处理：不得再产出 error 级源文本审计缺口
+    codes = {
+        str(issue.get("code")): str(issue.get("severity") or "")
+        for issue in (raw_ast.parse_issues or [])
+    }
+    gap_severity = codes.get("pdf_source_text_audit_gap")
+    assert gap_severity != "error", (
+        f"零宽恢复页仍被审计缺口硬拦: {codes}"
+    )
+    assert "pdf_zero_width_text_recovered" in codes, (
+        f"恢复页未留痕 parse_issue: {codes}"
+    )
 
 
 @pytest.mark.timeout(900)
@@ -210,8 +330,15 @@ def test_all_baseline_fixtures_complete_offline():
                 if (chunk.metadata or {}).get("granularity") == "leaf"
             ),
             # P2 收口（2026-10-19）：被显式规则过滤的 chunk 是合法排除，
-            # 以原文纳入覆盖对照豁免（与 indexer 付费前预检同口径）
-            excluded_texts=[d.get("content", "") for d in filtered],
+            # 以原文纳入覆盖对照豁免——但表格 chunk 不豁免（与 indexer
+            # 付费前预检同口径：表格被过滤意味着数据未入库，必须计入
+            # 缺口）。此前这里把表格过滤内容也豁免了，口径比预检宽，
+            # UF-09-01/13-01 的表格短 cell 被 all_symbols 误杀在 CI 漏检。
+            excluded_texts=[
+                d.get("content", "") for d in filtered
+                if not (isinstance(d.get("chunk_type"), str)
+                        and is_table_chunk(d["chunk_type"]))
+            ],
         )
         integrity = audit_chunk_integrity(kept)
         record = build_quality_record(
@@ -485,7 +612,9 @@ def test_prepaid_integrity_fails_before_metadata_llm(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         pipeline_module, "parse_and_chunk_full",
-        lambda _path: (chunks, {"raw_ast": source, "coverage": coverage}),
+        # indexer 现以 tenant_id/kb_id 等关键字调用（§4 权限范围），
+        # patch 签名必须吞掉全部关键字参数，否则测试自身 TypeError。
+        lambda _path, **_kwargs: (chunks, {"raw_ast": source, "coverage": coverage}),
     )
     persisted: list[dict] = []
     monkeypatch.setattr(

@@ -333,6 +333,94 @@ def _normalize_audit_text(value: str) -> str:
     return re.sub(r"[\W_]", "", str(value or ""), flags=re.UNICODE).casefold()
 
 
+# ── 零宽字符兜底（2026-11-22）────────────────────────────────────
+# 部分自出版 PDF 的嵌入字体缺 advance width，dict/rawdict/words 结构化
+# 提取把零宽 span 判无效全部丢弃，只有纯文本模式保留——结构化解析路径
+# 会大面积丢内容（progit_en_501p 实测：多数正文页 dict 提取 0 字符，
+# 而 get_text("text") 正常，页级源文本审计因此 fail-closed 拦截）。
+# texttrace 保留每个字符的 origin 坐标，可在字符级恢复：按 y 聚合成行、
+# 以退化 bbox 注入事件流，保证内容可检索且源文本审计可通过。恢复行
+# size=0 不参与标题判定，排序后按 y 有序插入、不参与双栏栏逻辑。
+
+_ZERO_WIDTH_SPAN_MAX_WIDTH = 0.01   # 段 bbox 宽度小于该值视为零宽段
+_ZERO_WIDTH_LINE_TOLERANCE = 2.0    # 行聚合的 y 邻近阈值（pt）
+_ZERO_WIDTH_MIN_LINE_CHARS = 2      # 单行最少字符数（防孤立噪点）
+
+
+def _zero_width_recovered_lines(page) -> list[tuple[float, float, str]]:
+    """返回 (y, x, text) 列表：texttrace 零宽段字符按 y 聚合的行文本。"""
+    try:
+        spans = page.get_texttrace()
+    except Exception:  # noqa: BLE001 — 恢复失败不阻断解析
+        return []
+    chars: list[tuple[float, float, str]] = []
+    for span in spans:
+        bbox = span.get("bbox") or (0.0, 0.0, 0.0, 0.0)
+        if bbox[2] - bbox[0] >= _ZERO_WIDTH_SPAN_MAX_WIDTH:
+            continue
+        for item in span.get("chars") or []:
+            if not isinstance(item, (list, tuple)) or len(item) < 3:
+                continue
+            origin = item[2]
+            try:
+                chars.append(
+                    (float(origin[1]), float(origin[0]), chr(int(item[0]))),
+                )
+            except (TypeError, ValueError, OverflowError):
+                continue
+    if not chars:
+        return []
+    chars.sort(key=lambda item: (item[0], item[1]))
+    lines: list[tuple[float, float, str]] = []
+    line_y, line_x = chars[0][0], chars[0][1]
+    buffer: list[str] = []
+    for y, x, ch in chars:
+        if buffer and abs(y - line_y) > _ZERO_WIDTH_LINE_TOLERANCE:
+            text = "".join(buffer).strip()
+            if len(text) >= _ZERO_WIDTH_MIN_LINE_CHARS:
+                lines.append((line_y, line_x, text))
+            line_y, line_x, buffer = y, x, []
+        buffer.append(ch)
+    text = "".join(buffer).strip()
+    if len(text) >= _ZERO_WIDTH_MIN_LINE_CHARS:
+        lines.append((line_y, line_x, text))
+    return lines
+
+
+def _insert_zero_width_recovered_lines(events, page, page_number: int) -> int:
+    """把零宽字符恢复行按 y 有序插入已排序事件流，返回插入行数。
+
+    结构化路径已能覆盖的行（同页混合场景下 dict 正常段/表格 cell）不
+    重复注入；恢复行 bbox 退化为起点单点，不与表格区域产生面积重叠。
+    """
+    lines = _zero_width_recovered_lines(page)
+    if not lines:
+        return 0
+    existing_parts = [
+        str(event[2][0] or "") for event in events if event[1] == "text"
+    ]
+    existing_parts.extend(
+        str(cell or "")
+        for event in events if event[1] == "table"
+        for row in event[2]
+        for cell in row
+    )
+    existing = _normalize_audit_text("\n".join(existing_parts))
+    inserted = 0
+    for y, x, text in lines:
+        normalized = _normalize_audit_text(text)
+        if not normalized or normalized in existing:
+            continue
+        bbox = (x, y, x, y + 1.0)
+        event = (y, "text", (text, 0.0, page_number, bbox), page_number, bbox)
+        index = len(events)
+        while index > 0 and events[index - 1][0] > y:
+            index -= 1
+        events.insert(index, event)
+        inserted += 1
+    return inserted
+
+
 def _audit_native_text_page(source_text: str, ast_text: str) -> tuple[int, int]:
     """返回可对账/总片段数；逐行滑窗降低阅读顺序差异的影响。"""
     normalized_ast = _normalize_audit_text(ast_text)
@@ -482,6 +570,7 @@ class PdfParser(BaseDocumentParser):
         layout_fallback_pages: set[int] = set()
         native_source_text_by_page: dict[int, str] = {}
         table_detection_failed_pages: set[int] = set()
+        zero_width_recovered_pages: set[int] = set()
         parse_issues: list[dict] = []
         try:
             for page_idx in range(len(doc)):
@@ -555,6 +644,12 @@ class PdfParser(BaseDocumentParser):
                     events, used_layout_fallback = _order_page_events(
                         events, float(page.rect.width),
                     )
+                    # 零宽字符兜底（见 _zero_width_recovered_lines 注释）：
+                    # 必须在 blank/unparsed 判定之前注入，让有原生文字层但
+                    # 结构化提取退化的页面不再被判空白/整页 OCR。
+                    if _insert_zero_width_recovered_lines(
+                            events, page, page_idx + 1):
+                        zero_width_recovered_pages.add(page_idx + 1)
                     page_events[page_idx] = events
                     if used_layout_fallback:
                         layout_fallback_pages.add(page_idx + 1)
@@ -864,6 +959,14 @@ class PdfParser(BaseDocumentParser):
                 # 页面内 OCR 追加的图像/扫描内容不在原生文字层对账范围内；即使
                 # 同页其它原生文字完整，也必须明确保留这部分未独立验证状态。
                 source_audit_unverified_pages.append(page_number)
+            if page_number in zero_width_recovered_pages:
+                # 零宽恢复页：结构化提取与纯文本模式对同一 glyph 的解码可能
+                # 不一致（实测 tt 合字 text 模式出单 t、texttrace 出双 t），
+                # 对账必产假阳性；该页内容完整性由字符级恢复路径保证，页码
+                # 已在 parse_issue 与 AST 留痕，源文本对账在这些页不适用。
+                if page_number not in source_audit_unverified_pages:
+                    source_audit_unverified_pages.append(page_number)
+                continue
             source_text = native_source_text_by_page.get(page_number, "")
             if not source_text.strip():
                 if page_number not in source_audit_unverified_pages:
@@ -940,6 +1043,7 @@ class PdfParser(BaseDocumentParser):
         ast.pdf_skipped_pages = len(skipped_pages)
         ast.pdf_skipped_page_numbers = list(skipped_pages)
         ast.pdf_blank_pages = sorted(blank_pages)
+        ast.pdf_zero_width_recovered_pages = sorted(zero_width_recovered_pages)
         ast.pdf_unparsed_content_pages = sorted(unparsed_content_pages)
         ast.pdf_vector_text_suspect_pages = sorted(vector_text_suspect_pages)
         ast.pdf_layout_fallback_pages = sorted(layout_fallback_pages)
@@ -955,6 +1059,16 @@ class PdfParser(BaseDocumentParser):
                 "severity": "info",
                 "page_numbers": sorted(blank_pages),
                 "detail": "已识别并排除真实空白页；空白页不计为内容缺失",
+            })
+        if zero_width_recovered_pages:
+            parse_issues.append({
+                "code": "pdf_zero_width_text_recovered",
+                "severity": "info",
+                "page_numbers": sorted(zero_width_recovered_pages),
+                "detail": (
+                    "嵌入字体缺 advance width，结构化提取丢弃零宽字符；"
+                    "已从字符级坐标恢复这些内容"
+                ),
             })
         if layout_fallback_pages:
             parse_issues.append({
