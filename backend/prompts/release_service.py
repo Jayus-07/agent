@@ -316,8 +316,12 @@ class PromptReleaseService:
             })
 
         ragas = gate.get("ragas") or {}
+        # 2026-11-22：SQL 等非 RAG 模块的发布评测不产出 RAGAS 指标，
+        # gate.ragas_applicable=False 时跳过（否则 enforce 下永远 blocked）。
+        ragas_applicable = bool(gate.get("ragas_applicable", True))
         if (
             PROMPT_RELEASE_RAGAS_GATE_ENABLED == "enforce"
+            and ragas_applicable
             and not ragas.get("ragas_pass", False)
         ):
             blocked.append({
