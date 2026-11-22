@@ -41,7 +41,7 @@ it('从 RAG 切换到客服后隐藏方式并固定提交 offline，再切回保
     const suite = container.querySelector('[aria-label="数据集"]') as HTMLSelectElement
     await act(async () => { suite.value = 'cs'; suite.dispatchEvent(new Event('change', { bubbles: true })) })
     expect(container.querySelector('[aria-label="评测方式"]')).toBeNull()
-    expect(container.textContent).toContain('离线评测（按方案执行）')
+    expect(container.textContent).toContain('离线契约评测')
     expect(container.textContent).not.toContain('在线模式将真实调用模型')
     await act(async () => { Array.from(container.querySelectorAll('button')).find(item => item.textContent?.includes('开始运行'))!.click() })
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ suite_version_id: 'cs', evaluation_mode: 'offline' }))
@@ -49,7 +49,7 @@ it('从 RAG 切换到客服后隐藏方式并固定提交 offline，再切回保
       await act(async () => { suite.value = module; suite.dispatchEvent(new Event('change', { bubbles: true })) })
       expect(container.querySelector('[aria-label="评测方式"]')).toBeNull()
       expect(container.textContent).not.toContain('contract_only')
-      expect(container.textContent).toContain('离线评测（按方案执行）')
+      expect(container.textContent).toContain('离线契约评测')
     }
     await act(async () => { suite.value = 'rag'; suite.dispatchEvent(new Event('change', { bubbles: true })) })
     expect((container.querySelector('[aria-label="评测方式"]') as HTMLSelectElement).value).toBe('self+ragas')
