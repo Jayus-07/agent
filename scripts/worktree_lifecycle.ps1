@@ -13,6 +13,9 @@ param(
 
     [switch]$ShowAllFiles,
 
+    # Audit 配套：存在未收尾工作树时以 exit 2 结束（默认恒 exit 0 保持兼容）
+    [switch]$StrictExit,
+
     [switch]$Apply,
 
     [switch]$ConfirmInactive,
@@ -372,6 +375,16 @@ try {
 
     if ($Action -eq 'Audit') {
         Write-Inventory -Rows $rows -IncludeAllFiles $ShowAllFiles.IsPresent
+        # #486：Audit 默认 informational（恒 exit 0，兼容既有调用方）；
+        # -StrictExit 时存在未收尾树（仍有改动/未证明合并）以非零退出码暴露，
+        # 供 CI/脚本判断，与 VerifyCloseout 的失败码对齐。
+        if ($StrictExit.IsPresent) {
+            $unclean = @($rows | Where-Object { $_.State -notin @('MAIN', 'MERGED_CLEAN') })
+            if ($unclean.Count -gt 0) {
+                Write-Output ("STRICT: 发现 {0} 个未收尾工作树（exit 2）。" -f $unclean.Count)
+                exit 2
+            }
+        }
         exit 0
     }
 

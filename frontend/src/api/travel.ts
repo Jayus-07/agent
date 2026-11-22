@@ -542,18 +542,6 @@ export function planTravel(
   });
 }
 
-/**
- * 旅游规划真实事件流。事件只来自旅游域图与实际 Tool/Provider 调用；
- * `done.data.result` 是与非流式 `/plan` 相同的 PlanResponse。
- */
-export async function* streamTravelPlan(
-  message: string,
-  conversationId: string,
-  options: TravelPlanOptions = {},
-): AsyncGenerator<TravelStreamEvent> {
-  yield* streamTravelPlanFromPath("/api/travel/plan/stream", message, conversationId, options)
-}
-
 /** V2 对话专用规划流；正式行程仅由后续 V2 Trip API 保存。 */
 export async function* streamTravelPlanV2(
   message: string,
@@ -563,6 +551,10 @@ export async function* streamTravelPlanV2(
   yield* streamTravelPlanFromPath("/api/travel/v2/plan/stream", message, conversationId, options)
 }
 
+/**
+ * 旅游规划真实事件流（V1/V2 共用）。事件只来自旅游域图与实际 Tool/Provider 调用；
+ * `done.data.result` 是与非流式 `/plan` 相同的 PlanResponse。
+ */
 async function* streamTravelPlanFromPath(
   path: string,
   message: string,

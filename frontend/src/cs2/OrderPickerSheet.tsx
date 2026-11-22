@@ -4,7 +4,7 @@
 // 双 Tab：我的订单（GET /api/mall/orders，服务端资源级授权）+ 常见问题（快捷话术）。
 // 发送 = 结构化文本（【订单咨询】…），AI 与坐席均可见；M2 换 content_type='card' 落库。
 // 客户端只传订单号引用，订单数据全部来自本人授权接口，不涉及他人订单。
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Package, RotateCcw, Search, X } from 'lucide-react'
 import { listMyOrders, ORDER_STATUS_ZH, money, type MallOrder } from '@/mall/api'
 
@@ -41,26 +41,41 @@ export default function OrderPickerSheet({
   const [orders, setOrders] = useState<MallOrder[] | null>(null)
   const [loadError, setLoadError] = useState(false)
   const [keyword, setKeyword] = useState('')
+  // 加载在途标记用 ref 而非局部变量：重试按钮的 promise 与首载 useEffect
+  // 共享同一守卫，慢响应晚到时不得覆盖抽屉已关闭/已重开的新状态（#508）。
+  const loadCancelledRef = useRef(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   // 打开时拉取本人订单；关闭不保留上次数据（下次打开重新拉，避免跨会话陈旧）
   useEffect(() => {
     if (!open) return
-    let cancelled = false
+    loadCancelledRef.current = false
     setTab('orders')
     setKeyword('')
     setLoadError(false)
     setOrders(null)
     listMyOrders(20)
       .then((rows) => {
-        if (!cancelled) setOrders(rows)
+        if (!loadCancelledRef.current) setOrders(rows)
       })
       .catch(() => {
-        if (!cancelled) setLoadError(true)
+        if (!loadCancelledRef.current) setLoadError(true)
       })
     return () => {
-      cancelled = true
+      loadCancelledRef.current = true
     }
   }, [open])
+
+  // Escape 关闭 + 打开时聚焦搜索框（抽屉无焦点管理会被屏幕阅读器/键盘用户忽略）
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    searchInputRef.current?.focus()
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose])
 
   const filtered = useMemo(() => {
     if (!orders) return []
@@ -128,6 +143,7 @@ export default function OrderPickerSheet({
             <div className="mx-4 mt-2.5 flex flex-none items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3">
               <Search size={15} className="shrink-0 text-slate-400" aria-hidden />
               <input
+                ref={searchInputRef}
                 type="search"
                 className="h-9 w-full bg-transparent text-sm text-slate-800 outline-none"
                 placeholder="搜订单号 / 商品关键词"
@@ -146,11 +162,16 @@ export default function OrderPickerSheet({
                     type="button"
                     className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-1.5 text-indigo-600 hover:bg-indigo-50"
                     onClick={() => {
+                      loadCancelledRef.current = false
                       setLoadError(false)
                       setOrders(null)
                       listMyOrders(20)
-                        .then((rows) => setOrders(rows))
-                        .catch(() => setLoadError(true))
+                        .then((rows) => {
+                          if (!loadCancelledRef.current) setOrders(rows)
+                        })
+                        .catch(() => {
+                          if (!loadCancelledRef.current) setLoadError(true)
+                        })
                     }}
                   >
                     <RotateCcw size={13} /> 重试

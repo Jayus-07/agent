@@ -48,6 +48,31 @@ class TestCompositeIntent:
         names = {c.name for c in d.candidates}
         assert {"sql.query", "rag.search"} <= names
 
+    def test_sql_metric_plus_rag_compound_not_preempted(self, router):
+        """#489 回归：SQL 指标问句带连接词且第二能力组命中时，
+        不得被 _SQL_METRIC_QUERY 的 0.95 SQL DIRECT 抢占，应走 plan。"""
+        d = router.route("查一下上月销售额并解释一下数据口径的标准")
+        assert d is not None
+        assert d.execution_mode == ExecutionMode.PLAN
+        names = {c.name for c in d.candidates}
+        assert {"sql.query", "rag.search"} <= names
+
+    def test_pure_sql_metric_still_direct(self, router):
+        """#489 回归：纯 SQL 指标问句（无第二能力组）不受守卫影响。"""
+        d = router.route("查一下上月销售额")
+        assert d is not None
+        assert d.execution_mode == ExecutionMode.DIRECT
+        assert d.candidates[0].name == "sql.query"
+        assert d.confidence >= 0.9
+
+    def test_sql_metric_with_report_still_direct(self, router):
+        """#489 回归：SQL 指标 + 报表（同属 sql.query 组）仍走 SQL DIRECT，
+        守卫不得把单能力组复合误伤成 plan。"""
+        d = router.route("查一下上月销售额并整理成报表")
+        assert d is not None
+        assert d.execution_mode == ExecutionMode.DIRECT
+        assert d.candidates[0].name == "sql.query"
+
     def test_single_intent_rag_not_torn_apart(self, router):
         """"退款审核时间是多少"是单意图问题：RAG 词命中但无连接词 → 不拆 plan。"""
         d = router.route("退款审核时间是多少？")

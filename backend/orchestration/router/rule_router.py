@@ -259,23 +259,34 @@ class RuleRouter:
         # 统计问句中的「每天/每日」是时间分组，不代表要求定时跑工作流。
         # 退款等词同时属于 RAG 业务主题；只有出现明确指标与查询/聚合信号，
         # 且没有知识制度语境时，才将这类问句稳定路由到 SQL。
-        if (
-            _SQL_METRIC_QUERY.search(query_lower)
-            and not _SQL_POLICY_CONTEXT.search(query_lower)
-        ):
-            return RouteDecision(
-                execution_mode=ExecutionMode.DIRECT,
-                candidates=[CapabilityScore(name="sql.query", score=0.95)],
-                confidence=0.95,
-                reason="明确的业务指标统计问题，优先查询结构化数据",
-            )
-
-        # 2. 复合意图强信号（显式连接词 + ≥2 能力组命中 → 稳定走 plan）
         # “并给出处”是答案格式约束，不是额外一次SQL/知识库操作。
         intent_text = re.sub(
             r"并(?:且)?(?:给出?|提供|引用|附上|附)?(?:相关)?(?:出处|来源|引用|链接)",
             "", query_lower,
         )
+        if (
+            _SQL_METRIC_QUERY.search(query_lower)
+            and not _SQL_POLICY_CONTEXT.search(query_lower)
+        ):
+            # #489 复合守卫：显式连接词 + ≥2 能力组命中时让位复合 PLAN 路径，
+            # 避免 SQL 指标 0.95 强信号抢走「指标 + RAG」复合问句；
+            # 单能力组（如"指标+报表"同属 sql.query 组）不受影响，仍走 SQL DIRECT。
+            compound_groups = [
+                cap for cap, kws in _COMPOSITE_GROUP_KEYWORDS.items()
+                if any(re.search(k, query_lower) for k in kws)
+            ]
+            if not (
+                _COMPOUND_CONNECTOR.search(intent_text)
+                and len(compound_groups) >= 2
+            ):
+                return RouteDecision(
+                    execution_mode=ExecutionMode.DIRECT,
+                    candidates=[CapabilityScore(name="sql.query", score=0.95)],
+                    confidence=0.95,
+                    reason="明确的业务指标统计问题，优先查询结构化数据",
+                )
+
+        # 2. 复合意图强信号（显式连接词 + ≥2 能力组命中 → 稳定走 plan）
         if _COMPOUND_CONNECTOR.search(intent_text):
             hit_groups = [
                 cap for cap, kws in _COMPOSITE_GROUP_KEYWORDS.items()

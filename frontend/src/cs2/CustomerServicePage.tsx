@@ -388,6 +388,8 @@ export default function CustomerServicePage() {
   const sendOrderRef = useCallback(
     (order: MallOrder) => {
       setOrderSheetOpen(false)
+      // 发送后清预选：否则下次打开抽屉，上一单仍带 aria-selected 残留高亮（#508）
+      setPreselectOrderNo(null)
       send(
         `【订单咨询】订单号 ${order.order_no}｜${order.product_summary}｜${money(order.total_amount)}｜${ORDER_STATUS_ZH[order.status] ?? order.status}`,
         {
@@ -938,7 +940,7 @@ function MessageBubble({ message }: { message: Cs2Message }) {
     message.role === 'user'
       ? 'rounded-2xl rounded-br-md bg-indigo-600 px-3 py-2 text-white' // 用户消息：实心品牌色白字（商城客服惯例）
       : message.role === 'agent'
-        ? 'rounded-2xl rounded-bl-md bg-emerald-600 px-3 py-2 text-white' // 人工客服消息
+        ? 'rounded-2xl rounded-bl-md bg-emerald-700 px-3 py-2 text-white' // 人工客服消息（#498：600 号白字对比度约 3.9:1 低于 AA，700 约 4.8:1 达标）
         : message.role === 'system'
           ? 'rounded-full border border-dashed border-slate-200 px-3 py-1 text-xs text-slate-500'
           : 'rounded-2xl rounded-bl-md border border-slate-200 bg-white px-3 py-2 text-slate-800'
