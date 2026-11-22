@@ -66,7 +66,7 @@ function preservePartialStream(state = useChatStore.getState()) {
 
 /**
  * #20 页面级卸载清理：路由离开聊天页时终止在途流（否则流继续跑完并计费）。
- * 只给聊天主视图（ChatView / AgentWorkspace）调用——MessageBubble 等子组件的挂载/卸载
+ * 只给聊天主视图（AgentWorkspace）调用——子组件的挂载/卸载
  * 不应中断全局在途流。切换会话时也立即中止旧请求并保存已生成内容。
  */
 export function useAbortStreamOnUnmount() {

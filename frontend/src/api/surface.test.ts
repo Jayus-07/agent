@@ -26,7 +26,8 @@ const DOMAINS = [
   'chat',
   // 'cs' 已随 cs-workstation-v2 P8 删除（重建命名空间 src/cs2/cs2Api.ts 承接）
   'evaluation',
-  'feedback',
+  // 'feedback' 已随 ChatView 整链退役删除（2026-11-22：唯一消费方 MessageActions
+  // 随 ChatView 死链删除，点赞/点踩入口无活组件挂载）
   'keyword',
   // 'knowledge' 已随 web 端知识库上传死代码清理删除（2026-11-10：UploadDialog/
   // useKnowledge 零消费方，知识库管理面归 admin 端 DocumentsPanel）
