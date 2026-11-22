@@ -38,6 +38,10 @@ export default function PromptDetailPage() {
   const [diffResult, setDiffResult] = useState<DiffResult | null>(null)
   const [diffFrom, setDiffFrom] = useState<number | ''>('')
   const [diffTo, setDiffTo] = useState<number | ''>('')
+  // 历史版本内容查看：此前版本列表只有 diff 工具，单个历史版本的完整
+  // 模板内容没有入口（后端 GET /versions/{v} 一直支持，前端未消费）
+  const [viewingVersion, setViewingVersion] = useState<{ version: number; template: string; status: string } | null>(null)
+  const [viewingLoading, setViewingLoading] = useState(false)
 
   // Audit state
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([])
@@ -231,6 +235,18 @@ export default function PromptDetailPage() {
       setDiffResult(result)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Diff 失败')
+    }
+  }
+
+  const handleViewVersion = async (version: number) => {
+    setViewingLoading(true)
+    try {
+      const ver = await promptsService.getVersion(decodedKey, version)
+      setViewingVersion({ version, template: ver.template, status: ver.status })
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '版本内容加载失败')
+    } finally {
+      setViewingLoading(false)
     }
   }
 
@@ -540,6 +556,27 @@ export default function PromptDetailPage() {
               </div>
             )}
 
+            {/* 历史版本内容查看 */}
+            {viewingVersion && (
+              <div className="bg-surface-base rounded-xl border border-border-subtle p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-xs font-medium text-text-secondary">
+                    v{viewingVersion.version} 完整模板内容
+                    <StatusBadge status={viewingVersion.status} />
+                  </h3>
+                  <button
+                    onClick={() => setViewingVersion(null)}
+                    className="text-[11px] text-text-muted hover:text-text-primary transition-colors"
+                  >
+                    关闭
+                  </button>
+                </div>
+                <pre className="text-[11px] font-mono overflow-x-auto whitespace-pre-wrap text-text-primary bg-black/[0.02] rounded-lg p-3 max-h-96 overflow-y-auto">
+                  {viewingVersion.template}
+                </pre>
+              </div>
+            )}
+
             {/* 版本列表 */}
             <div className="bg-surface-base rounded-xl border border-border-subtle">
               {versions.length === 0 ? (
@@ -564,6 +601,13 @@ export default function PromptDetailPage() {
                         </p>
                       </div>
                       <div className="flex gap-2">
+                        <button
+                          onClick={() => void handleViewVersion(v.version)}
+                          disabled={viewingLoading}
+                          className="text-[11px] px-2.5 py-1 rounded-md border border-border-subtle text-text-secondary hover:text-text-primary transition-colors disabled:opacity-40"
+                        >
+                          查看
+                        </button>
                         {decodedKey === 'rag.qa' && !isReadOnly && (
                           <button
                             onClick={() => handleCreateRelease(v.version)}
