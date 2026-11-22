@@ -73,6 +73,32 @@ def _mock_error(exc: Exception) -> MallError:
     return MallError("gateway_error", str(exc))
 
 
+_INT4_MAX = 2_147_483_647  # PG integer 上限：customers.id / orders.customer_id 均 integer
+
+
+def _resolve_sandbox_customer_id(user_id: str) -> int:
+    """sandbox 直写时 auth user_id → customer.customers.id 的显式映射。
+
+    customers.id 与 orders.customer_id 均为 PG integer：仅纯数字且在
+    int4 范围内的 user_id 可直写；其余早拒为业务错误（对齐
+    sql/policy.py resolve_self_value 的守卫口径——留到执行期只会变成
+    PG 类型错误或裸 500）。
+    """
+    s = str(user_id or "").strip()
+    if not s.isdigit():
+        raise MallError(
+            "identity_invalid", f"user_id 无法映射为业务客户 id: {user_id!r}",
+            "登录身份缺少有效的客户标识，请重新登录后再试。",
+        )
+    value = int(s)
+    if value > _INT4_MAX:
+        raise MallError(
+            "identity_invalid", f"user_id 超出 PG integer 范围: {user_id!r}",
+            "登录身份缺少有效的客户标识，请重新登录后再试。",
+        )
+    return value
+
+
 class MallService:
     """商城最小域：商品只读 + 钱包账本 + 订单状态机。"""
 
@@ -246,6 +272,7 @@ class MallService:
     def create_order(
         self, user_id: str, tenant_id: str,
         items: list[dict[str, Any]], operation_key: str,
+        customer_name: str = "",
     ) -> dict[str, Any]:
         if not items:
             raise MallError("invalid_items", "购物车为空，无法结算。")
@@ -281,22 +308,42 @@ class MallService:
                 raise
             except Exception as exc:
                 raise _mock_error(exc) from exc
-        return self._create_order_local(user_id, priced, total)
+        return self._create_order_local(user_id, priced, total, customer_name)
 
     def _create_order_local(
         self, user_id: str, priced: list[dict[str, Any]], total: Decimal,
+        customer_name: str = "",
     ) -> dict[str, Any]:
         from sqlalchemy import text
 
         from backend.infra.db import get_business_engine
 
+        customer_id = _resolve_sandbox_customer_id(user_id)
         order_no = f"WEB-{uuid.uuid4().hex[:10].upper()}"
         with get_business_engine().begin() as conn:
+            # 注册链路不建业务客户档案（auth 与 business 分库），而
+            # fk_orders_customer 要求 customer.customers(id) 存在：首单时
+            # 幂等补档（对齐迁移 134 的显式 id 建档先例），不覆盖已有档案。
+            created = conn.execute(text(
+                "INSERT INTO customer.customers (id, name, gender, level, register_time)"
+                " VALUES (:cid, :name, NULL, '普通', now())"
+                " ON CONFLICT (id) DO NOTHING",
+            ), {"cid": customer_id, "name": customer_name or f"用户{customer_id}"})
+            if created.rowcount == 1:
+                # 显式 id 可能高于序列当前值：只向前对齐，避免后续默认
+                # INSERT（如 seed 脚本按 SERIAL 取号）撞主键（同迁移 134）。
+                conn.execute(text(
+                    "SELECT setval("
+                    " pg_get_serial_sequence('customer.customers', 'id'),"
+                    " GREATEST(:cid, COALESCE(pg_sequence_last_value("
+                    "  pg_get_serial_sequence('customer.customers', 'id')::regclass), 1)),"
+                    " true)",
+                ), {"cid": customer_id})
             order_row = conn.execute(text(
                 'INSERT INTO "order".orders'
                 " (order_no, customer_id, total_amount, status, payment_status)"
                 " VALUES (:no, :cid, :amt, 'pending', 'unpaid') RETURNING id",
-            ), {"no": order_no, "cid": int(user_id), "amt": total}).first()
+            ), {"no": order_no, "cid": customer_id, "amt": total}).first()
             for p in priced:
                 conn.execute(text(
                     'INSERT INTO "order".order_items'
