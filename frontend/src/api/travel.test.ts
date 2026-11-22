@@ -6,7 +6,7 @@ import {
   fetchTravelPlanVersions,
   reverseGeocodeTravelOrigin,
   restoreTravelPlan,
-  streamTravelPlan,
+  streamTravelPlanV2,
 } from './travel'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -52,11 +52,11 @@ describe('旅游行程版本 API', () => {
     )
 
     const events = []
-    for await (const event of streamTravelPlan('福州1天', 'conv-1')) {
+    for await (const event of streamTravelPlanV2('福州1天', 'conv-1')) {
       events.push(event)
     }
 
-    expect(fetchSpy.mock.calls[0][0]).toBe('/api/travel/plan/stream')
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/travel/v2/plan/stream')
     expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))).toEqual({
       message: '福州1天', session_id: 'conv-1', conversation_id: 'conv-1', mode: 'plan',
     })
@@ -82,7 +82,7 @@ describe('旅游行程版本 API', () => {
       headers: { 'Content-Type': 'text/event-stream' },
     }))
 
-    for await (const _event of streamTravelPlan('厦门两天，顺便查高铁', 'conv-2', {
+    for await (const _event of streamTravelPlanV2('厦门两天，顺便查高铁', 'conv-2', {
       mode: 'plan',
       briefInput: { destination: '厦门', days: 2, party_size: 2 },
       basePlanVersion: 3,

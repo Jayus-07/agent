@@ -8,7 +8,7 @@ import {
   saveTravelConversationMessages,
   type TravelStoredConversationMessage,
 } from '@/api/travel'
-import type { RationaleData } from './RationaleCard'
+import type { RationaleData } from '@/api/travel'
 
 export interface TravelConversationMessage {
   id: string
