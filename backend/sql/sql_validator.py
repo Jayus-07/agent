@@ -221,6 +221,20 @@ class SQLValidator:
             if getattr(expression, "alias", "")
         }
 
+        # 空名 exp.Table + TableAlias.columns = 表值函数/子查询的输出列
+        # 定义（generate_series(...) AS calendar(day_value)），列名由 SQL
+        # 引擎负责解析，不在数据字典。CTE 输出别名已由上方 select_aliases
+        # 覆盖；不再放行「CTE 体内出现过的任意列名」——旧口径会把 CTE
+        # 体内引用的幻觉列（体内+外层同名）一并放行到执行层，绕开 L3
+        # 结构化拒绝（2026-11-22 实测）。
+        func_alias_columns = {
+            col.name.lower()
+            for table in stmt.find_all(exp.Table)
+            if not table.name and table.alias
+            and isinstance(table.args.get("alias"), exp.TableAlias)
+            for col in table.args["alias"].columns
+        }
+
         visible_columns = {
             table: set(schema_loader.get_browse_columns(table))
             for table in table_names
@@ -273,15 +287,9 @@ class SQLValidator:
                 if name in columns
             ]
             if not matches and name not in select_aliases:
-                # 含 CTE 的语句里，无限定列可能来自 CTE 输出或 CTE 体内
-                # 表值函数别名列（generate_series(...) AS calendar(day_value)
-                # 的 day_value，sql_v7 SC-107 实测）：仅当列名确实出现在
-                # 某个 CTE 的列引用中才放行给 SQL 引擎，幻觉列仍拒绝。
-                if cte_names and name in {
-                    col.name.lower()
-                    for cte in stmt.find_all(exp.CTE)
-                    for col in cte.find_all(exp.Column)
-                }:
+                # 表值函数/子查询别名列定义（sql_v7 SC-107 实测）由 SQL
+                # 引擎解析命名，放行；幻觉列在 L3 结构化拒绝。
+                if cte_names and name in func_alias_columns:
                     continue
                 raise ValidationError(
                     f"未找到列 '{name}'（已选表: {sorted(table_names)}）",
@@ -396,10 +404,12 @@ class SQLValidator:
 
                 if col_name != sens_col:
                     continue
-                # 未限定表名的列引用（SELECT phone FROM ...）无法证明
-                # 不属于敏感表 → fail-closed 直接拒绝
-                if not sens_table or not raw_table or resolved_table == sens_table:
-                    full_ref = f"{raw_table}.{col_name}" if raw_table else col_name
+                # 列名命中敏感列名即拒绝：未限定表名无法证明不属于敏感表
+                # （fail-closed）。旧实现把 full_ref 赋值放在条件分支内，
+                # 限定到非敏感表的真实同名列会先走完 allowlist 再在此处
+                # UnboundLocalError（2026-11-22 实测），统一为确定性拒绝，
+                # 拒绝语义不变。
+                full_ref = f"{raw_table}.{col_name}" if raw_table else col_name
                 raise ValidationError(
                     f"禁止查询敏感列: '{full_ref}' (敏感列: {sensitive_ref})",
                     layer=3, reason="column_forbidden",
