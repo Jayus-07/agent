@@ -20,6 +20,9 @@ const mocks = vi.hoisted(() => ({
   freeze: vi.fn(),
   synthesize: vi.fn(),
   generatedDatasetKeys: [] as string[],
+  // 批次 1.1：FileSuitesPanel（文件评测集目录）数据源
+  listFileDatasets: vi.fn(),
+  getDatasetSamples: vi.fn(),
 }))
 
 vi.mock('@/api/evaluation', () => ({ evaluationService: {
@@ -32,6 +35,9 @@ vi.mock('@/api/evaluation', () => ({ evaluationService: {
   listV2Evaluators: mocks.listV2Evaluators,
   createV2Suite: mocks.createV2Suite,
   publishV2Suite: mocks.publishV2Suite,
+  // 批次 1.1：FileSuitesPanel（文件评测集目录）挂载所需；目录测试默认空集
+  listDatasets: mocks.listFileDatasets,
+  getDatasetSamples: mocks.getDatasetSamples,
 } }))
 vi.mock('@/api/feedbackCandidates', () => ({
   canPromoteCandidate: (status: string) => status === 'approved',
@@ -72,6 +78,8 @@ function mount() {
 
 beforeEach(() => {
   mocks.listV2Datasets.mockResolvedValue([dataset])
+  mocks.listFileDatasets.mockResolvedValue([])
+  mocks.getDatasetSamples.mockResolvedValue({ dataset_id: 'rag', total: 0, samples: [] })
   mocks.listV2Candidates.mockImplementation(async (status: string) => status === 'in_review' ? v2Candidates : [])
   mocks.listV2CandidateReviews.mockResolvedValue([])
   mocks.reviewV2Candidate.mockResolvedValue({ review_status: 'approved' })
@@ -613,6 +621,61 @@ it('知识库生成失败时展示任务接口返回的具体原因', async () =
 
     expect(container.textContent).toContain(detail)
     expect(container.textContent).toContain('部分批次失败')
+  } finally {
+    await act(async () => root.unmount())
+    container.remove()
+  }
+})
+
+it('文件评测集目录展示各域题集，样例抽屉可打开题目内容', async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  mocks.listFileDatasets.mockResolvedValue([
+    {
+      dataset_id: 'sql', module: 'sql', kind: 'core', dataset_version: '5.1.0', owner: 'quality',
+      review_status: 'approved', case_count: 15, content_hash: 'hash-sql',
+      coverage: { tiers: { smoke: 5, core: 6, hard: 4 } }, kb_id: '', fixture_set: '',
+      latest_run: { run_id: 'run-1', pass_rate: 0.4, timestamp: '2026-11-22T12:05:00Z' },
+    },
+    {
+      dataset_id: 'rag', module: 'rag', kind: 'core', dataset_version: '5.0.0', owner: 'quality',
+      review_status: 'approved', case_count: 24, content_hash: 'hash-rag',
+      coverage: { tiers: { smoke: 8 } }, kb_id: 'rag_eval_kb', fixture_set: 'baseline', latest_run: null,
+    },
+  ] as never)
+  mocks.getDatasetSamples.mockResolvedValue({
+    dataset_id: 'sql', total: 15,
+    samples: [
+      { id: 'SC-001', module: 'sql', input_summary: '最近30天商品销量 Top10 是哪些？', expected_summary: 'SELECT ... FROM product.products ...', tier: 'smoke' },
+    ],
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => { root.render(<DatasetsTab onGoRuns={() => {}} onGoTraces={() => {}} />) })
+    for (let index = 0; index < 4; index += 1) {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    }
+    expect(container.textContent).toContain('评测集（文件套件）')
+    expect(container.textContent).toContain('sql')
+    expect(container.textContent).toContain('40.0%')
+    // 打开样例抽屉
+    const sampleButtons = Array.from(container.querySelectorAll('button')).filter(b => b.textContent?.trim() === '样例')
+    expect(sampleButtons.length).toBe(2)
+    await act(async () => { sampleButtons[0].click() })
+    for (let index = 0; index < 4; index += 1) {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    }
+    const drawer = container.querySelector('[role="dialog"]')
+    expect(drawer).not.toBeNull()
+    expect(drawer?.textContent).toContain('评测集样例 · sql')
+    expect(drawer?.textContent).toContain('SC-001')
+    expect(drawer?.textContent).toContain('最近30天商品销量 Top10 是哪些？')
+    expect(drawer?.textContent).toContain('SELECT ... FROM product.products ...')
+    // 关闭抽屉
+    const overlay = Array.from(container.querySelectorAll('button')).find(b => b.getAttribute('aria-label') === '关闭详情抽屉')
+    await act(async () => { overlay!.click() })
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
   } finally {
     await act(async () => root.unmount())
     container.remove()

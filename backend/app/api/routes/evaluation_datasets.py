@@ -404,6 +404,60 @@ async def get_dataset_version(
     }
 
 
+def _sample_input_summary(case: dict[str, Any]) -> str:
+    """各域 case 的输入字段名不同（rag=question / 编排=query / 工具=input），取首个非空。"""
+    for key in ("question", "query", "input", "task", "utterance"):
+        value = case.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _sample_expected_summary(expected: Any) -> str:
+    """期望输出的人类可读摘要：优先常见语义字段，退化为截断 JSON。"""
+    if not isinstance(expected, dict):
+        return ""
+    for key in ("expected_answer", "reference_answer", "gold_sql", "expected_action", "answer"):
+        value = expected.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:200]
+    try:
+        return json.dumps(expected, ensure_ascii=False)[:200]
+    except (TypeError, ValueError):
+        return ""
+
+
+@router.get("/datasets/{dataset_id}/samples")
+async def get_dataset_samples(
+    dataset_id: str,
+    limit: int = Query(default=5, ge=1, le=20),
+    _editor: OperatorIdentity = Depends(require_editor_user),
+):
+    # 评测集样例只读视图（批次 1.1）：管理端可看"到底测什么题"。
+    # 审计 #32 同款：标识符白名单 + 根目录收容，不接受任何用户路径输入。
+    _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    if not _ID_RE.match(dataset_id):
+        raise HTTPException(status_code=422, detail="评测集标识符非法")
+    canonical_root = (DATASET_DIR / dataset_id).resolve()
+    if not str(canonical_root).startswith(str(DATASET_DIR.resolve())):
+        raise HTTPException(status_code=422, detail="评测集标识符非法")
+    cases_path = canonical_root / "cases.jsonl"
+    if not cases_path.exists():
+        raise HTTPException(status_code=404, detail="评测集不存在")
+    cases = _read_cases(cases_path)
+    samples = []
+    for case in cases[:limit]:
+        metadata = case.get("metadata") if isinstance(case.get("metadata"), dict) else {}
+        samples.append({
+            "id": str(case.get("id", "")),
+            "module": str(case.get("module", dataset_id)),
+            "input_summary": _redact_text(_sample_input_summary(case))[:200],
+            "expected_summary": _redact_text(_sample_expected_summary(case.get("expected"))),
+            "tier": str(metadata.get("tier", "")),
+        })
+    return {"dataset_id": dataset_id, "total": len(cases), "samples": samples}
+
+
 @router.get("/dataset-candidates")
 async def list_dataset_candidates(
     status: str | None = Query(default=None),
