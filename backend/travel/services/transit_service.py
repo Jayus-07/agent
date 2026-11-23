@@ -121,11 +121,46 @@ def order_pois(pois: list[Poi], day_start_min: int | None = None) -> list[Poi]:
     return ordered
 
 
+def get_nearby_food_merchants(
+    location: tuple[float, float] | None,
+    city: str,
+    limit: int = 2,
+) -> list[dict]:
+    """通过高德 LBS 检索附近高分餐饮商家（软失败降级，不阻断主链路）。"""
+    if location is None or not (isinstance(location[0], (int, float)) and isinstance(location[1], (int, float))):
+        return []
+    try:
+        from backend.config import map as MAP
+        if not MAP.is_amap_configured():
+            return []
+        from backend.infra.lbs import amap as AMAP_LBS
+        results = AMAP_LBS.place_text(
+            "美食",
+            region=city,
+            location=location,
+            radius=1500,
+            types="050000",
+            page_size=limit * 3,
+        )
+        if not results:
+            return []
+        valid = [
+            r for r in results
+            if r.get("name") and not any(kw in r["name"] for kw in ("公共厕所", "停车场", "充电站", "加油站"))
+        ]
+        valid.sort(key=lambda x: (-(x.get("rating") or 0.0), x.get("distance_m") or 9999))
+        return valid[:limit]
+    except Exception as e:
+        logger.debug("[TransitService] 周边美食商户检索降级: %s", e)
+        return []
+
+
 def _meal_item(
     start_min: int,
     minutes: int,
     destination: str = "",
     near_poi: str = "",
+    near_coord: tuple[float, float] | None = None,
 ) -> ItineraryItem:
     end_min = min(MINUTES_PER_DAY - 1, start_min + minutes)
     city = (destination or "").strip()
@@ -135,14 +170,37 @@ def _meal_item(
             if k in city:
                 delicacy = v
                 break
+
+    merchants = get_nearby_food_merchants(near_coord, city=city, limit=2)
+    merchant_desc = ""
+    if merchants:
+        m_parts = []
+        for m in merchants:
+            part = m["name"]
+            sub = []
+            if m.get("rating"):
+                sub.append(f"{m['rating']}分")
+            if m.get("avg_cost_cny"):
+                sub.append(f"人均¥{m['avg_cost_cny']:g}")
+            if sub:
+                part += f"（{' · '.join(sub)}）"
+            m_parts.append(part)
+        merchant_desc = "周边高分名店：" + "、".join(m_parts)
+
+    parts = []
     if delicacy and near_poi:
-        note = f"在{near_poi}周边寻味，推荐品尝{city or '当地'}特色：{delicacy}"
+        parts.append(f"在{near_poi}周边寻味，推荐品尝{city or '当地'}特色：{delicacy}")
     elif delicacy:
-        note = f"推荐品尝{city}地道特色美食：{delicacy}"
+        parts.append(f"推荐品尝{city}地道特色美食：{delicacy}")
     elif near_poi:
-        note = f"在{near_poi}周边品尝特色美食与风味小吃"
+        parts.append(f"在{near_poi}周边品尝特色美食与风味小吃")
     else:
-        note = "品尝当地特色美食与风味小吃"
+        parts.append("品尝当地特色美食与风味小吃")
+
+    if merchant_desc:
+        parts.append(merchant_desc)
+
+    note = " · ".join(parts)
 
     return ItineraryItem(
         title="午餐", kind=KIND_MEAL,
@@ -196,12 +254,13 @@ def schedule_day(
     prev_coord: tuple[float, float] | None = None
 
     def _place_lunch() -> None:
-        nonlocal cursor, lunch_done, prev_item
+        nonlocal cursor, lunch_done, prev_item, prev_coord
         near_poi = prev_item.title if (prev_item and prev_item.poi) else ""
         item = _meal_item(
             cursor, lunch_minutes,
             destination=brief.destination,
             near_poi=near_poi,
+            near_coord=prev_coord,
         )
         day.items.append(item)
         cursor = to_min(item.end, cursor)
@@ -265,6 +324,12 @@ def schedule_day(
                     f"你 {brief.departure_time} 离开，时间不足，需另作安排")
             else:
                 notes.append("当日可用时间不足，需另作安排")
+
+        from backend.travel.services.poi_service import get_poi_experience_tip
+        tip_info = get_poi_experience_tip(poi.name)
+        if tip_info:
+            notes.append(f"💡避坑：{tip_info['tip']}")
+            notes.append(f"📸机位：{tip_info['spot']}")
 
         item = ItineraryItem(
             title=poi.name, kind=KIND_VISIT,
