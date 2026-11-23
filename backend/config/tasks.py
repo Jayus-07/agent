@@ -92,15 +92,16 @@ TASKS_LIST_DEFAULT_LIMIT = int(os.getenv("TASKS_LIST_DEFAULT_LIMIT", "20"))
 # ── 执行租约与 Stale Recovery（Phase2 Step1）────────────────
 # 设计：lease_expires_at 是 stale 判定唯一权威；Worker 侧心跳线程周期续租。
 # 推导依据（不机械取值）：
-# - heartbeat interval(15s) << TTL(120s)：容忍连续 8 次丢跳（GIL 长占/DB 抖动），
+# - heartbeat interval(15s) << TTL(300s)：容忍连续 20 次丢跳（GIL 长占/DB 抖动/连接池排队），
 #   实测单次续租 DB 往返 ~ms 级，15s 间隔开销可忽略
-# - TTL 必须 > rag_index 长原子节点内最坏 GIL 停顿（嵌入为 torch C 段会放 GIL，
-#   纯 Python 段秒级），120s 足够安全；恢复延迟 ≈ TTL + grace + sweep 间隔 ≈ 2.5~3min
-TASK_LEASE_TTL_SECONDS = int(os.getenv("TASK_LEASE_TTL_SECONDS", "120"))
+# - TTL 必须 > rag_index 长原子节点内最坏 GIL 停顿与大文件批量嵌入耗时，
+#   原 120s 在并发上传下容易因连接池排队导致租约过期被误杀，调优至 300s；
+#   恢复延迟 ≈ TTL(300s) + grace(30s) + sweep 间隔(30s) ≈ 6min
+TASK_LEASE_TTL_SECONDS = int(os.getenv("TASK_LEASE_TTL_SECONDS", "300"))
 TASK_LEASE_HEARTBEAT_INTERVAL = int(os.getenv("TASK_LEASE_HEARTBEAT_INTERVAL", "15"))
 # sweep 比租约过期多等一个 grace，避免与一次在途续租竞态
 TASK_RECOVERY_SWEEP_INTERVAL = int(os.getenv("TASK_RECOVERY_SWEEP_INTERVAL", "30"))
-TASK_RECOVERY_GRACE_SECONDS = int(os.getenv("TASK_RECOVERY_GRACE_SECONDS", "15"))
+TASK_RECOVERY_GRACE_SECONDS = int(os.getenv("TASK_RECOVERY_GRACE_SECONDS", "30"))
 # 同一任务最多自动恢复次数；超过后由 sweep 直接终态 FAILED(ZOMBIE_RECONCILED)
 TASK_MAX_LEASE_RECOVERIES = int(os.getenv("TASK_MAX_LEASE_RECOVERIES", "3"))
 # 自动恢复时效上限：stale 行 updated_at 停更超过该窗口（部署过渡期的远古

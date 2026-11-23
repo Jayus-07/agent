@@ -11,6 +11,7 @@ Worker（Celery prefork）天然同步，直接调用。
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 from contextlib import contextmanager, nullcontext
@@ -30,9 +31,12 @@ _schema_ready = False
 # 坏连接自动重建）；_conn() 保留裸连接语义，仅供需要连接所有权的事务场景
 # （evaluation/managed_tasks 的显式事务执行器，归还由其自行管理）。
 # 池惰性创建（首次调用时）——Celery prefork 下连接不可跨 fork 共享。
+# 修复（2026-11-23）：并发上传索引时连接池过小(8)导致心跳线程借连接超时(PoolTimeout)
+# 进而触发 sweeper 误杀为 ZOMBIE_RECONCILED。默认池上限提升至 24，借连接超时设为 15s。
 _pool = None
 _pool_lock = threading.Lock()
-_POOL_MAX_SIZE = 8
+_POOL_MAX_SIZE = int(os.getenv("TASK_SERVICE_POOL_MAX_SIZE", "24"))
+_POOL_TIMEOUT = float(os.getenv("TASK_SERVICE_POOL_TIMEOUT", "15.0"))
 
 
 def _dsn() -> str:
@@ -69,6 +73,7 @@ def _get_pool():
                 "connect_timeout": DB_CONNECT_TIMEOUT,
             },
             min_size=1, max_size=_POOL_MAX_SIZE, open=True,
+            timeout=_POOL_TIMEOUT,
             check=ConnectionPool.check_connection,
         )
         return _pool

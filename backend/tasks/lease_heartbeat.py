@@ -74,12 +74,24 @@ class LeaseHeartbeat:
         from backend.services import task_service
 
         while not self._stop.wait(self._interval):
-            try:
-                ok = task_service.renew_lease(
-                    self.task_id, self.execution_id, lease_ttl_seconds=self._ttl)
-            except Exception:  # noqa: BLE001 — DB 抖动不判丢失，下轮重试
-                logger.warning("[LeaseHeartbeat] %s 续租 DB 异常，下轮重试",
-                               self.task_id, exc_info=True)
+            attempt_ok = False
+            ok = False
+            for attempt in range(3):
+                try:
+                    ok = task_service.renew_lease(
+                        self.task_id, self.execution_id, lease_ttl_seconds=self._ttl)
+                    attempt_ok = True
+                    break
+                except Exception:  # noqa: BLE001 — DB 抖动不判丢失，快速重试
+                    retry_wait = min(1.5, max(0.02, self._interval / 5))
+                    if attempt < 2 and not self._stop.wait(retry_wait):
+                        continue
+                    logger.warning("[LeaseHeartbeat] %s 续租 DB 异常，下轮重试",
+                                   self.task_id, exc_info=True)
+            if self._stop.is_set():
+                return
+            if not attempt_ok:
+                # 3次快速重试皆抛异常（DB 抖动/连接池借满），跳过本轮等待下次周期，绝不误判 lost
                 continue
             if not ok:
                 self._lost.set()
