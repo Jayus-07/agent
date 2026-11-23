@@ -18,6 +18,7 @@ from backend.workers import cs_dispatcher
 class _FakeSession:
     def __init__(self) -> None:
         self.records: list[str] = []
+        self.info: dict = {}
         self.closed = False
 
     def record(self, name: str) -> None:

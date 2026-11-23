@@ -9,6 +9,8 @@ RAG 拒答。修复 = Context Resolver 在 CS Router 判域之前解析回指表
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from backend.customer_service import context_resolver as cr
@@ -69,6 +71,26 @@ def test_t1_status_variant_resolves_without_logistics_word():
     r = _resolve("它现在什么状态")
     assert r is not None and r.order_id == "MO-1001"
     assert "最新状态" in r.resolved_query
+
+
+@pytest.mark.parametrize("question", ["一共多少钱", "包含什么商品", "还可以退款吗"])
+def test_implicit_order_followup_stays_read_only(question):
+    _seed()
+    result = _resolve(question)
+    assert result is not None
+    assert result.order_id == "MO-1001"
+    assert result.resolved_query == "查询订单 MO-1001 的最新状态"
+    assert _resolve(question, session="other-session") is None
+
+
+def test_implicit_order_followup_does_not_use_stale_or_unrelated_context(fake_cache):
+    _seed()
+    assert _resolve("会员包邮政策是什么") is None
+    assert _resolve("帮我申请退款") is None
+    fake_cache[context_key("default", "u1", "s1")]["updated_at"] = (
+        datetime.now(timezone.utc) - timedelta(hours=1)
+    ).isoformat()
+    assert _resolve("一共多少钱") is None
 
 
 def test_action_reference_inherits_last_order_without_guessing():

@@ -143,22 +143,37 @@ class TicketStore:
     async def async_list_for_user(
         self, user_id: str, tenant_id: str = "default", limit: int = 20,
     ) -> list[dict]:
+        items, _ = await self.async_user_page(user_id, tenant_id, limit)
+        return items
+
+    async def async_user_page(
+        self, user_id: str, tenant_id: str, limit: int, *,
+        offset: int = 0, include_total: bool = False,
+    ) -> tuple[list[dict], int]:
         from backend.customer_service.models.ticket import CSTicket
         from backend.memory.database import AsyncSessionLocal
 
+        filters = (CSTicket.user_id == user_id, CSTicket.tenant_id == tenant_id)
+        count = func.count().over() if include_total else None
+        query = select(CSTicket, count) if count is not None else select(CSTicket)
+        query = (
+            query.where(*filters)
+            .order_by(CSTicket.created_at.desc(), CSTicket.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
         async with AsyncSessionLocal() as db:
-            tickets = (
-                await db.execute(
-                    select(CSTicket)
-                    .where(
-                        CSTicket.user_id == user_id,
-                        CSTicket.tenant_id == tenant_id,
-                    )
-                    .order_by(CSTicket.created_at.desc())
-                    .limit(limit)
-                )
-            ).scalars().all()
-            return [_to_dict(t) for t in tickets]
+            result = await db.execute(query)
+            if not include_total:
+                items = [_to_dict(ticket) for ticket in result.scalars().all()]
+                return items, len(items)
+            rows = result.all()
+            if rows:
+                return [_to_dict(ticket) for ticket, _ in rows], int(rows[0][1])
+            if not offset:
+                return [], 0
+            total = await db.scalar(select(func.count()).select_from(CSTicket).where(*filters))
+            return [], int(total or 0)
 
     async def async_list_admin(
         self, tenant_id: str = "default", *,

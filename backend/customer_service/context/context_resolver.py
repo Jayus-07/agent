@@ -40,6 +40,17 @@ _REFERENCE_PREDICATE = re.compile(
     r"|申请退款|申请退货|申请换货|办理退款|办理退货|办理换货)"
 )
 
+# 省略主语的追问限金额、商品和能否退货，避免把新话题绑定到旧订单。
+_ORDER_FACT_FOLLOWUP = re.compile(
+    r"^(?:那|请问)?[，,\s]*(?:"
+    r"(?:一共|总共|合计|总价|总金额|实付|花了|付了|是多少钱|是)?\s*"
+    r"(?:多少(?:钱|元)|几块钱)"
+    r"|(?:包含|包括|都?有|买了)(?:哪些|什么|啥)(?:商品|东西|产品)?"
+    r"|(?:还)?(?:能|可以)(?:退款|退货|退)(?:吗|么)?"
+    r")[？?。！!\s]*$"
+)
+_ORDER_FOLLOWUP_MAX_AGE_SECONDS = 600
+
 _ACTION_REFERENCE = re.compile(
     r"(申请退款|申请退货|申请换货|办理退款|办理退货|办理换货|"
     r"退款|退货|换货|维修|报修)"
@@ -246,7 +257,16 @@ def resolve_turn_reference(
     if _REFERENCE_NEGATIVE.search(query):
         return None
 
-    if not ordinal and not bare_ordinal and not (
+    fact_followup = False
+    if _ORDER_FACT_FOLLOWUP.fullmatch(query.strip()):
+        try:
+            updated_at = datetime.fromisoformat(str(recent.get("updated_at") or ""))
+            age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+            fact_followup = 0 <= age <= _ORDER_FOLLOWUP_MAX_AGE_SECONDS
+        except (TypeError, ValueError):
+            pass
+
+    if not ordinal and not bare_ordinal and not fact_followup and not (
         _REFERENCE_PRONOUN.search(query) and _REFERENCE_PREDICATE.search(query)
     ):
         # 允许已支持的受控任务计划在紧邻的多轮对话里承接唯一订单，
@@ -259,7 +279,10 @@ def resolve_turn_reference(
         if build_rule_task_plan(query) is None:
             return None
 
-    if _LOGISTICS_HINT.search(query):
+    if fact_followup:
+        # 查询事实和资格属于只读查询，不能被误当成发起售后动作。
+        resolved_query = f"查询订单 {order_id} 的最新状态"
+    elif _LOGISTICS_HINT.search(query):
         resolved_query = f"查询订单 {order_id} 的物流状态"
     elif _ACTION_REFERENCE.search(query):
         # 保留当前轮办理意图，只把明确指代的订单号补进路由文本；

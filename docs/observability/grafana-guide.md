@@ -17,6 +17,12 @@
 
 当前目录内存在 `agent-01-platform-overview.json` 至 `agent-07-infra-async.json` 七类 Dashboard 资产；`gen_dashboards.py` 的历史头注释仍称“生成 4 个”，**不视作当前数量事实**。修改生成器或手动 JSON 前确认实际生成模式、导出 diff 和自动装配方式，禁止生成脚本覆盖另一批已维护的看板。
 
+### RAG 容器内存与重启
+
+- `rag-service` 直接运行 Python 服务进程。排查异常退出时查看 Docker 的 `ExitCode`、`OOMKilled`、`RestartCount`，并用 `process_start_time_seconds` 确认 Prometheus 是否看到了重启。进程重启告警也会覆盖正常发版，原因需结合发布记录判断。
+- cgroup v2 的当前内存、累计峰值、内存上限和 OOM kill 次数由 RAG `/metrics` 暴露。容器重启会清空旧 cgroup 的计数，因此 OOM kill 计数能捕获采集期间发生的子进程被杀，主进程被杀仍可由进程重启与 Docker 事件追查。
+- 发布脚本更新应用镜像，Prometheus 规则使用宿主机目录挂载。生产部署后核对 Prometheus 实际挂载的规则版本，将规则切到本次发布并验证 `/api/v1/rules` 已加载。使用合成指标验证触发与恢复，再检查真实采集和告警接收配置。
+
 ## 2. 看板信息架构
 
 | 业务主题 | 关键问题 | 推荐指标形态 |

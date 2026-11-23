@@ -130,6 +130,9 @@ def _project_order(value: object) -> dict[str, Any]:
     eligible = value.get("refund_eligible")
     if isinstance(eligible, bool):
         result["refund_eligible"] = eligible
+    product_names = _safe_text(value.get("product_names"), limit=160)
+    if product_names:
+        result["product_names"] = product_names
     return result
 
 

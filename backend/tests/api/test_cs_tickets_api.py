@@ -28,13 +28,16 @@ class TestO12TicketRoleGuard:
             user_id="user-123", roles=("viewer",), tenant_id="default",
         )
         fake_store = MagicMock()
-        fake_store.async_list_for_user = AsyncMock(return_value=[])
+        fake_store.async_user_page = AsyncMock(return_value=([], 14))
         monkeypatch.setattr("backend.app.api.routes.cs_tickets.get_ticket_store", lambda: fake_store)
 
         client = TestClient(app_with_tickets)
-        resp = client.get("/cs/tickets")
+        resp = client.get("/cs/tickets?limit=10&offset=20")
         assert resp.status_code == 200
-        assert resp.json() == {"items": [], "total": 0}
+        assert resp.json() == {"items": [], "total": 14}
+        fake_store.async_user_page.assert_awaited_once_with(
+            "user-123", tenant_id="default", limit=10, offset=20, include_total=True,
+        )
 
     def test_agent_role_forbidden_on_my_tickets(self, app_with_tickets):
         """普通客服坐席 (roles=['agent']) 访问 GET /cs/tickets 必须拦截 403。"""

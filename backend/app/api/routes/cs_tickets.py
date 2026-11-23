@@ -65,6 +65,7 @@ def _dto(d: dict) -> TicketDTO:
 @router.get("", response_model=TicketListResponse)
 async def list_my_tickets(
     limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     identity: Identity = Depends(require_identity),
 ):
     """我的工单（时间倒序）。"""
@@ -76,14 +77,14 @@ async def list_my_tickets(
         raise HTTPException(
             403, detail="客服坐席无权访问个人工单列表，工单管理请由客服主管在管理端查看"
         )
-    tickets = await get_ticket_store().async_list_for_user(
+    tickets, total = await get_ticket_store().async_user_page(
         identity.user_id,
         tenant_id=require_tenant_id(identity),
         limit=limit,
+        offset=offset,
+        include_total=True,
     )
-    return TicketListResponse(
-        items=[_dto(t) for t in tickets], total=len(tickets),
-    )
+    return TicketListResponse(items=[_dto(t) for t in tickets], total=total)
 
 
 @router.get("/{ticket_id}", response_model=TicketDTO)

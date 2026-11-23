@@ -11,6 +11,7 @@ import { listMyOrders, ORDER_STATUS_ZH, money, type MallOrder } from '@/mall/api
 export interface OrderPickerSheetProps {
   open: boolean
   onClose: () => void
+  onAskAnotherQuestion: () => void
   /** 点「发送」把订单带进会话（页面侧负责拼结构化文本并走既有发送通道） */
   onSendOrder: (order: MallOrder) => void
   /** 「常见问题」Tab 话术（复用页面 QUICK_ENTRIES，单一事实源留在页面） */
@@ -32,6 +33,7 @@ const STATUS_BADGE: Record<string, string> = {
 export default function OrderPickerSheet({
   open,
   onClose,
+  onAskAnotherQuestion,
   onSendOrder,
   faqEntries,
   onSendText,
@@ -265,7 +267,7 @@ export default function OrderPickerSheet({
               <button
                 type="button"
                 className="w-full rounded-full border border-slate-200 py-2 text-xs text-slate-500 hover:bg-slate-50"
-                onClick={onClose}
+                onClick={onAskAnotherQuestion}
               >
                 没有我想问的问题
               </button>

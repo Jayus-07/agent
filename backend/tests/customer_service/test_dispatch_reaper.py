@@ -11,7 +11,10 @@ reaper 是纯时间驱动的状态机边（方案 §五），与 dispatcher / of
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -172,6 +175,7 @@ class FakeSession:
 
     def __init__(self) -> None:
         self.added: list[object] = []
+        self.info: dict = {}
 
     def add(self, obj: object) -> None:
         self.added.append(obj)
@@ -438,20 +442,35 @@ async def test_ticket_priority_alias_mapping(scenario: Scenario) -> None:
     assert ticket2 is not None and ticket2.priority == "medium"
 
 
-async def test_compress_failure_still_creates_ticket(
+async def test_timeout_ticket_does_not_wait_for_summary(
     scenario: Scenario, monkeypatch,
 ) -> None:
-    """LLM 压缩失败 → 降级摘要，工单照建（关单不受影响）。"""
-    monkeypatch.setattr(
-        reaper, "_compress_request_sync", lambda _texts: (_ for _ in ()).throw(
-            RuntimeError("llm down")),
-    )
+    class UserMessages(_EmptyResult):
+        def all(self):
+            return [SimpleNamespace(content="订单迟迟没发货")]
+
+    scenario.session.execute = AsyncMock(return_value=UserMessages())
     scenario.overdue_candidates = [(TENANT, "hd-1", "conv-1")]
+    started = asyncio.Event()
+    release = asyncio.Event()
 
+    async def slow_summary(_job):
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(reaper, "_enrich_timeout_ticket", slow_summary)
     result = await reaper.reap_overdue_waiting(scenario.session, now=NOW, limit=50)
-
     assert result.closed == 1
-    assert _ticket_of(scenario.session) is not None
+    assert "订单迟迟没发货" in _ticket_of(scenario.session).description
+    assert not started.is_set()
+
+    reaper.start_committed_timeout_summaries(scenario.session)
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert scenario.handoff.handoff_state == "closed"
+    finally:
+        release.set()
+        await asyncio.gather(*reaper._summary_tasks)
 
 
 async def test_ticket_description_reports_actual_deadline(

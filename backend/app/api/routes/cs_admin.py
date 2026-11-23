@@ -747,6 +747,7 @@ class MyConversationItem(BaseModel):
     conversation_id: str
     summary: str | None = None
     conversation_status: str
+    latest_handoff_closed: bool = False
     handling_mode: str
     created_at: str
     last_activity_at: str | None = None
@@ -2179,15 +2180,39 @@ async def _async_my_conversations(
     *, user_id: str, tenant_id: str, limit: int,
 ) -> MyConversationsResponse:
     """当前用户的最近会话（含消息，单会话上限 100 条）。"""
-    from sqlalchemy import select
+    from sqlalchemy import and_, select
 
     from backend.customer_service.models.conversation import CSConversation
+    from backend.customer_service.models.handoff import CSHandoff
     from backend.customer_service.models.message import CSMessage
     from backend.memory.database import AsyncSessionLocal
 
+    # 坐席关单会把处理模式交回 AI，只有用户尚未继续对话时才显示该次服务已结束。
+    has_new_user_turn = (
+        select(CSMessage.id)
+        .where(
+            CSMessage.conversation_id == CSHandoff.conversation_id,
+            CSMessage.sender_type == "user",
+            CSMessage.created_at > CSHandoff.closed_at,
+        )
+        .correlate(CSHandoff)
+        .exists()
+    )
+    latest_handoff_closed = (
+        select(and_(CSHandoff.handoff_state == "closed", ~has_new_user_turn))
+        .where(
+            CSHandoff.conversation_id == CSConversation.conversation_id,
+            CSHandoff.tenant_id == CSConversation.tenant_id,
+            CSHandoff.user_id == CSConversation.user_id,
+        )
+        .order_by(CSHandoff.created_at.desc(), CSHandoff.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
     async with AsyncSessionLocal() as db:
         conv_q = (
-            select(CSConversation)
+            select(CSConversation, latest_handoff_closed)
             .where(CSConversation.user_id == user_id)
             .order_by(CSConversation.last_activity_at.desc().nulls_last())
             .limit(limit)
@@ -2195,13 +2220,11 @@ async def _async_my_conversations(
         # STOP CS-A P0-2：user_id 全局唯一是假设不是约束 —— 租户谓词显式化
         if tenant_id:
             conv_q = conv_q.where(CSConversation.tenant_id == tenant_id)
-        convs = (
-            (await db.execute(conv_q)).scalars().all()
-        )
+        convs = (await db.execute(conv_q)).all()
         if not convs:
             return MyConversationsResponse(items=[])
 
-        ids = [c.conversation_id for c in convs]
+        ids = [c.conversation_id for c, _ in convs]
         msgs = (
             (
                 await db.execute(
@@ -2225,6 +2248,7 @@ async def _async_my_conversations(
                 conversation_id=c.conversation_id,
                 summary=c.summary,
                 conversation_status=c.conversation_status,
+                latest_handoff_closed=bool(handoff_closed),
                 handling_mode=c.handling_mode,
                 created_at=c.created_at.isoformat() if c.created_at else "",
                 last_activity_at=(
@@ -2242,7 +2266,7 @@ async def _async_my_conversations(
                     for m in by_conv.get(c.conversation_id, [])
                 ],
             )
-            for c in convs
+            for c, handoff_closed in convs
         ]
         return MyConversationsResponse(items=items)
 

@@ -10,6 +10,8 @@ import {
   type TicketRow,
 } from './cs2Api'
 
+const TICKETS_PAGE_SIZE = 10
+
 const REFUND_BADGE: Record<string, string> = {
   pending_review: 'bg-amber-50 text-amber-600',
   reviewing: 'bg-blue-50 text-blue-600',
@@ -20,7 +22,10 @@ const REFUND_BADGE: Record<string, string> = {
 
 export default function FoldCards({ refreshKey = 0 }: { refreshKey?: number }) {
   const [refunds, setRefunds] = useState<RefundRequestRow[] | null>(null)
-  const [tickets, setTickets] = useState<TicketRow[] | null>(null)
+  const [ticketPage, setTicketPage] = useState<{ items: TicketRow[]; total: number } | null>(null)
+  const [ticketOffset, setTicketOffset] = useState(0)
+  const [ticketLoading, setTicketLoading] = useState(true)
+  const [ticketError, setTicketError] = useState(false)
   const [openRefunds, setOpenRefunds] = useState(false)
   const [openTickets, setOpenTickets] = useState(false)
 
@@ -33,17 +38,34 @@ export default function FoldCards({ refreshKey = 0 }: { refreshKey?: number }) {
       .catch(() => {
         if (!cancelled) setRefunds([])
       })
-    listMyTickets(10)
-      .then((rows) => {
-        if (!cancelled) setTickets(rows)
-      })
-      .catch(() => {
-        if (!cancelled) setTickets([])
-      })
     return () => {
       cancelled = true
     }
   }, [refreshKey])
+
+  useEffect(() => {
+    let cancelled = false
+    setTicketLoading(true)
+    setTicketError(false)
+    listMyTickets(TICKETS_PAGE_SIZE, ticketOffset)
+      .then((page) => {
+        if (cancelled) return
+        if (ticketOffset > 0 && ticketOffset >= page.total) {
+          setTicketOffset(Math.max(0, Math.floor((page.total - 1) / TICKETS_PAGE_SIZE) * TICKETS_PAGE_SIZE))
+          return
+        }
+        setTicketPage(page)
+      })
+      .catch(() => {
+        if (!cancelled) setTicketError(true)
+      })
+      .finally(() => {
+        if (!cancelled) setTicketLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [refreshKey, ticketOffset])
 
   // P5：审核结果异步产生——30s 轻量轮询让「已通过/已驳回」状态可见
   useEffect(() => {
@@ -55,7 +77,8 @@ export default function FoldCards({ refreshKey = 0 }: { refreshKey?: number }) {
     return () => clearInterval(timer)
   }, [])
 
-  if (refunds?.length === 0 && tickets?.length === 0) return null
+  const tickets = ticketPage?.items ?? []
+  if (refunds?.length === 0 && ticketPage?.total === 0) return null
 
   return (
     <div className="flex flex-col gap-2 px-4">
@@ -88,20 +111,23 @@ export default function FoldCards({ refreshKey = 0 }: { refreshKey?: number }) {
           )}
         </div>
       )}
-      {tickets && (
+      {(ticketPage || ticketError) && (
         <div className="rounded-xl border border-slate-200 bg-white text-xs">
           <button
             type="button"
             className="flex w-full items-center gap-2 px-3 py-2 text-slate-500"
             onClick={() => setOpenTickets((v) => !v)}
           >
-            🎫 我的工单（{tickets.length}）
+            🎫 我的工单{ticketPage ? `（${ticketPage.total}）` : ''}
             <span className="ml-auto text-[10.5px] text-slate-400">点击展开/收起</span>
           </button>
-          {openTickets && tickets.length === 0 && (
+          {openTickets && ticketError && (
+            <p className="px-3 pb-2.5 text-[11px] text-slate-500">工单加载失败，请稍后再试。</p>
+          )}
+          {openTickets && !ticketLoading && !ticketError && tickets.length === 0 && (
             <p className="px-3 pb-2.5 text-[11px] text-slate-400">暂无关联工单。</p>
           )}
-          {openTickets && tickets.length > 0 && (
+          {openTickets && !ticketLoading && !ticketError && tickets.length > 0 && (
             <div className="px-3 pb-2.5">
               {tickets.map((t, i) => (
                 <div key={t.ticket_no ?? t.ticket_id ?? i} className="flex items-center gap-2 border-b border-dashed border-slate-100 py-1.5 last:border-b-0">
@@ -113,6 +139,19 @@ export default function FoldCards({ refreshKey = 0 }: { refreshKey?: number }) {
                   </span>
                 </div>
               ))}
+            </div>
+          )}
+          {openTickets && ticketPage && ticketPage.total > TICKETS_PAGE_SIZE && (
+            <div className="flex gap-4 px-3 pb-2.5 text-slate-600">
+              <button type="button" disabled={ticketLoading || ticketOffset === 0}
+                onClick={() => setTicketOffset((offset) => offset - TICKETS_PAGE_SIZE)}>
+                上一页
+              </button>
+              <button type="button"
+                disabled={ticketLoading || ticketOffset + TICKETS_PAGE_SIZE >= ticketPage.total}
+                onClick={() => setTicketOffset((offset) => offset + TICKETS_PAGE_SIZE)}>
+                下一页
+              </button>
             </div>
           )}
         </div>

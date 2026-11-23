@@ -117,6 +117,49 @@ groups:
           summary: "元数据分类器版本或指纹失配"
           description: "R1 不得继续接管流量；保持分类器关闭并核对 taxonomy/rules/model/feature 指纹"
 
+  - name: rag-service-container
+    rules:
+      - alert: RagServiceUnavailable
+        expr: up{job="rag-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RAG 服务无法抓取"
+          description: "检查容器状态、退出码与重启次数。"
+
+      - alert: RagServiceProcessRestarted
+        expr: changes(process_start_time_seconds{job="rag-service"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG 服务进程在 10 分钟内重启"
+          description: "结合发布记录、Docker ExitCode/OOMKilled 和容器日志确认原因。"
+
+      - alert: RagServiceOomKill
+        expr: increase(rag_cgroup_oom_kills_total{job="rag-service"}[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "RAG 容器发生内存不足杀进程"
+          description: "检查容器内存峰值、限制和 RAG 日志。"
+
+      - alert: RagServiceMemoryPeakNearLimit
+        expr: |
+          (
+            rag_cgroup_memory_peak_bytes{job="rag-service"}
+              / rag_cgroup_memory_limit_bytes{job="rag-service"} > 0.90
+            and changes(rag_cgroup_memory_peak_bytes{job="rag-service"}[10m]) > 0
+          )
+          or
+          rag_cgroup_memory_current_bytes{job="rag-service"}
+            / rag_cgroup_memory_limit_bytes{job="rag-service"} > 0.90
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG 容器内存峰值超过上限的 90%"
+          description: "近 10 分钟内出现新峰值，或当前使用量仍高于阈值；检查查询并发和容器内存。"
+
   - name: agent-platform-sli
     rules:
       # ── 可用性 ──────────────────────────────
