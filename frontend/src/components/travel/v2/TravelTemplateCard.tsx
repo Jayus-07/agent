@@ -45,5 +45,7 @@ export function travelDestinationImage(destination: string): string {
   return /厦门|海|青岛|三亚/.test(destination) ? TRAVEL_PHOTOS.coast
     : /苏州|园林/.test(destination) ? TRAVEL_PHOTOS.garden
       : /杭州|西湖/.test(destination) ? TRAVEL_PHOTOS.westLake
-        : TRAVEL_PHOTOS.city
+        : /北京|故宫|紫禁城/.test(destination) ? TRAVEL_PHOTOS.beijing
+          : /成都|川|锦里|熊猫/.test(destination) ? TRAVEL_PHOTOS.chengdu
+            : TRAVEL_PHOTOS.city
 }
