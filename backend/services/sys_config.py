@@ -199,8 +199,14 @@ def _normalize(env_key: str, raw: Any) -> str | None:
     return _normalize_with(_SWITCHES.get(env_key), raw)
 
 
+_tables_ensured = False
+
+
 async def _ensure_tables(session) -> None:
-    """自建表，使用 CREATE TABLE IF NOT EXISTS 保证幂等。"""
+    """自建表防守（已正式入迁移 154；进程内仅首轮兜底执行一次，杜绝运行期反复执行 DDL 产生慢 SQL）。"""
+    global _tables_ensured
+    if _tables_ensured:
+        return
     await session.execute(text(
         "CREATE TABLE IF NOT EXISTS sys_config ("
         " key VARCHAR(64) PRIMARY KEY,"
@@ -218,6 +224,7 @@ async def _ensure_tables(session) -> None:
     await session.execute(text(
         "CREATE INDEX IF NOT EXISTS idx_sys_config_history_key "
         " ON sys_config_history (key, changed_at DESC)"))
+    _tables_ensured = True
 
 
 async def _fetch_overrides(session) -> dict[str, dict[str, Any]]:
