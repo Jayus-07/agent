@@ -62,6 +62,115 @@ def dynamic_suggested_minutes(name: str, category: str, tags: list[str] | None =
 
     return 90
 
+
+POI_EXPERIENCE_TIPS: dict[str, dict[str, str]] = {
+    # 故宫 / 紫禁城
+    "故宫": {
+        "tip": "需提前7天实名预约，周一闭馆；建议由午门进、神武门或东华门出，不走回头路",
+        "spot": "景山公园万春亭可俯瞰紫禁城中轴线全景与壮丽落日",
+    },
+    "故宫博物院": {
+        "tip": "需提前7天实名预约，周一闭馆；建议由午门进、神武门或东华门出，不走回头路",
+        "spot": "景山公园万春亭可俯瞰紫禁城中轴线全景与壮丽落日",
+    },
+    "天坛": {
+        "tip": "建议购买联票（含祈年殿、回音壁），周一园中园闭馆",
+        "spot": "祈年殿南侧丹陛桥，清晨或傍晚拍红墙蓝瓦光影极美",
+    },
+    "天坛公园": {
+        "tip": "建议购买联票（含祈年殿、回音壁），周一园中园闭馆",
+        "spot": "祈年殿南侧丹陛桥，清晨或傍晚拍红墙蓝瓦光影极美",
+    },
+    "颐和园": {
+        "tip": "园区巨大，建议北宫门进、新建宫门出，或乘游船感受昆明湖烟波",
+        "spot": "冬至前后十七孔桥金光穿洞，春秋季西堤六桥杨柳拂面",
+    },
+    "外滩": {
+        "tip": "亮灯时间通常为 19:00-22:00，人流集中在南京东路下口，可往十六铺方向人少景宽",
+        "spot": "九江路路口仰拍万国建筑群与东方明珠同框；北外滩绿地拍陆家嘴全景",
+    },
+    "上海外滩": {
+        "tip": "亮灯时间通常为 19:00-22:00，人流集中在南京东路下口，可往十六铺方向人少景宽",
+        "spot": "九江路路口仰拍万国建筑群与东方明珠同框；北外滩绿地拍陆家嘴全景",
+    },
+    "东方明珠": {
+        "tip": "建议提前在线购票预约时段，傍晚日落前 1 小时登塔可同时欣赏日落与繁华夜景",
+        "spot": "陆家嘴二层环形天桥仰拍大圆球；富城路江边漫步道拍巨塔倒影",
+    },
+    "东方明珠广播电视塔": {
+        "tip": "建议提前在线购票预约时段，傍晚日落前 1 小时登塔可同时欣赏日落与繁华夜景",
+        "spot": "陆家嘴二层环形天桥仰拍大圆球；富城路江边漫步道拍巨塔倒影",
+    },
+    "城隍庙": {
+        "tip": "豫园核心园林需购票，老街商圈免费；九曲桥高峰期建议顺时针单向通行",
+        "spot": "豫园九曲桥湖心亭倚栏角度；夜间豫园商城仿古建筑飞檐灯火",
+    },
+    "上海城隍庙": {
+        "tip": "豫园核心园林需购票，老街商圈免费；九曲桥高峰期建议顺时针单向通行",
+        "spot": "豫园九曲桥湖心亭倚栏角度；夜间豫园商城仿古建筑飞檐灯火",
+    },
+    "豫园": {
+        "tip": "江南古典园林精华，建议租讲解器或蹭听，体会点春堂与玉玲珑意趣",
+        "spot": "大假山顶望得月楼；得月楼廊桥水景倒影",
+    },
+    "迪士尼": {
+        "tip": "提前下载迪士尼 App 绑定门票抢预约等候卡，早享卡可提前 1 小时入园",
+        "spot": "奇幻童话城堡正前方爱丽丝迷宫；傍晚旋转木马夜景灯光",
+    },
+    "上海迪士尼度假区": {
+        "tip": "提前下载迪士尼 App 绑定门票抢预约等候卡，早享卡可提前 1 小时入园",
+        "spot": "奇幻童话城堡正前方爱丽丝迷宫；傍晚旋转木马夜景灯光",
+    },
+    "秦始皇帝陵博物院": {
+        "tip": "务必提前在官方渠道实名预约，一号坑最震撼、二号坑看将军俑跪射俑细节",
+        "spot": "一号坑前区正中经典大景俯拍军阵；铜车马展厅拍精致纹饰",
+    },
+    "兵马俑": {
+        "tip": "务必提前在官方渠道实名预约，一号坑最震撼、二号坑看将军俑跪射俑细节",
+        "spot": "一号坑前区正中经典大景俯拍军阵；铜车马展厅拍精致纹饰",
+    },
+    "大雁塔": {
+        "tip": "大慈恩寺登塔需另购票；北广场音乐喷泉每晚有固定排期",
+        "spot": "大悦城四楼露天观景平台和大雁塔合影无遮挡",
+    },
+    "大唐不夜城": {
+        "tip": "全天免费开放，核心华灯秀在 19:30 以后开始，周末人流极大注意防挤",
+        "spot": "开元广场中央主雕塑；贞观之治灯柱步道拍汉服穿越感",
+    },
+    "西湖": {
+        "tip": "环湖建议分段步行或共享单车，断桥至白堤清晨人少景幽",
+        "spot": "雷峰塔顶远眺苏堤春晓；集贤亭拍湖畔落日残阳",
+    },
+    "大熊猫繁育研究基地": {
+        "tip": "一定要早上 7:30-8:30 入园！上午熊猫活跃进食，中午后基本在睡大觉",
+        "spot": "太阳产房和月亮产房看幼仔幼态；幼年熊猫别墅室外草坪抓拍翻滚",
+    },
+    "宽窄巷子": {
+        "tip": "井巷子相对清静，宽巷子看老成都院落门头，窄巷子适合文艺小资",
+        "spot": "恺庐老门头与雕花砖墙；小院茶馆拍盖碗茶竹椅闲适感",
+    },
+    "鼓浪屿": {
+        "tip": "往返船票需提前在厦门轮渡公众号预订，岛上全靠步行，建议穿平底鞋",
+        "spot": "日光岩俯瞰全岛红顶小洋楼与海景；菽庄花园十二洞天海滨回廊",
+    },
+    "南普陀寺": {
+        "tip": "进门免费领香一支，登五老峰可远眺厦大与演武大桥海滨",
+        "spot": "大雄宝殿前放生池莲花；后山五老峰观景台俯瞰海港",
+    },
+}
+
+
+def get_poi_experience_tip(poi_name: str) -> dict[str, str] | None:
+    """根据 POI 名称匹配精选避坑贴士与出片打卡机位。"""
+    name = (poi_name or "").strip()
+    if not name:
+        return None
+    for k, v in POI_EXPERIENCE_TIPS.items():
+        if k in name or name in k:
+            return v
+    return None
+
+
 # ── 候选池实时源（TRAVEL_POI_SOURCE=live，2026-10-02 种子库下线）────
 # 腾讯位置服务关键词检索：任意城市可用、零维护。诚实口径（与
 # live_map.resolve_place 一致）：坐标可信（tencent:lbs + 观测时间），
@@ -162,7 +271,13 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
                 verification_status="unverified",
                 # 入选理由的基础事实（为什么选它）：来自哪一路检索词；
                 # 知乎攻略提及的理由由 poi 专家节点在骨架前追加。
-                reason=f"「{q}」实时检索",
+                reason=(
+                    f"「{q}」实时检索"
+                    + (
+                        f" · 💡避坑: {get_poi_experience_tip(name)['tip']} · 📸机位: {get_poi_experience_tip(name)['spot']}"
+                        if get_poi_experience_tip(name) else ""
+                    )
+                ),
                 # 坐标级可信独立标注：详情（票价/时长）占位连坐标也不可信，是
                 # 两个语义——地图打点按 location_status 判定（字段级拆分）。
                 location_status="verified",
@@ -313,15 +428,20 @@ def _merge_amap_candidates(
                 lat=float(lat), lng=float(lng),
                 open_time=hours[0] if hours else "09:00",
                 close_time=hours[1] if hours else "17:00",
-                suggested_minutes=dynamic_suggested_minutes(name, str(item.get("category") or "")),
+                suggested_minutes=dynamic_suggested_minutes(name, str(rec.get("category") or "")),
                 ticket_cny=0.0,
                 tags=closed_tags,
                 rating=rating,
                 source="amap",
                 observed_at=observed_at,
                 verification_status="unverified",
-                reason=f"「{q}」高德检索 · 评分 {rating:g}" if rating
-                else f"「{q}」高德检索",
+                reason=(
+                    (f"「{q}」高德检索 · 评分 {rating:g}" if rating else f"「{q}」高德检索")
+                    + (
+                        f" · 💡避坑: {get_poi_experience_tip(name)['tip']} · 📸机位: {get_poi_experience_tip(name)['spot']}"
+                        if get_poi_experience_tip(name) else ""
+                    )
+                ),
                 location_status="verified",
             ))
     return pois, notes
