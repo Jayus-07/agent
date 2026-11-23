@@ -388,6 +388,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "151_auth_sso.sql": "memory",
     "152_retire_crawler_read_access.sql": "business",
     "153_eval_case_golden.sql": "memory",
+    "154_sys_config_ddl_and_price_seed.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

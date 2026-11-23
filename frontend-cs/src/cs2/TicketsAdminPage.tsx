@@ -97,8 +97,8 @@ export default function TicketsAdminPage() {
         </select>
         <select className="h-7 rounded-lg border border-slate-200 bg-white px-2 text-xs" aria-label="类型筛选" value={type} onChange={(e) => setType(e.target.value)}>
           <option value="">全部类型</option>
+          <option value="handoff">转人工 / 超时工单</option>
           <option value="complaint">投诉</option>
-          <option value="handoff_timeout">转人工超时</option>
           <option value="refund">退款</option>
         </select>
         {forbidden && (

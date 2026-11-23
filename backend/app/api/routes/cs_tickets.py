@@ -70,6 +70,12 @@ async def list_my_tickets(
     """我的工单（时间倒序）。"""
     if not identity.user_id:
         raise HTTPException(403, detail="缺少可信用户身份")
+    # O12：工单接口加角色守卫，普通坐席账号禁止通过此端点越权访问（需严格返回 403）
+    user_roles = set(identity.roles or [])
+    if "agent" in user_roles and not ({"supervisor", "admin", "super_admin"} & user_roles):
+        raise HTTPException(
+            403, detail="客服坐席无权访问个人工单列表，工单管理请由客服主管在管理端查看"
+        )
     tickets = await get_ticket_store().async_list_for_user(
         identity.user_id,
         tenant_id=require_tenant_id(identity),
@@ -88,6 +94,11 @@ async def get_my_ticket(
     """工单详情（仅创建人可见；404 不区分不存在/无权，防探测）。"""
     if not identity.user_id:
         raise HTTPException(403, detail="缺少可信用户身份")
+    user_roles = set(identity.roles or [])
+    if "agent" in user_roles and not ({"supervisor", "admin", "super_admin"} & user_roles):
+        raise HTTPException(
+            403, detail="客服坐席无权访问个人工单详情，工单管理请由客服主管在管理端查看"
+        )
     ticket = await get_ticket_store().async_get(
         ticket_id, tenant_id=require_tenant_id(identity),
     )

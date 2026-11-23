@@ -171,6 +171,8 @@ PAID_RELEVANT_MIGRATION_ENTRIES = frozenset({
     # 149 预算域额度轴：三表加 domain 列 + PK 重建（任务 9，影响预算/费用闸门；
     # 原 147/148 号连续与并行会话碰撞，改 149）
     "backend/sql/migrations/149_budget_domain_axis.sql",
+    # 154 sys_config 启动建表治理 + 模型价格补齐（影响模型计费与价格审批）
+    "backend/sql/migrations/154_sys_config_ddl_and_price_seed.sql",
 })
 
 # 与模型调用 / 检索 / 计费无关的迁移：显式列出，禁止靠模糊关键词推断。

@@ -172,7 +172,10 @@ class TicketStore:
         if status:
             conditions.append(CSTicket.status == status)
         if type:
-            conditions.append(CSTicket.type == type)
+            if type in ("handoff", "handoff_timeout"):
+                conditions.append(CSTicket.type.in_(["handoff", "handoff_timeout"]))
+            else:
+                conditions.append(CSTicket.type == type)
         async with AsyncSessionLocal() as db:
             tickets = (
                 await db.execute(
