@@ -29,6 +29,36 @@ def _order(order_no="MO-001", status="paid"):
 
 class TestQueryTaskFacts:
     @patch("backend.customer_service.security.permission.PermissionChecker.validate_user_identity", return_value="u1")
+    @patch("backend.customer_service.service.order_service.get_order_service")
+    @patch("backend.customer_service.service.refund_service.get_refund_service")
+    def test_order_followups_use_verified_products_and_refund_eligibility(
+        self, get_refund, get_orders, _identity,
+    ):
+        get_orders.return_value.query_orders.return_value = SimpleNamespace(
+            orders=[{**_order(), "product_names": "银戒指"}],
+        )
+        get_refund.return_value.check_refund_eligibility.return_value = SimpleNamespace(
+            eligible=True,
+        )
+
+        state = _state({"task_id": "q1", "capability": "query_order_status"})
+        route = {"intent": "t_order_status", "metadata": {
+            "order_id": "MO-001", "order_fact_followup": "products",
+        }}
+        query = execute_query("包含什么商品", route, state)
+        assert query["response_draft"] == "订单 MO-001 包含：银戒指。"
+        assert query["data"]["service_facts"]["orders"][0]["product_names"] == "银戒指"
+
+        route["metadata"]["order_fact_followup"] = "refund"
+        query = execute_query("可以退款吗", route, state)
+        assert "当前符合退款申请条件" in query["response_draft"]
+        get_refund.return_value.check_refund_eligibility.assert_called_once_with(
+            "u1", "MO-001",
+        )
+        get_refund.return_value.build_refund_proposal.assert_not_called()
+
+
+    @patch("backend.customer_service.security.permission.PermissionChecker.validate_user_identity", return_value="u1")
     @patch("backend.customer_service.service.logistics_service.get_logistics_service")
     @patch("backend.customer_service.service.order_service.get_order_service")
     @patch("backend.customer_service.experts.query._llm_decompose_intents")

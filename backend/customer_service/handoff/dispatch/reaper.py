@@ -364,7 +364,7 @@ async def _close_handoff(
                     f"您也可以继续问我其他问题～"
                 )
                 await MessageManager(session).create(
-                    str(handoff.conversation_id), notice, sender_type="assistant",
+                    str(handoff.conversation_id), notice, sender_type="system",
                     metadata={"kind": "handoff_timeout_ticket", "ticket_id": ticket_id},
                 )
             except Exception as e:  # noqa: BLE001 — 通知是增强，不是关单的前置

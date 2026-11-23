@@ -391,7 +391,7 @@ def _notice_of(session) -> object | None:
     from backend.customer_service.models.message import CSMessage
 
     for obj in session.added:
-        if isinstance(obj, CSMessage) and obj.sender_type == "assistant":
+        if isinstance(obj, CSMessage) and obj.sender_type == "system":
             return obj
     return None
 

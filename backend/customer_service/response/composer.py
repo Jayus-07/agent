@@ -75,11 +75,12 @@ def compose_reply(
 
     policy = EXPERT_RESPONSE_POLICY.get(expert_name, ResponsePolicy.TEMPLATE)
 
-    # 支付流水回复包含逐笔事实和强制的重试/退款确认边界；保留 QueryExpert
-    # 的确定性模板，避免 LLM 转写时漏掉必要指引或人工审核说明。
-    if (
-        expert_name == "query"
-        and str((cs_route or {}).get("intent") or "") == "t_payment_issue"
+    # 支付流水与订单定向追问已有核验后的直接答复。
+    route = cs_route or {}
+    order_fact_followup = (route.get("metadata") or {}).get("order_fact_followup")
+    if expert_name == "query" and (
+        route.get("intent") == "t_payment_issue"
+        or order_fact_followup in {"products", "refund", "return"}
     ):
         _metrics_inc("cs_response_total", {"source": "template"})
         _tag_trace(cs_response_source="template")
