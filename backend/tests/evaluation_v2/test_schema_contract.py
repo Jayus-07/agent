@@ -8,6 +8,7 @@ APPROVAL_MIGRATION = ROOT / "sql" / "migrations" / "109_evaluation_v2_gate_appro
 HUMAN_REVIEW_MIGRATION = ROOT / "sql" / "migrations" / "110_evaluation_v2_human_reviews.sql"
 CASE_REVISION_MIGRATION = ROOT / "sql" / "migrations" / "111_evaluation_v2_case_revision_candidates.sql"
 DOMAIN_RUNNER_MIGRATION = ROOT / "sql" / "migrations" / "112_evaluation_v2_domain_runner.sql"
+GOLDEN_MIGRATION = ROOT / "sql" / "migrations" / "153_eval_case_golden.sql"
 
 
 def test_evaluation_v2_migration_is_registered_for_memory_database():
@@ -20,6 +21,7 @@ def test_evaluation_v2_migration_is_registered_for_memory_database():
     assert MIGRATION_TARGETS[HUMAN_REVIEW_MIGRATION.name] == "memory"
     assert MIGRATION_TARGETS[CASE_REVISION_MIGRATION.name] == "memory"
     assert MIGRATION_TARGETS[DOMAIN_RUNNER_MIGRATION.name] == "memory"
+    assert MIGRATION_TARGETS[GOLDEN_MIGRATION.name] == "memory"
     assert names.index("107_auth_knowledge_bases.sql") < names.index(MIGRATION.name)
     assert names.index(MIGRATION.name) < names.index(APPROVAL_MIGRATION.name)
     assert names.index(APPROVAL_MIGRATION.name) < names.index(HUMAN_REVIEW_MIGRATION.name)

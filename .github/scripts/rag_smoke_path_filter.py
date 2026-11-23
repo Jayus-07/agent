@@ -195,6 +195,7 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/150_retail_erp_pilot_schema.sql",
     "backend/sql/migrations/151_auth_sso.sql",
     "backend/sql/migrations/152_retire_crawler_read_access.sql",
+    "backend/sql/migrations/153_eval_case_golden.sql",
     "backend/sql/migrations/019_gateway_access_logs_pg.sql",
     "backend/sql/migrations/021_selection_funnel_pg.sql",
     "backend/sql/migrations/022_feedback_review_candidates.sql",
