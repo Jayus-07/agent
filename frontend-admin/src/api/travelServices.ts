@@ -8,6 +8,9 @@ import { request, mutationRequest } from "./client";
 export interface TravelServiceItem {
   name: string;
   configured: boolean;
+  type?: string;
+  endpoint?: string;
+  has_custom_key?: boolean;
   enabled?: boolean;
   key_preview?: string;
   description: string;
