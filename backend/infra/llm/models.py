@@ -484,6 +484,10 @@ def resolve_provider(
     if "qwen" in lowered and ":" not in model_name:
         # 带冒号标签（如 qwen2.5:3b）是本地 Ollama 模型，此处只匹配在线 Qwen
         return "qwen"
+    if "glm" in lowered or "zhipu" in lowered:
+        return "custom-api-3"
+    if "doubao" in lowered or "seed" in lowered:
+        return "custom-doubao-seed-2-0-mini"
 
     if strict:
         raise ProviderResolutionError(

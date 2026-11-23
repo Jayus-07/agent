@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from backend.shared.logger import logger
 from backend.travel.experts.base import run_expert_safely
-from backend.travel.graph_state import load_brief
+from backend.travel.graph_state import load_brief, load_itinerary, save_itinerary
 from backend.travel.services.lodging_service import (
     HotelSearchParamError,
     search_lodging,
@@ -79,6 +79,10 @@ def lodging_expert_node(state: dict) -> dict:
     }
     if data.get("lodging_options") is not None:
         update["lodging_options"] = data["lodging_options"]
+        itinerary = load_itinerary(state)
+        if itinerary is not None:
+            itinerary.lodging_options = list(data["lodging_options"])
+            update["itinerary"] = save_itinerary(itinerary)
     if data.get("lodging_disclosure"):
         update["lodging_disclosure"] = data["lodging_disclosure"]
     return update

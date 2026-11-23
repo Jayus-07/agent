@@ -118,4 +118,28 @@ describe('旅游 Agent 行程到 V2 文档的确定性转换', () => {
     expect(confirmedTimezoneFromTrip(assumedTrip)).toBeNull()
     expect(confirmedTimezoneFromTrip(confirmedTrip)).toBe('America/Los_Angeles')
   })
+
+  it('将行程中的商旅住宿候选正确转换为 V2 住宿安排', () => {
+    const withLodging = {
+      ...itinerary,
+      lodging_options: [
+        {
+          selection_id: 'sel-hotel-1',
+          property_id: 'hotel-01',
+          name: '西湖智尚酒店',
+          address: '南山路100号',
+          lat: 30.24,
+          lng: 120.15,
+          rating: 4.8,
+          nightly_price_cny: 180,
+          source: 'rollinggo:mcp',
+        },
+      ],
+    }
+    const document = itineraryToTripDocumentV2(withLodging)
+    expect(document.arrangements.lodgings).toHaveLength(1)
+    expect(document.arrangements.lodgings[0].merchant.name).toBe('西湖智尚酒店')
+    expect(document.arrangements.lodgings[0].nightly_price_cny).toBe(180)
+    expect(document.arrangements.lodgings[0].verification).toBe('verified')
+  })
 })

@@ -459,7 +459,14 @@ def render_travel_reply(
             meta["fallback_reason"] = "no_model"
             return template_answer, meta
 
-        llm = _build_llm_for(model_name).bind(temperature=0, max_tokens=220)
+        base_llm = _build_llm_for(model_name)
+        if type(base_llm).__name__ == "ChatOllama":
+            llm = base_llm.bind(options={"temperature": 0, "num_predict": 220})
+        else:
+            try:
+                llm = base_llm.bind(temperature=0, max_tokens=220)
+            except Exception:
+                llm = base_llm
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=human_payload),
