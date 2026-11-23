@@ -34,6 +34,7 @@ import {
 import RunHistoryDetail from './RunHistoryDetail'
 import EvalRunDetailDrawer from './EvalRunDetailDrawer'
 import RunCompareDrawer from './RunCompareDrawer'
+import RagasSuiteConfigPanel, { DEFAULT_RAGAS_SUITE_CONFIG, type RagasSuiteConfig } from '../RagasSuiteConfigPanel'
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'blocked'])
 const RUN_PAGE_SIZE = 10
@@ -79,6 +80,7 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
   const [relVersion, setRelVersion] = useState('')
   const [relMode, setRelMode] = useState('self+ragas')
   const [relNote, setRelNote] = useState('')
+  const [ragasSuite, setRagasSuite] = useState<RagasSuiteConfig>(DEFAULT_RAGAS_SUITE_CONFIG)
   const [expandedReleaseId, setExpandedReleaseId] = useState('')
   const [detailRunId, setDetailRunId] = useState('')
   // 发布评测 / CLI 台账的逐题抽屉（读报告文件口径，与 V2 整页详情互斥）
@@ -350,6 +352,15 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
           <p>判分方式：{relDomain === 'sql' ? '候选 vs 现网双跑真实执行对比' : relDomain === 'rag' ? MODE_LABELS[relMode] : '离线契约断言'}</p>
           <p>门禁口径：{relDomain === 'sql' ? '样本量 + 候选回归 ≤5% + 防全挂下限' : relDomain === 'rag' ? '分层阈值（smoke ≥95%）+ 基线回归 + RAGAS（如选用）' : 'audit 留痕，不阻断发布'}</p>
         </div>}
+        {relKey && relDomain === 'rag' && (
+          <div className="mt-3.5">
+            <RagasSuiteConfigPanel
+              value={ragasSuite}
+              onChange={setRagasSuite}
+              disabled={busy}
+            />
+          </div>
+        )}
         <div className="mt-3">
           <input
             aria-label="发起原因（可选）" type="text" maxLength={200}
