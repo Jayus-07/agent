@@ -88,7 +88,7 @@ function LoginForm() {
     }
     if (savedPassword) setPassword(savedPassword);
     if (consumeExpiredFlag()) {
-      setNotice("登录已过期，请重新登录");
+      setNotice("登录已失效，请重新登录");
     } else if (registrationComplete) {
       setNotice("注册成功，请核对账号密码后登录");
     }

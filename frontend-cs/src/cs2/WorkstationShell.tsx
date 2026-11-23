@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { getCachedUser, logout } from '@/lib/auth'
 import { CS2_NAV_ITEMS } from './nav'
 import { getMyStatus, type AgentStatusView } from './workspace/api'
 
@@ -17,12 +18,21 @@ export default function WorkstationShell({
 }) {
   const pathname = usePathname()
   const [role, setRole] = useState<string | null>(null)
+  const [username, setUsername] = useState<string>('')
+  const [loggingOut, setLoggingOut] = useState(false)
 
   useEffect(() => {
     let cancelled = false
+    const cached = getCachedUser()
+    if (cached?.username) {
+      setUsername(cached.username)
+    }
     getMyStatus()
       .then((status: AgentStatusView) => {
-        if (!cancelled) setRole(String(status.cs_role ?? 'agent'))
+        if (!cancelled) {
+          setRole(String(status.cs_role ?? 'agent'))
+          if (status.display_name) setUsername(status.display_name)
+        }
       })
       .catch(() => {
         if (!cancelled) setRole('agent')
@@ -33,6 +43,18 @@ export default function WorkstationShell({
   }, [])
 
   const isSupervisor = role === 'supervisor' || role === 'admin'
+  const roleLabel = isSupervisor ? '客服主管' : '客服坐席'
+  const displayUser = username || 'ops_cs_agent'
+
+  const handleLogout = async () => {
+    if (loggingOut) return
+    setLoggingOut(true)
+    try {
+      await logout()
+    } finally {
+      window.location.assign('/login')
+    }
+  }
 
   return (
     <div className="flex h-screen w-full bg-slate-50">
@@ -69,11 +91,25 @@ export default function WorkstationShell({
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-12 items-center justify-end border-b border-slate-200 bg-white px-4">
-          {/* P3 落位：坐席状态 / 接单开关 / 通知中心 / 视角切换 */}
-          <span className="text-xs text-slate-400">
-            坐席状态 · 接单开关 · 通知中心（P3）
-          </span>
+        <header className="flex h-12 items-center justify-between border-b border-slate-200 bg-white px-4">
+          <div className="text-xs text-slate-500" />
+          <div className="flex items-center gap-3">
+            <span className="flex items-center gap-1.5 text-xs text-slate-700">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              <span className="font-medium">{roleLabel}</span>
+              <span className="text-slate-400">·</span>
+              <span className="text-slate-600">{displayUser}</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-600 transition hover:bg-slate-50 hover:text-red-600 disabled:opacity-50"
+              data-testid="logout-button"
+            >
+              {loggingOut ? '正在退出…' : '退出登录'}
+            </button>
+          </div>
         </header>
         <main className="min-h-0 flex-1 overflow-auto">{children}</main>
       </div>

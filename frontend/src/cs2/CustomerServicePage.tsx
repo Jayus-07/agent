@@ -244,6 +244,25 @@ export default function CustomerServicePage() {
       })
       abortRef.current = null
       typerRef.current = null
+
+      // UX-02：问答轮次结束后，探测会话服务端最新 handoff 状态与元信息
+      const convId = draftRef.current.id
+      if (convId && convId !== 'new') {
+        fetchMyMessages(convId, 0, 1)
+          .then((res) => {
+            const nextState = res.handoff_state ?? 'none'
+            if (nextState !== 'none') {
+              setHandoffState(nextState)
+              if (res.handoff_meta) {
+                setHandoffMeta({
+                  total_deadline_at: res.handoff_meta.total_deadline_at,
+                  queue_position: res.handoff_meta.queue_position,
+                })
+              }
+            }
+          })
+          .catch(() => {})
+      }
     },
     [patchDraft],
   )
@@ -287,6 +306,14 @@ export default function CustomerServicePage() {
         return
       }
       setInput('')
+      const isHandoffIntent = /转人工|人工客服|找人工|接入人工|人工协助/.test(t)
+      if (isHandoffIntent && draftRef.current.id !== 'new') {
+        void requestHandoff(draftRef.current.id)
+          .then((res) => {
+            setHandoffState(res.handoff_state ?? 'requested')
+          })
+          .catch(() => {})
+      }
       void runTurn(t, {
         orderNo: opts?.orderNo,
         attachments: opts?.attachments,
@@ -474,9 +501,18 @@ export default function CustomerServicePage() {
           /* 评分失败静默，避免打断致谢 */
         }
       }
-      patchDraft((d) => {
-        d.rated = true
-      })
+      if (star >= 1) {
+        // UX-01：展示 1.8 秒绿色致谢卡片后再更新 rated=true，避免瞬间卸载给用户造成困惑
+        window.setTimeout(() => {
+          patchDraft((d) => {
+            d.rated = true
+          })
+        }, 1800)
+      } else {
+        patchDraft((d) => {
+          d.rated = true
+        })
+      }
     },
     [patchDraft],
   )

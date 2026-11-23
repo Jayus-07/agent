@@ -4,6 +4,7 @@
 // 机制与既有契约对齐：ticket 鉴权 → /ws/cs/agent → 封套 {type,event_id,seq,ts}；
 // 断线指数退避重连（每次换新 ticket），重连成功触发 onReconnect 供上层对账补发。
 import { useEffect, useRef, useState } from 'react'
+import { handleAuthFailure } from '@/lib/auth'
 import { issueWsTicket } from './api'
 
 export interface AgentSocketEvent {
@@ -54,7 +55,16 @@ export function useAgentSocket(
         const t = await issueWsTicket()
         ticket = t.ticket
         wsPath = t.ws_path || '/ws/cs/agent'
-      } catch {
+      } catch (err: unknown) {
+        if (
+          err &&
+          typeof err === 'object' &&
+          'status' in err &&
+          (err as { status?: number }).status === 401
+        ) {
+          handleAuthFailure()
+          return
+        }
         scheduleRetry()
         return
       }
@@ -103,9 +113,13 @@ export function useAgentSocket(
         }
       }
 
-      ws.onclose = () => {
+      ws.onclose = (event: CloseEvent) => {
         setConnected(false)
         clearPing()
+        if (event && event.code === 4401) {
+          handleAuthFailure()
+          return
+        }
         scheduleRetry()
       }
       ws.onerror = () => {
