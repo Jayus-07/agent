@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   AlertCircle,
   Camera,
@@ -121,20 +122,33 @@ export default function TravelServicesSettingsPage() {
     <RoleGate minRole="admin">
       <div className="space-y-6 p-6">
         <PageHeader
-          title="商旅与文旅扩展服务配置"
-          desc="统一配置小红书打卡机位、高德地图 LBS 美食、天气雷达与 12306 高铁，支持官方 API Key 热加载免重启生效"
+          title="文旅扩展与地图服务配置"
+          desc="管理高德 LBS、和风天气官方 API 与小红书机位图谱；12306 等自部署 MCP 服务支持无缝降级兜底与【连接中心】统一治理"
         />
+
+        {/* 服务架构透明说明横幅 */}
+        <div className="flex items-start gap-3 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-xs text-blue-950">
+          <Sparkles size={18} className="mt-0.5 shrink-0 text-blue-600" />
+          <div className="space-y-1">
+            <p className="font-semibold text-blue-900">服务架构与配置透明说明：</p>
+            <p className="leading-relaxed text-blue-800">
+              • <strong>高德地图 & 和风天气</strong>：官方标准 RESTful API，输入您在各开放平台申请的开发者 Key 即可免重启热生效。<br />
+              • <strong>小红书出片机位</strong>：官方不对个人开放 API。本平台已<strong>直接内置数百个主流城市高赞机位与避坑图谱（开箱即用，无需申请任何 Key）</strong>；若有自建代理亦可填入。<br />
+              • <strong>12306 高铁余票</strong>：基于自部署开源 Docker 容器 (<code>mcp-12306</code>) 提供标准 MCP 接口；若容器未运行将自动平滑降级为默认交通接驳规则。全量外部 MCP 连接可前往左侧<strong>【连接中心】</strong>管理。
+            </p>
+          </div>
+        </div>
 
         {/* 顶部指标卡片 */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex items-center gap-3.5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
-              <Flame size={22} />
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-purple-50 text-purple-600">
+              <Camera size={22} />
             </span>
             <div>
-              <p className="text-xs text-slate-500">小红书爆款攻略</p>
+              <p className="text-xs text-slate-500">小红书出片机位</p>
               <p className="mt-0.5 text-sm font-bold text-slate-900">
-                {xhsEnabled ? "🔥 优先检索出片机位" : "已停用"}
+                {xhsEnabled ? "📸 内置图谱·开箱即用" : "已停用"}
               </p>
             </div>
           </div>
@@ -156,21 +170,21 @@ export default function TravelServicesSettingsPage() {
               <Train size={22} />
             </span>
             <div>
-              <p className="text-xs text-slate-500">12306 大交通</p>
+              <p className="text-xs text-slate-500">12306 高铁大交通</p>
               <p className="mt-0.5 text-sm font-bold text-slate-900">
-                {train12306Enabled ? "首末日高铁自动卡片" : "已关闭"}
+                {train12306Enabled ? "自部署 MCP (带降级)" : "已关闭"}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-3.5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
-              <Rocket size={22} />
+              <CloudSun size={22} />
             </span>
             <div>
-              <p className="text-xs text-slate-500">配置热生效架构</p>
-              <p className="mt-0.5 text-sm font-bold text-emerald-700">
-                免重启实时热加载
+              <p className="text-xs text-slate-500">天气避险雷达</p>
+              <p className="mt-0.5 text-sm font-bold text-slate-900">
+                {config?.services.weather.configured ? "和风气象雷达已就绪" : "通用预报模式"}
               </p>
             </div>
           </div>
@@ -222,73 +236,68 @@ export default function TravelServicesSettingsPage() {
             <div>
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-2.5">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-purple-50 text-purple-600">
                     <Camera size={18} />
                   </span>
                   <div>
                     <h3 className="text-sm font-bold text-slate-900">
-                      小红书文旅爆款攻略与打卡机位
+                      小红书出片机位与文旅爆款 (内置精选)
                     </h3>
                     <p className="text-xs text-slate-500">
                       年轻人 Citywalk 路线、小众咖啡店与最佳拍照机位
                     </p>
                   </div>
                 </div>
-                <label className="relative inline-flex cursor-pointer items-center">
-                  <input
-                    type="checkbox"
-                    className="peer sr-only"
-                    checked={xhsEnabled}
-                    onChange={(e) => setXhsEnabled(e.target.checked)}
-                  />
-                  <div className="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-rose-500 peer-checked:after:translate-x-full"></div>
-                </label>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-purple-50 px-2 py-0.5 text-[10px] font-medium text-purple-700">
+                    内置图谱·开箱即用
+                  </span>
+                  <label className="relative inline-flex cursor-pointer items-center">
+                    <input
+                      type="checkbox"
+                      className="peer sr-only"
+                      checked={xhsEnabled}
+                      onChange={(e) => setXhsEnabled(e.target.checked)}
+                    />
+                    <div className="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-purple-600 peer-checked:after:translate-x-full"></div>
+                  </label>
+                </div>
               </div>
 
               <div className="mt-4 space-y-3">
                 <div>
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-medium text-slate-700">
-                      小红书 API Key / MCP 访问令牌
+                      自建 MCP 代理服务地址 / Token（可选）
                     </label>
-                    {config?.services.xiaohongshu.configured && (
-                      <span className="text-[11px] text-emerald-600">
-                        当前密钥：{config.services.xiaohongshu.key_preview}
+                    {config?.services.xiaohongshu.has_custom_key && (
+                      <span className="text-[11px] text-purple-600">
+                        当前已配置自建代理：{config.services.xiaohongshu.key_preview}
                       </span>
                     )}
                   </div>
                   <input
                     type="password"
-                    placeholder={
-                      config?.services.xiaohongshu.configured
-                        ? "输入新 Key 以覆盖，留空保持当前配置"
-                        : "请粘贴小红书开放平台 API Key 或 MCP 授权 Token"
-                    }
+                    placeholder="小红书无个人开放API；留空使用内置出片打卡图谱，或填入自建开源 MCP 代理服务"
                     value={xhsKey}
                     onChange={(e) => setXhsKey(e.target.value)}
-                    className="mt-1.5 w-full rounded-xl border border-slate-200 px-3.5 py-2 text-xs text-slate-800 placeholder-slate-400 focus:border-rose-500 focus:outline-none"
+                    className="mt-1.5 w-full rounded-xl border border-slate-200 px-3.5 py-2 text-xs text-slate-800 placeholder-slate-400 focus:border-purple-500 focus:outline-none"
                   />
                 </div>
 
-                <div className="rounded-xl bg-rose-50/60 p-3 text-[11px] leading-relaxed text-rose-950">
-                  <p className="font-semibold text-rose-900">💡 开箱即用与热加载双轨机制：</p>
+                <div className="rounded-xl bg-purple-50/70 p-3 text-[11px] leading-relaxed text-purple-950">
+                  <p className="font-semibold text-purple-900">💡 开箱即用无需配置 Key：</p>
                   <p className="mt-0.5">
-                    未配置 Key 时，系统自动启用<strong>本地精选爆款机位图谱</strong>（已内置上海、北京、成都、西安、杭州等经典热门机位与避坑锦囊）。您在上方填入官方 Key 并保存后，将<strong>免重启实时激活全网实时动态检索通道</strong>！
+                    小红书官方未开放个人开发者 API。本平台已<strong>直接内置北京、上海、成都、西安、杭州等主流热门文旅城市的高赞机位与避坑图谱</strong>（如景山万春亭俯瞰、故宫角楼日落、武康路沿线咖啡馆）。时间轴上将直接标注 📸【爆款机位】与 💡【避坑锦囊】，<strong>无需配置任何 Key 即可使用</strong>！
                   </p>
                 </div>
               </div>
             </div>
 
             <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-              <a
-                href="https://open.xiaohongshu.com/"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-rose-600 hover:underline"
-              >
-                <span>获取小红书开放平台 Key</span>
-                <ExternalLink size={12} />
-              </a>
+              <span className="text-xs font-medium text-purple-700">
+                ✨ 内置海量城市高赞打卡点与避坑知识
+              </span>
               <button
                 type="button"
                 disabled={testingService === "xiaohongshu"}
@@ -415,7 +424,7 @@ export default function TravelServicesSettingsPage() {
                 <div>
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-medium text-slate-700">
-                      和风天气 API Key (WEATHER_API_KEY)
+                      和风天气 API Key (QWEATHER_API_KEY)
                     </label>
                     {config?.services.weather.configured && (
                       <span className="text-[11px] text-emerald-600">
@@ -433,7 +442,7 @@ export default function TravelServicesSettingsPage() {
                 </div>
 
                 <div className="rounded-xl bg-amber-50/60 p-3 text-[11px] leading-relaxed text-amber-950">
-                  <p className="font-semibold text-amber-900">🌤️ 动态天气横幅：</p>
+                  <p className="font-semibold text-amber-900">🌤️ 动态气象横幅与暴雨避险：</p>
                   <p className="mt-0.5">
                     已在时间轴每日行程顶部实时渲染气象横幅，并在遇强对流/暴雨天气时自动推荐就近室内博物馆或特色场馆。
                   </p>
@@ -448,7 +457,7 @@ export default function TravelServicesSettingsPage() {
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 text-xs text-amber-700 hover:underline"
               >
-                <span>获取和风天气开发密钥</span>
+                <span>前往和风开发者控制台申请 Key</span>
                 <ExternalLink size={12} />
               </a>
               <button
@@ -472,22 +481,27 @@ export default function TravelServicesSettingsPage() {
                   </span>
                   <div>
                     <h3 className="text-sm font-bold text-slate-900">
-                      12306 动态高铁大交通 & 攻略优先策略
+                      12306 动态高铁大交通 (自部署 MCP 容器)
                     </h3>
                     <p className="text-xs text-slate-500">
                       首末日跨城高铁接驳卡片与文旅知识库权重
                     </p>
                   </div>
                 </div>
-                <label className="relative inline-flex cursor-pointer items-center">
-                  <input
-                    type="checkbox"
-                    className="peer sr-only"
-                    checked={train12306Enabled}
-                    onChange={(e) => setTrain12306Enabled(e.target.checked)}
-                  />
-                  <div className="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-indigo-500 peer-checked:after:translate-x-full"></div>
-                </label>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
+                    自部署容器 (端口 18000)
+                  </span>
+                  <label className="relative inline-flex cursor-pointer items-center">
+                    <input
+                      type="checkbox"
+                      className="peer sr-only"
+                      checked={train12306Enabled}
+                      onChange={(e) => setTrain12306Enabled(e.target.checked)}
+                    />
+                    <div className="peer h-6 w-11 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-indigo-500 peer-checked:after:translate-x-full"></div>
+                  </label>
+                </div>
               </div>
 
               <div className="mt-4 space-y-4">
@@ -501,13 +515,13 @@ export default function TravelServicesSettingsPage() {
                       onClick={() => setPriority("xiaohongshu")}
                       className={`rounded-xl border p-2.5 text-center transition-all ${
                         priority === "xiaohongshu"
-                          ? "border-rose-400 bg-rose-50 text-rose-800 font-semibold shadow-xs"
+                          ? "border-purple-400 bg-purple-50 text-purple-900 font-semibold shadow-xs"
                           : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
                       }`}
                     >
-                      <span className="block text-xs">📕 小红书爆款</span>
+                      <span className="block text-xs">📸 小红书精选机位</span>
                       <span className="mt-0.5 block text-[9px] text-slate-400">
-                        (出片/机位推荐)
+                        (出片/避坑标签)
                       </span>
                     </button>
                     <button
@@ -519,7 +533,7 @@ export default function TravelServicesSettingsPage() {
                           : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
                       }`}
                     >
-                      <span className="block text-xs">知乎官方检索</span>
+                      <span className="block text-xs">知乎官方云端 MCP</span>
                       <span className="mt-0.5 block text-[9px] text-slate-400">
                         (深度经验长文)
                       </span>
@@ -533,9 +547,9 @@ export default function TravelServicesSettingsPage() {
                           : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
                       }`}
                     >
-                      <span className="block text-xs">本地精选图谱</span>
+                      <span className="block text-xs">本地城市图谱</span>
                       <span className="mt-0.5 block text-[9px] text-slate-400">
-                        (零网络极速)
+                        (离线极速保底)
                       </span>
                     </button>
                   </div>
@@ -547,7 +561,7 @@ export default function TravelServicesSettingsPage() {
                       知乎文旅搜索 MCP 备选源
                     </span>
                     <p className="text-[10px] text-slate-500">
-                      当小红书通道暂无匹配或停用时作为备选
+                      当小红书通道暂无匹配或停用时作为备选检索源
                     </p>
                   </div>
                   <input
@@ -561,9 +575,13 @@ export default function TravelServicesSettingsPage() {
             </div>
 
             <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-              <span className="text-xs text-slate-500">
-                12306 动态列车服务已集成于平台内部网络
-              </span>
+              <Link
+                href="/mcp"
+                className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:underline"
+              >
+                <span>前往【连接中心】管理自部署 MCP</span>
+                <ExternalLink size={12} />
+              </Link>
               <button
                 type="button"
                 disabled={testingService === "train_12306"}
