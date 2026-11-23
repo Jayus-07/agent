@@ -1196,6 +1196,109 @@ def archive_case(tenant_id: str, actor: str, case_id: str) -> dict[str, Any]:
         }
 
 
+def set_case_golden(
+    tenant_id: str,
+    actor: str,
+    case_id: str,
+    *,
+    golden: bool,
+    reason: str = "",
+) -> dict[str, Any]:
+    """Golden 标注（批次 6a）：逐题标杆标记，append-only 留治理历史。
+
+    与用例内容修订分离——revision content_hash 覆盖 metadata_json，直改
+    已发布修订的 metadata 等于破坏内容锁，故标注独立成表。幂等语义：
+    最新标注已同值时不再追加行，返回 changed=False 与现状。
+    """
+    tenant_id = _tenant(tenant_id)
+    try:
+        normalized_case_id = str(uuid.UUID(case_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Case 标识必须是 UUID") from exc
+    clean_reason = str(reason or "").strip()[:1000]
+    with _transaction(tenant_id) as (_conn, cur):
+        cur.execute(
+            """
+            SELECT lifecycle_status
+            FROM evaluation_v2.eval_cases
+            WHERE tenant_id = %s AND case_id = %s
+            FOR UPDATE
+            """,
+            (tenant_id, normalized_case_id),
+        )
+        case = _dict(cur.fetchone())
+        if not case or case["lifecycle_status"] not in {"approved", "published"}:
+            raise RepositoryNotFoundError("Case 不存在或不在可标注状态")
+        cur.execute(
+            """
+            SELECT golden
+            FROM evaluation_v2.eval_case_golden
+            WHERE tenant_id = %s AND case_id = %s
+            ORDER BY created_at DESC, mark_id DESC
+            LIMIT 1
+            """,
+            (tenant_id, normalized_case_id),
+        )
+        latest = _dict(cur.fetchone())
+        if latest and bool(latest["golden"]) == bool(golden):
+            return {
+                "case_id": normalized_case_id,
+                "golden": bool(golden),
+                "changed": False,
+            }
+        cur.execute(
+            """
+            INSERT INTO evaluation_v2.eval_case_golden
+                (tenant_id, case_id, golden, reason, marked_by)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING mark_id, created_at
+            """,
+            (tenant_id, normalized_case_id, bool(golden), clean_reason, actor),
+        )
+        mark = _dict(cur.fetchone())
+        return {
+            "case_id": normalized_case_id,
+            "golden": bool(golden),
+            "changed": True,
+            "mark_id": str(mark["mark_id"]),
+            "marked_by": actor,
+            "reason": clean_reason,
+        }
+
+
+def latest_golden_map(tenant_id: str, case_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """批量取各 case 最新 golden 标注；无标注的 case 不出现在结果里。"""
+    tenant_id = _tenant(tenant_id)
+    normalized: list[str] = []
+    for item in case_ids[:200]:
+        try:
+            normalized.append(str(uuid.UUID(str(item))))
+        except (TypeError, ValueError, AttributeError):
+            continue
+    if not normalized:
+        return {}
+    with _transaction(tenant_id) as (_conn, cur):
+        cur.execute(
+            """
+            SELECT DISTINCT ON (case_id)
+                   case_id, golden, reason, marked_by, created_at
+            FROM evaluation_v2.eval_case_golden
+            WHERE tenant_id = %s AND case_id = ANY(%s)
+            ORDER BY case_id, created_at DESC, mark_id DESC
+            """,
+            (tenant_id, normalized),
+        )
+        return {
+            str(row["case_id"]): {
+                "golden": bool(row["golden"]),
+                "reason": str(row["reason"] or ""),
+                "marked_by": str(row["marked_by"] or ""),
+                "created_at": row["created_at"].isoformat(),
+            }
+            for row in (_dict(item) for item in cur.fetchall())
+        }
+
+
 def create_candidates_bulk(
     tenant_id: str,
     actor: str,

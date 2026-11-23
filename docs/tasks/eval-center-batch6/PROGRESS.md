@@ -70,9 +70,15 @@
 - `py_compile` runner/loader/gate 脚本:OK
 - 尾部 TaskService PoolTimeout 报错为宿主测试环境已知噪音(main 基线同类),断言全过
 
+## 2026-11-23 · 6d 收官
+
+- PR #542 checks 全绿;并行会话 #541(812b211)先合导致 branch 过期 → update-branch 后二次 checks 全绿 → squash 合并 main=cef9fb4
+- 部署:并行 #541 的 deployment 堵队列 40 分钟(等它审批)→ 代为批准解锁;#541 部署因 stale-build 防护主动退出("main advanced; refusing to deploy stale build",其内容已含于 cef9fb4,无需重跑);**#542 首跑 RELEASE_GATE_PASS,Gate4 首跑即绿——gate 重试修复实测闭环**
+- 实机验证:评测中心正常(9 发布+4 台账行);历史记录 gate 详情无 veto 键属正确(落库早于部署),渲染兼容证实;veto 命中路径由 73 个单测覆盖(生产 SQL 对抗用例暂无命中样本)
+- 6d 完成。worktree agent-eval-batch6c / agent-eval-batch6d 已合并清理
+
 ## 待办
 
-- [ ] 用户确认 → commit + push + PR #54x → 合并部署(部署 Gate4 应不再瞬态误拦,可作 gate 重试的实测验证)
-- [ ] 6a 数据集产品化 → 6b 失败 Trace 闭环
-- [ ] 挂账:评测任务级预算上限(独立 PR)
+- [ ] 6a 数据集产品化 → 6b 失败 Trace 闭环(顺序已拍板)
+- [ ] 挂账:评测任务级预算上限(独立 PR);veto 规则配置页(产品化,后续)
 - [ ] 管理端大规划 Batch 0 审计(28 页面对照)
