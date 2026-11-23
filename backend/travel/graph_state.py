@@ -302,6 +302,8 @@ def build_travel_context(state: dict) -> dict:
         "day_count": len(itinerary.days) if itinerary else 0,
         "total_cost_cny": itinerary.cost.total if itinerary else 0.0,
         "persistence_status": state.get("persistence_status", ""),
+        "lodging_options": state.get("lodging_options", []),
+        "lodging_disclosure": state.get("lodging_disclosure", ""),
         "notes": state.get("notes", []),
     }
 

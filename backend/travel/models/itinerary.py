@@ -188,6 +188,9 @@ class Itinerary(BaseModel):
     intercity: list[IntercityTrain] = Field(
         default_factory=list,
         description="城际班次摘要（12306 实时检索；空=未触发车票查询，非规划硬依赖）")
+    lodging_options: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="住宿商旅候选列表（Rollinggo/实时商旅检索结果）")
 
     # ============================================================
     # 版本链与状态机（任务书 §4）

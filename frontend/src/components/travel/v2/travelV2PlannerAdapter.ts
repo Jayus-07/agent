@@ -123,7 +123,29 @@ export function itineraryToTripDocumentV2(itinerary: Itinerary, confirmedTimezon
     selections: [...selections.values()],
     days: dayDocuments,
     arrangements: {
-      lodgings: [],
+      lodgings: (((itinerary as Record<string, unknown>).lodging_options ?? []) as Array<Record<string, unknown>>).map((opt) => ({
+        selection_id: String(opt.selection_id || `lodging-${opt.merchant_id || opt.name}`),
+        merchant: {
+          merchant_id: String(opt.merchant_id || opt.name),
+          name: String(opt.name),
+          address: opt.address ? String(opt.address) : null,
+          lat: typeof opt.lat === 'number' ? opt.lat : null,
+          lng: typeof opt.lng === 'number' ? opt.lng : null,
+          rating: typeof opt.rating === 'number' ? opt.rating : null,
+          open_status: null,
+          open_time_today: null,
+          avg_cost_cny: null,
+          source: String(opt.source || 'rollinggo'),
+          observed_at: new Date().toISOString(),
+        },
+        check_in: String(opt.check_in || brief.start_date || ''),
+        check_out: String(opt.check_out || ''),
+        source: String(opt.source || 'rollinggo:mcp'),
+        queried_at: new Date().toISOString(),
+        verification: 'verified' as const,
+        booking_status: 'not_booked' as const,
+        nightly_price_cny: typeof opt.nightly_price_cny === 'number' ? opt.nightly_price_cny : null,
+      })),
       intercity_trains: (itinerary.intercity ?? [])
         .map(mapTrain)
         .filter((train): train is IntercityTrainArrangementV2 => train !== null),

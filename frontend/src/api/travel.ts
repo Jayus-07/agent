@@ -230,6 +230,8 @@ export interface Itinerary {
   change_reason?: string;
   /** 城际班次摘要（12306 实时检索；空=未触发车票查询） */
   intercity?: IntercityTrain[];
+  /** 住宿商旅候选列表（Rollinggo/实时商旅检索结果） */
+  lodging_options?: Array<Record<string, unknown>>;
 }
 
 export interface TravelClarificationOption {
