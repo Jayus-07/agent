@@ -260,6 +260,55 @@ def _kick_init() -> None:
     threading.Thread(target=_bg, name="rag-server-init", daemon=True).start()
 
 
+# D8（2026-11-23 生产 OOM 定案）：jieba 词典是首次分词时惰性构建的——pipeline
+# 初始化不触发它，readyz=200 后的第一个 /ask 才经历「Building prefix dict」
+# 内存尖峰（512MiB 限额下 anon-rss 521MB → cgroup OOM kill），而缓存永远写
+# 不完 → 容器每次重启后首问必崩、死循环。预热把尖峰挪到启动期（无用户流量）
+# 消化；缓存落共享缓存卷，容器重建后直接 mmap 加载不再构建。
+_jieba_state: dict = {"state": "not_started", "error": None}  # not_started|initializing|ready|error
+_jieba_lock = threading.Lock()
+# 与 compose 的 app_cache 卷挂载点对齐（/app/.cache）；非容器环境目录不可写时
+# 回退 jieba 默认 tmp 路径，不影响正确性。
+_JIEBA_CACHE_DIR = "/app/.cache/jieba"
+
+
+def _kick_jieba_warmup() -> None:
+    """后台线程预热 jieba 词典（幂等；readyz 据此覆盖分词就绪态）。"""
+    with _jieba_lock:
+        if _jieba_state["state"] in ("initializing", "ready"):
+            return
+        _jieba_state["state"] = "initializing"
+        _jieba_state["error"] = None
+
+    def _bg():
+        try:
+            import os
+
+            import jieba
+
+            jieba.setLogLevel(60)  # 静默「Building prefix dict」日志
+            try:
+                os.makedirs(_JIEBA_CACHE_DIR, exist_ok=True)
+                jieba.dt.tmp_dir = _JIEBA_CACHE_DIR
+            except Exception:  # noqa: BLE001 — 持久化失败回退默认 /tmp/jieba.cache
+                pass
+            started = time.perf_counter()
+            jieba.initialize()
+            with _jieba_lock:
+                _jieba_state["state"] = "ready"
+            logger.info(
+                "[rag-server] jieba 预热完成 took=%.1fs cache_dir=%s",
+                time.perf_counter() - started, _JIEBA_CACHE_DIR,
+            )
+        except Exception as e:  # noqa: BLE001
+            with _jieba_lock:
+                _jieba_state["state"] = "error"
+                _jieba_state["error"] = str(e)
+            logger.warning("[rag-server] jieba 预热失败: %s", e)
+
+    threading.Thread(target=_bg, name="rag-server-jieba-warmup", daemon=True).start()
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     """先载入管理端专项模型配置，再后台预热索引。
@@ -313,6 +362,8 @@ async def _startup() -> None:
         logger.warning("[rag-server] 索引发布监听启动失败（版本检查兜底）",
                        exc_info=True)
     _kick_init()
+    # D8：与 pipeline 初始化并行预热 jieba，readyz 两者都就绪才放行
+    _kick_jieba_warmup()
 
 
 def _start_index_published_listener() -> None:
@@ -811,19 +862,38 @@ def metrics_endpoint() -> Any:
 
 @app.get("/readyz")
 def readyz() -> dict[str, Any]:
-    """readiness：索引同步完成才 200；初始化中/失败 503。
+    """readiness：索引同步完成且 jieba 词典就绪才 200；初始化中/失败 503。
 
-    非阻塞（_get_local_pipeline_state 只读标志），可在事件循环线程调用。
+    非阻塞（只读标志），可在事件循环线程调用。
+    D8（2026-11-23）：pipeline 就绪 ≠ 分词就绪——jieba 惰性构建让首个 /ask
+    独自承担词典构建内存尖峰（512MiB 下必 OOM），readyz 现覆盖两者。
     """
     from backend.rag.pipeline import _get_local_pipeline_state
     state = _get_local_pipeline_state()
     if state["state"] == "ready":
-        from backend.config.llm import LLM_BUDGET_MODE
+        with _jieba_lock:
+            jieba_state = _jieba_state["state"]
+            jieba_error = _jieba_state["error"]
+        if jieba_state == "ready":
+            from backend.config.llm import LLM_BUDGET_MODE
 
-        return {
-            "ready": True, "state": "ready",
-            'run_budget_version': 1 if _internal_token() and LLM_BUDGET_MODE == 'enforce' else 0,
-        }
+            return {
+                "ready": True, "state": "ready",
+                'run_budget_version': 1 if _internal_token() and LLM_BUDGET_MODE == 'enforce' else 0,
+            }
+        if jieba_state == "not_started":
+            _kick_jieba_warmup()
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "SERVICE_NOT_READY",
+                "state": f"jieba_{jieba_state}",
+                "message": "分词词典预热中" if jieba_state == "initializing"
+                else (f"分词词典预热失败: {jieba_error}" if jieba_state == "error"
+                      else "分词词典预热未启动"),
+                "retry_after": 10,
+            },
+        )
     if state["state"] == "not_started":
         _kick_init()
     raise HTTPException(

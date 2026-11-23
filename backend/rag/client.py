@@ -47,6 +47,56 @@ _DEADLINE_HEADER = "X-Agent-Deadline-Seconds"
 # 发给服务端的时限扣回传余量：服务端完成+响应需在客户端读超时前回来
 _DEADLINE_SEND_MARGIN_S = 1.0
 
+# ── D8 止血（2026-11-23 生产 OOM 定案）────────────────────────
+# rag-service OOM 重启窗口内 ask 直接报「Server disconnected → 系统繁忙」。
+# 对"确定未到达业务层"的失败做有限重试：连接建立失败 / 服务端断连 /
+# 503 初始化中。ReadTimeout 不重试——请求可能已在服务端执行（LLM 生成中），
+# 重放会叠加负载与计费。熔断在 rag-service 宕机时快速失败，防线程雪崩。
+_ASK_MAX_ATTEMPTS = 3  # 首次 + 2 次重试
+_ASK_RETRY_BACKOFF_S = (1.0, 2.0)
+_ASK_RETRYABLE_EXCEPTIONS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.RemoteProtocolError,
+)
+
+
+class _AskCircuitBreaker:
+    """连续连接失败后开路短窗口；半开期放行下一个请求作为探测。"""
+
+    def __init__(self, threshold: int = 3, cooldown_s: float = 30.0) -> None:
+        self._threshold = threshold
+        self._cooldown_s = cooldown_s
+        self._lock = threading.Lock()
+        self._fail_streak = 0
+        self._open_until = 0.0
+
+    def check(self) -> None:
+        with self._lock:
+            if self._open_until > time.monotonic():
+                raise RuntimeError(
+                    "RAG 服务暂不可用（连续连接失败，熔断保护中），请稍后重试"
+                )
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._fail_streak = 0
+            self._open_until = 0.0
+
+    def record_connect_failure(self) -> None:
+        with self._lock:
+            self._fail_streak += 1
+            if self._fail_streak >= self._threshold:
+                self._open_until = time.monotonic() + self._cooldown_s
+                logger.warning(
+                    "[RAG client] ask 连续 %d 次连接失败，熔断 %.0fs",
+                    self._fail_streak, self._cooldown_s,
+                )
+
+
+_ask_circuit = _AskCircuitBreaker()
+
 
 def _reject_run_budget(reason: str) -> None:
     from backend.infra.llm.budget import RequestBudgetExceeded, note_quota_blocked
@@ -262,28 +312,50 @@ class RAGServiceProxy:
             except Exception:  # noqa: BLE001 — Trace 关联不得阻断 RAG 调用
                 parent_trace = None
             http_started = time.perf_counter()
-            resp = self._client.post(
-                "/ask",
-                headers=headers,
-                json={
-                    "question": question,
-                    "session_id": session_id,
-                    "kb_id": kb_id,
-                    "kb_ids": kb_ids,
-                    "subject_type": subject_type,
-                    "department": department,
-                    "permissions": permissions,
-                    "user_id": user_id,
-                    "tenant_id": tenant_id,
-                    "roles": list(roles),
-                    "persist_memory": persist_memory,
-                    # ADR-0012 第 1 期（审计 #68）：跨进程传递调用方产品，
-                    # rag-service 据此把记忆读写归到正确命名空间。
-                    "product": _caller_product_id(),
-                },
-                timeout=request_timeout,
-            )
-            resp.raise_for_status()
+            _ask_circuit.check()
+            ask_payload = {
+                "question": question,
+                "session_id": session_id,
+                "kb_id": kb_id,
+                "kb_ids": kb_ids,
+                "subject_type": subject_type,
+                "department": department,
+                "permissions": permissions,
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "roles": list(roles),
+                "persist_memory": persist_memory,
+                # ADR-0012 第 1 期（审计 #68）：跨进程传递调用方产品，
+                # rag-service 据此把记忆读写归到正确命名空间。
+                "product": _caller_product_id(),
+            }
+            resp = None
+            for attempt in range(_ASK_MAX_ATTEMPTS):
+                try:
+                    resp = self._client.post(
+                        "/ask",
+                        headers=headers,
+                        json=ask_payload,
+                        timeout=request_timeout,
+                    )
+                    resp.raise_for_status()
+                    break
+                except httpx.HTTPError as e:
+                    retryable = isinstance(e, _ASK_RETRYABLE_EXCEPTIONS) or (
+                        isinstance(e, httpx.HTTPStatusError)
+                        and e.response.status_code == 503
+                    )
+                    if isinstance(e, _ASK_RETRYABLE_EXCEPTIONS):
+                        _ask_circuit.record_connect_failure()
+                    if not retryable or attempt == _ASK_MAX_ATTEMPTS - 1:
+                        raise
+                    backoff = _ASK_RETRY_BACKOFF_S[min(attempt, len(_ASK_RETRY_BACKOFF_S) - 1)]
+                    logger.warning(
+                        "[RAG client] ask 第 %d 次失败可重试（%s），%.1fs 后重试",
+                        attempt + 1, e, backoff,
+                    )
+                    time.sleep(backoff)
+            _ask_circuit.record_success()
             timing = {"roundtrip_ms": round((time.perf_counter() - http_started) * 1000, 1)}
             for header, key in (("X-RAG-Service-Ms", "service_ms"),
                                 ("X-RAG-Prehandler-Ms", "prehandler_ms"),

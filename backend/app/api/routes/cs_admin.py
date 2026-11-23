@@ -2857,12 +2857,16 @@ async def _async_messages_since(conversation_id: str, since_id: int, limit: int,
     from backend.memory.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
+        # D11（2026-11-23 定级 P0）：此处此前过滤 closed，关单后 handoff_row
+        # 必为 None → 恒返回 "none"，用户端「人工服务已结束」灰横幅/满意度卡
+        # 的 closed 分支永远不可达（实时与回放两侧同时失效）。改为取最新一条
+        # handoff：closed 是真实历史终态，返回 closed 让前端结束态正确恢复；
+        # 从无人工会话仍返回 none（维持 2026-09-17 修复：新会话不误显示已结束）。
         handoff_row = (
             await db.execute(
                 select(CSHandoff).where(
                     CSHandoff.conversation_id == conversation_id,
-                    CSHandoff.handoff_state != "closed",
-                ).limit(1)
+                ).order_by(CSHandoff.id.desc()).limit(1)
             )
         ).scalar_one_or_none()
 
@@ -2883,8 +2887,9 @@ async def _async_messages_since(conversation_id: str, since_id: int, limit: int,
 
         # A 案（2026-10-08）：waiting_human 时计算排队位置与总等待截止，
         # 支撑用户侧倒计时（「剩余 N 秒，超时将自动登记工单」）。
+        # closed 行不构造 meta：倒计时/排队位只属于进行中的转人工。
         handoff_meta = None
-        if handoff_row is not None:
+        if handoff_row is not None and handoff_row.handoff_state != "closed":
             queue_position = 0
             if handoff_row.handoff_state == "waiting_human":
                 ahead = (
@@ -2909,8 +2914,9 @@ async def _async_messages_since(conversation_id: str, since_id: int, limit: int,
 
         return HandoffMessagesResponse(
             conversation_id=conversation_id,
-            # 2026-09-17: 无进行中工单返回 none（原为 closed，会让没有
-            # 转人工记录的新会话在用户侧误显示「人工服务已结束」）
+            # 2026-09-17: 无人工记录的新会话返回 none（不误显示「已结束」）。
+            # D11（2026-11-23）：曾转人工且已关单 → 返回 closed，前端结束态
+            # （灰横幅+满意度卡）在实时与回放两侧均据此恢复。
             handoff_state=handoff_row.handoff_state if handoff_row else "none",
             last_id=last_id,
             handoff_meta=handoff_meta,

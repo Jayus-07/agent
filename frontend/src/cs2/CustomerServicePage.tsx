@@ -377,37 +377,53 @@ export default function CustomerServicePage() {
       return
     }
     let cancelled = false
+    const applyIncoming = (rows: MyMessageRow[]) => {
+      const incoming = rows.filter((m) => !pollSeenRef.current.has(m.message_id))
+      for (const m of incoming) pollSeenRef.current.add(m.message_id)
+      const agentMsgs = incoming
+        .filter((m) => m.sender_type === 'human_agent' || m.sender_type === 'system')
+        .map((m) => ({
+          id: m.message_id,
+          role: (m.sender_type === 'human_agent' ? 'agent' : 'system') as 'agent' | 'system',
+          content: m.content,
+          createdAt: Date.parse(m.created_at) || Date.now(),
+          // D7：结构化消息（card+order_ref）字段随增量透传
+          contentType: m.content_type,
+          attachments: m.attachments ?? null,
+        }))
+      if (agentMsgs.length) {
+        patchDraft((d) => {
+          d.messages.push(...agentMsgs)
+        })
+      }
+    }
     const poll = async () => {
       try {
         const res = await fetchMyMessages(conversationId, 0, 50)
         if (cancelled) return
-        setHandoffState(res.handoff_state ?? 'none')
         if (res.handoff_meta) {
           setHandoffMeta({
             total_deadline_at: res.handoff_meta.total_deadline_at,
             queue_position: res.handoff_meta.queue_position,
           })
         }
-        const incoming = (res.messages ?? []).filter(
-          (m: MyMessageRow) => !pollSeenRef.current.has(m.message_id),
-        )
-        for (const m of incoming) pollSeenRef.current.add(m.message_id)
-        const agentMsgs = incoming
-          .filter((m) => m.sender_type === 'human_agent' || m.sender_type === 'system')
-          .map((m) => ({
-            id: m.message_id,
-            role: (m.sender_type === 'human_agent' ? 'agent' : 'system') as 'agent' | 'system',
-            content: m.content,
-            createdAt: Date.parse(m.created_at) || Date.now(),
-            // D7：结构化消息（card+order_ref）字段随增量透传
-            contentType: m.content_type,
-            attachments: m.attachments ?? null,
-          }))
-        if (agentMsgs.length) {
-          patchDraft((d) => {
-            d.messages.push(...agentMsgs)
-          })
+        applyIncoming(res.messages ?? [])
+        if ((res.handoff_state ?? 'none') === 'closed') {
+          // D11（2026-11-23）：关单即停轮询会漏掉最后一轮窗口内落库的
+          // 系统消息（超时关单由 reaper 写消息+改状态，可能跨轮询窗口）
+          // ——以 last_id 补拉一次再进 closed 终态。
+          try {
+            const tail = await fetchMyMessages(conversationId, res.last_id, 50)
+            if (!cancelled) applyIncoming(tail.messages ?? [])
+          } catch {
+            /* 补拉失败不阻塞终态切换 */
+          }
+          if (cancelled) return
+          setHandoffMeta(null)
+          setHandoffState('closed')
+          return
         }
+        setHandoffState(res.handoff_state ?? 'none')
       } catch {
         /* 轮询失败静默，下一轮重试 */
       }
@@ -469,10 +485,13 @@ export default function CustomerServicePage() {
   const lastMsg = draft.messages[draft.messages.length - 1]
   // 满意度评价只在有人工介入的会话结束后出现（纯 AI 自动回复轮次不弹，
   // 对齐商城客服惯例：AI 对话轮次不打扰用户）；评分或跳过后本会话不再弹。
+  // D11（2026-11-23）：handoff closed 时即时邀请——不再要求 lastMsg 是
+  // assistant（此前关单 lastMsg=系统消息，卡要等用户再发一条才出现）。
   const showCsat =
     draft.id !== 'new' && !draft.rated && !busy && !draft.candidateOptions &&
-    !!lastMsg && lastMsg.role === 'assistant' && !lastMsg.streaming &&
-    draft.messages.some((m) => m.role === 'agent')
+    draft.messages.some((m) => m.role === 'agent') &&
+    (handoffState === 'closed' ||
+      (!!lastMsg && lastMsg.role === 'assistant' && !lastMsg.streaming))
 
   const convOptions = useMemo(
     () =>
