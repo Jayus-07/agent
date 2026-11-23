@@ -42,7 +42,8 @@ def llm_invoke_once(prompt: str, timeout_ms: int) -> str | None:
         logger.info("[CS Understanding LLM] ok elapsed_ms=%d", elapsed_ms)
         return text
     except Exception as exc:  # noqa: BLE001 — 语义层失败必须软降级
-        logger.warning("[CS Understanding LLM] 调用失败（走规则降级）: %s", exc)
+        err_msg = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        logger.warning("[CS Understanding LLM] 调用失败（走规则降级）: %s", err_msg)
         return None
 
 

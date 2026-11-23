@@ -1095,3 +1095,79 @@ class TestMessagesSinceHandoffState:
         assert result.handoff_state == "waiting_human"
         assert result.handoff_meta is not None
         assert result.handoff_meta.handoff_state == "waiting_human"
+
+
+class TestD13EnsureConversationAccess:
+    """D13：会话管理详情面板鉴权验证（支持主管/坐席在同租户下查看详情，跨租户与普通用户越权拦截）。"""
+
+    @pytest.mark.asyncio
+    async def test_supervisor_same_tenant_allowed(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from backend.app.api.identity import Identity
+
+        ident = Identity(
+            user_id="sup_1",
+            auth_type="jwt",
+            roles=("supervisor",),
+            tenant_id="tenant_a",
+        )
+        monkeypatch.setattr("backend.app.api.identity.resolve_identity", lambda req: ident)
+        # 不应抛出异常
+        await cs_admin._ensure_conversation_access(
+            MagicMock(), conv_user_id="user_99", conv_tenant_id="tenant_a"
+        )
+
+    @pytest.mark.asyncio
+    async def test_agent_same_tenant_allowed(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+        from backend.app.api.identity import Identity
+
+        ident = Identity(
+            user_id="agent_1",
+            auth_type="jwt",
+            roles=("agent",),
+            tenant_id="tenant_a",
+        )
+        monkeypatch.setattr("backend.app.api.identity.resolve_identity", lambda req: ident)
+        monkeypatch.setattr(cs_admin, "_lookup_bound_agent_id", AsyncMock(return_value="agent_row_1"))
+        await cs_admin._ensure_conversation_access(
+            MagicMock(), conv_user_id="user_99", conv_tenant_id="tenant_a"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cross_tenant_forbidden(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from fastapi import HTTPException
+        from backend.app.api.identity import Identity
+
+        ident = Identity(
+            user_id="sup_1",
+            auth_type="jwt",
+            roles=("supervisor",),
+            tenant_id="tenant_b",
+        )
+        monkeypatch.setattr("backend.app.api.identity.resolve_identity", lambda req: ident)
+        with pytest.raises(HTTPException) as exc_info:
+            await cs_admin._ensure_conversation_access(
+                MagicMock(), conv_user_id="user_99", conv_tenant_id="tenant_a"
+            )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_normal_user_other_conversation_forbidden(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from fastapi import HTTPException
+        from backend.app.api.identity import Identity
+
+        ident = Identity(
+            user_id="user_1",
+            auth_type="jwt",
+            roles=("viewer",),
+            tenant_id="tenant_a",
+        )
+        monkeypatch.setattr("backend.app.api.identity.resolve_identity", lambda req: ident)
+        with pytest.raises(HTTPException) as exc_info:
+            await cs_admin._ensure_conversation_access(
+                MagicMock(), conv_user_id="user_2", conv_tenant_id="tenant_a"
+            )
+        assert exc_info.value.status_code == 403

@@ -123,7 +123,7 @@ export function itineraryToTripDocumentV2(itinerary: Itinerary, confirmedTimezon
     selections: [...selections.values()],
     days: dayDocuments,
     arrangements: {
-      lodgings: (((itinerary as Record<string, unknown>).lodging_options ?? []) as Array<Record<string, unknown>>).map((opt) => ({
+      lodgings: (((itinerary as unknown as Record<string, unknown>).lodging_options ?? []) as Array<Record<string, unknown>>).map((opt) => ({
         selection_id: String(opt.selection_id || `lodging-${opt.merchant_id || opt.name}`),
         merchant: {
           merchant_id: String(opt.merchant_id || opt.name),

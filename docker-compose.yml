@@ -210,6 +210,7 @@ services:
       # 此前 env 只配在 dispatcher、app 无 env → 恒落代码默认 30s，配置
       # 形同虚设；reaper 只认 DB deadline。与 dispatcher 保持同源覆盖）
       - CS_HANDOFF_TIMEOUT_SECONDS=${CS_HANDOFF_TIMEOUT_SECONDS:-30}
+      - CS_REFUND_REQUEST_MODE=${CS_REFUND_REQUEST_MODE:-sandbox}
       # 客服演示沙盒（2026-09-17）：开启后业务查询身份映射为演示客户
       # 99001，配合 demo_sandbox.sql 的 DEMO- 前缀数据走完整客服流程；
       # 设 CS_DEMO_MODE=false 回到真实身份与真实数据
@@ -729,6 +730,7 @@ services:
       # 30 漂移（工单文案 120s / 实际关单 30s 互相矛盾），两处默认统一为
       # 30；调整时 app / dispatcher / .env 三处同值。
       - CS_HANDOFF_TIMEOUT_SECONDS=${CS_HANDOFF_TIMEOUT_SECONDS:-30}
+      - CS_REFUND_REQUEST_MODE=${CS_REFUND_REQUEST_MODE:-sandbox}
       - CS_DISPATCH_INTERVAL_SECONDS=${CS_DISPATCH_INTERVAL_SECONDS:-1.0}
       - CS_DISPATCHER_HEARTBEAT_TTL_SECONDS=${CS_DISPATCHER_HEARTBEAT_TTL_SECONDS:-30}
       - LOG_FORMAT=${LOG_FORMAT:-json}

@@ -15,6 +15,8 @@ x-python: &python
   BUSINESS_DEADLINE_S: "60"
   WORKFLOW_DEADLINE_S: "55"
   REPORTER_RESERVED_S: "5"
+  # D9：开启客服退款申请 sandbox 登记通道
+  CS_REFUND_REQUEST_MODE: "sandbox"
   # 搜索结果约833 token即被旧768上限截断；2048仍受8192总上下文硬门禁约束。
   TOOL_INLINE_MAX_TOKENS: "2048"
   EMBED_BATCH_CONCURRENCY: "1"
@@ -108,10 +110,10 @@ services:
     environment: *python
     deploy:
       resources:
-        # D8（2026-11-23 生产 OOM 实测）：稳态 412MiB + 首问 jieba 词典构建
-        # 尖峰（anon-rss 521MB）越 512MiB 被 cgroup OOM kill，且缓存写不完
-        # → 首问必崩死循环。768MiB = 稳态 + 尖峰 + ~250MB 余量。
-        limits: { memory: 768m, cpus: "1" }
+        # D8（2026-11-23 实机复验定案）：生产加载 18,643 篇文档基线内存需 933MiB，
+        # 768MiB 仍越限被 cgroup OOM kill；1280MiB 经 10 轮压力问答压测确认
+        # 常驻 953MiB（74.5% 水位），稳态零重启。
+        limits: { memory: 1280m, cpus: "1" }
   mcp-service:
     <<: *runtime
     cpu_shares: 512

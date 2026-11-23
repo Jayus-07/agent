@@ -47,7 +47,7 @@ function LoginForm() {
       setRemember(true);
     }
     if (consumeExpiredFlag()) {
-      setNotice("登录已过期，请重新登录");
+      setNotice("登录已失效，请重新登录");
     }
   }, []);
 

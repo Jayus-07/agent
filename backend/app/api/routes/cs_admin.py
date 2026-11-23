@@ -128,10 +128,16 @@ async def confirm_pending_action(request: Request, body: ConfirmActionBody) -> d
     if outcome.kind == "duplicate":
         raise HTTPException(409, detail="该确认已被处理，请刷新会话状态")
 
-    logger.info(
-        "[CSConfirm] card action: user=%s session=%s decision=%s → %s",
-        user_id, body.session_id, decision, outcome.kind,
-    )
+    if outcome.kind == "failed":
+        logger.warning(
+            "[CSConfirm] card action failed: user=%s session=%s decision=%s answer=%s",
+            user_id, body.session_id, decision, outcome.answer,
+        )
+    else:
+        logger.info(
+            "[CSConfirm] card action: user=%s session=%s decision=%s → %s",
+            user_id, body.session_id, decision, outcome.kind,
+        )
     return {
         "status": outcome.kind,
         "answer": outcome.answer,
@@ -550,40 +556,40 @@ async def _ensure_conversation_access(
         return
 
     ident = resolve_identity(request)
-    if ident.authenticated and "admin" in ident.roles:
+    if not ident.authenticated:
+        # guest（未登录）：仅允许匿名演示会话
+        if (conv_user_id or "").strip() in ("", "anonymous", "guest"):
+            return
+        raise HTTPException(403, detail="请登录后查看您的会话")
+
+    # 租户隔离校验（跨租户严禁访问）
+    if (
+        conv_tenant_id is not None
+        and ident.tenant_id
+        and conv_tenant_id != ident.tenant_id
+    ):
+        raise HTTPException(403, detail="无权访问其他租户的会话")
+
+    # 客服主管与管理员：在同租户内放行（支持监控/质检/重派）
+    if {"admin", "super_admin", "supervisor"} & set(ident.roles):
         return
-    if assigned_agent_id and ident.authenticated and ident.tenant_id:
+
+    # 客服坐席：已绑定并启用的坐席在同租户内放行（D13：支持会话管理列表详情展开与回放）
+    if "agent" in ident.roles and ident.tenant_id:
         try:
             agent_id = await _lookup_bound_agent_id(
                 tenant_id=ident.tenant_id, user_id=ident.user_id
             )
-        except Exception as exc:  # 反查失败按「非当前坐席」处理，继续 owner 判定
+        except Exception as exc:
             logger.warning("[CSAdmin] resolve agent identity for read failed: %s", exc)
             agent_id = None
-        if agent_id and str(agent_id) == str(assigned_agent_id):
-            # 审计 #19 残留：坐席分支原先只比对 agent_id，不与会话租户交叉校验。
-            # claim 已带租户谓词，这里再补一道，防历史脏 assignment。
-            if (
-                conv_tenant_id is not None
-                and ident.tenant_id
-                and conv_tenant_id != ident.tenant_id
-            ):
-                raise HTTPException(403, detail="无权访问其他租户的会话")
+        if agent_id:
             return
-    if ident.authenticated:
-        if conv_user_id != ident.user_id:
-            raise HTTPException(403, detail="无权访问他人会话")
-        if (
-            conv_tenant_id is not None
-            and ident.tenant_id
-            and conv_tenant_id != ident.tenant_id
-        ):
-            raise HTTPException(403, detail="无权访问其他租户的会话")
-        return
-    # guest（未登录）：仅允许匿名演示会话
-    if (conv_user_id or "").strip() in ("", "anonymous", "guest"):
-        return
-    raise HTTPException(403, detail="请登录后查看您的会话")
+
+    # 普通客户：严格本人校验（防止 IDOR 水平越权）
+    if conv_user_id != ident.user_id:
+        raise HTTPException(403, detail="无权访问他人会话")
+    return
 
 
 def _assert_current_agent(
@@ -1270,6 +1276,17 @@ async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
         and not (isinstance(missing_slots, list) and missing_slots)
         and str(pending.get("status") or "") != "need_info"
     )
+
+    action_type = str(pending.get("action_type") or "unknown")
+    if action_type == "refund_request":
+        from backend.config import customer_service as cfg
+
+        refund_mode = str(getattr(cfg, "CS_REFUND_REQUEST_MODE", "disabled")).lower()
+        gateway_mode = str(getattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "")).lower()
+        http_mode = gateway_mode == "http" and refund_mode == "http"
+        sandbox_mode = gateway_mode == "sandbox" and refund_mode == "sandbox"
+        if not (http_mode or sandbox_mode):
+            confirmable = False
 
     return {
         "pending_action": {
