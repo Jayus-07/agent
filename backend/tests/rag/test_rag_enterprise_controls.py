@@ -192,3 +192,39 @@ def test_required_but_unavailable_ocr_is_a_hard_quality_failure():
 
     assert record["parsing"]["ocr_required_pages"] == [2]
     assert "ocr_coverage_partial" in hard_checks
+
+
+# ── 待复核分层（2026-11-23 产品拍板）──────────────────────────────
+
+def test_expected_soft_warnings_do_not_trigger_review():
+    """预期内 warn 码（OCR/图片语义/抽样审计等）不进需复核，quality_status=pass。
+
+    白名单语义：这些 warn 是语料/文档特性或解析器能力边界的机制声明；
+    内容丢失类风险由 error 级硬拦（coverage_gap / ocr_coverage_partial）把关。
+    """
+    from backend.rag.indexing.indexer import _reviewable_anomalies
+
+    anomalies = [
+        {"check": "ocr_degraded", "severity": "warn", "detail": "扫描件经 OCR 兜底识别"},
+        {"check": "parser_pdf_visual_content_unparsed", "severity": "warn", "detail": "图表页"},
+        {"check": "coverage_audit_sampled", "severity": "warn", "detail": "超大文档抽样审计"},
+        {"check": "heavy_filtering", "severity": "warn", "detail": "过滤率观测"},
+        {"check": "table_split_nonempty", "severity": "warn", "detail": "空表格节点"},
+    ]
+    assert _reviewable_anomalies(anomalies) == []
+
+    # 白名单外的新 warn 码默认需要人工（保守放行策略）
+    unknown = [{"check": "some_new_quality_signal", "severity": "warn", "detail": "x"}]
+    assert _reviewable_anomalies(unknown) == unknown
+
+
+def test_reviewable_warn_still_requires_review():
+    """非白名单 warn（如引用定位缺项）必须继续进需复核。"""
+    from backend.rag.indexing.indexer import _reviewable_anomalies
+
+    anomalies = [
+        {"check": "ocr_degraded", "severity": "warn", "detail": "预期内"},
+        {"check": "citation_locator", "severity": "warn", "detail": "Leaf 缺少回查定位"},
+    ]
+    reviewable = _reviewable_anomalies(anomalies)
+    assert [item["check"] for item in reviewable] == ["citation_locator"]

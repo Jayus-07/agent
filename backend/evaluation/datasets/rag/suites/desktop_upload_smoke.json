@@ -16,5 +16,6 @@
     "UFQ-023"
   ],
   "cases_hash": "647aa6f8525ba232",
-  "min_samples": 8
+  "min_samples": 8,
+  "veto_rules": ["safety_reject_violation"]
 }

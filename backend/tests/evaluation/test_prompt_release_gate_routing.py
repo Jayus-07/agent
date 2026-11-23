@@ -278,3 +278,101 @@ class TestStrictFieldsByModule:
 
     def test_sql_disables_strict_fields(self):
         assert self._build("sql").strict_fields is False
+
+
+# ── 批次 6d：veto_rules 一票否决 ─────────────────────────────
+
+
+class _CaseResult:
+    """逐用例替身：只带 veto 引擎消费的字段。"""
+
+    def __init__(self, case_id: str, metrics: dict | None = None, error_msg: str | None = None):
+        self.case_id = case_id
+        self.metrics = metrics or {}
+        self.error_msg = error_msg
+
+
+def _report_with_results(results, metadata=None):
+    report = _Report(metadata=metadata)
+    report.results = results
+    return report
+
+
+def test_veto_blocks_gate_despite_perfect_pass_rate():
+    """对抗用例未正确拒绝 → 一票否决，整体通过率 100% 也拦（方案 §13.3 核心）。"""
+    report = _report_with_results([
+        _CaseResult("SC-001", metrics={"safety_pass": 1.0}),
+        _CaseResult("SC-007", metrics={"safety_pass": 0.0}, error_msg="期望拒绝状态 ['no_table']，实际 status=success"),
+        _CaseResult("SC-013", metrics={"safety_pass": 0.0}, error_msg="期望拒绝状态 ['no_table']，实际 status=success"),
+    ])
+    gate = _assemble_release_gate(
+        report, _Summary(pass_rate=1.0), _Release(),
+        module="sql", current_summary=_Summary(pass_rate=0.5), current_expected=True,
+    )
+    assert gate["veto_pass"] is False
+    assert gate["veto"]["veto_pass"] is False
+    assert len(gate["veto"]["violations"]) == 2
+    assert {v["case_id"] for v in gate["veto"]["violations"]} == {"SC-007", "SC-013"}
+    rules = [r["rule"] for r in gate["blocked_rules"]]
+    assert "veto:safety_reject_violation" in rules
+    assert _gate_passed(gate, "sql") is False
+
+
+def test_veto_defaults_enabled_and_clean_report_passes():
+    """未声明 veto_rules → 默认启用 safety 规则；无违规时门禁行为不变。"""
+    report = _report_with_results([
+        _CaseResult("SC-001", metrics={"safety_pass": 1.0}),
+        _CaseResult("SC-002", metrics={}),  # 正向用例无 safety 标注 → 不命中
+    ])
+    gate = _assemble_release_gate(
+        report, _Summary(pass_rate=1.0), _Release(),
+        module="sql", current_summary=_Summary(pass_rate=0.5), current_expected=True,
+    )
+    assert gate["veto_pass"] is True
+    assert gate["veto"]["violations"] == []
+    assert gate["veto"]["enabled"] == ["safety_reject_violation"]
+    assert _gate_passed(gate, "sql") is True
+
+
+def test_veto_explicit_disable_via_suite_declaration():
+    """suite JSON veto_rules=[] 显式关闭 → 不扫描不拦截。"""
+    report = _report_with_results(
+        [_CaseResult("SC-007", metrics={"safety_pass": 0.0})],
+        metadata={"suite_governance": {"veto_rules": []}},
+    )
+    gate = _assemble_release_gate(
+        report, _Summary(pass_rate=1.0), _Release(),
+        module="sql", current_summary=_Summary(pass_rate=0.5), current_expected=True,
+    )
+    assert gate["veto_pass"] is True
+    assert gate["veto"]["enabled"] == []
+    assert _gate_passed(gate, "sql") is True
+
+
+def test_veto_rag_zero_hit_keeps_legacy_behavior():
+    """RAG results 暂无 safety_pass 标注 → 零命中、RAG 门禁行为不变。"""
+    report = _report_with_results([
+        _CaseResult("RC-001", metrics={"recall_at_5": 0.8}),
+    ])
+    gate = _assemble_release_gate(report, _Summary(), _Release(), module="rag")
+    assert gate["veto_pass"] is True
+    assert gate["tier_pass"] is True
+    assert gate["sample_pass"] is True
+    assert _gate_passed(gate, "rag") is True
+
+
+def test_veto_tolerates_report_without_results():
+    """report 无 results 属性（旧替身/异常报告）→ 按零命中处理不炸门禁。"""
+    report = _Report()  # 无 results
+    gate = _assemble_release_gate(
+        report, _Summary(pass_rate=1.0), _Release(),
+        module="sql", current_summary=_Summary(pass_rate=0.5), current_expected=True,
+    )
+    assert gate["veto_pass"] is True
+    assert _gate_passed(gate, "sql") is True
+
+
+def test_veto_rule_name_constant_frozen():
+    """口径常量防漂移：suite 声明与 runner 内置实现用同一规则名。"""
+    from backend.evaluation.prompt_release_runner import SAFETY_VETO_RULE
+    assert SAFETY_VETO_RULE == "safety_reject_violation"

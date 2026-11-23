@@ -33,6 +33,7 @@ import {
 } from '../domains'
 import RunHistoryDetail from './RunHistoryDetail'
 import EvalRunDetailDrawer from './EvalRunDetailDrawer'
+import RunCompareDrawer from './RunCompareDrawer'
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'blocked'])
 const RUN_PAGE_SIZE = 10
@@ -82,6 +83,10 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
   const [detailRunId, setDetailRunId] = useState('')
   // 发布评测 / CLI 台账的逐题抽屉（读报告文件口径，与 V2 整页详情互斥）
   const [detailEvalRun, setDetailEvalRun] = useState('')
+  // 批次 6c：发布评测运行对比抽屉（预选记录 = 对比侧）
+  const [compareReleaseId, setCompareReleaseId] = useState('')
+  // 批次 6c：CLI 台账去重——prompt_publish 触发的台账与发布评测重复，默认隐藏
+  const [showAllLedger, setShowAllLedger] = useState(false)
   const [gateRunId, setGateRunId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -138,10 +143,14 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
     enabled: allowed && runPane === 'history' && !detailRunId,
     queryFn: () => evaluationService.listRuns(50),
   })
-  const ledgerRuns = useMemo(
-    () => domain === 'all' ? (ledgerQuery.data ?? []) : (ledgerQuery.data ?? []).filter(row => moduleToDomain(row.module) === domain),
-    [ledgerQuery.data, domain],
-  )
+  const ledgerRuns = useMemo(() => {
+    let rows = ledgerQuery.data ?? []
+    // 批次 6c 台账去重：prompt_publish 触发的台账与发布评测重复（走查实证会覆盖
+    // 候选展示），默认隐藏，开关兜底保留全量可查。
+    if (!showAllLedger) rows = rows.filter(row => row.trigger !== 'prompt_publish')
+    if (domain !== 'all') rows = rows.filter(row => moduleToDomain(row.module) === domain)
+    return rows
+  }, [ledgerQuery.data, domain, showAllLedger])
 
   // 统一执行记录：三来源合并、时间倒序混排（业界单 Run 形态，来源徽标区分）
   const unifiedRows = useMemo<UnifiedRunRow[]>(() => {
@@ -211,6 +220,16 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
     })
     return rows
   }, [releases, ledgerRuns, runs])
+
+  // 批次 6c：同 prompt_key 可选对比记录数（≥2 才展示行内"对比"入口）
+  const compareableCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const record of releases) {
+      if (!record.eval_run_id) continue
+      counts[record.prompt_key] = (counts[record.prompt_key] ?? 0) + 1
+    }
+    return counts
+  }, [releases])
 
   useEffect(() => {
     if (!promptPrefill) return
@@ -347,7 +366,13 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
       {detailRunId ? <RunHistoryDetail key={detailRunId} runId={detailRunId} onBack={() => setDetailRunId('')} onGoCompare={onGoCompare} /> : <Card
         title="执行记录"
         subtitle="发布评测、CLI 台账与 V2 运行合并展示，按时间倒序；来源徽标区分口径。"
-        actions={<button type="button" className={ctlGhost} disabled={releasesQuery.isFetching || ledgerQuery.isFetching || runsQuery.isFetching} onClick={() => { void releasesQuery.refetch(); void ledgerQuery.refetch(); void runsQuery.refetch() }}><RotateCw size={12} className="mr-1 inline" aria-hidden="true" />刷新</button>}
+        actions={<>
+          <label className="mr-2 inline-flex items-center gap-1.5 text-[11px] text-text-secondary" title="发布评测触发的台账行与「发布评测」来源重复，默认隐藏">
+            <input type="checkbox" checked={showAllLedger} onChange={e => setShowAllLedger(e.target.checked)} />
+            显示全部台账
+          </label>
+          <button type="button" className={ctlGhost} disabled={releasesQuery.isFetching || ledgerQuery.isFetching || runsQuery.isFetching} onClick={() => { void releasesQuery.refetch(); void ledgerQuery.refetch(); void runsQuery.refetch() }}><RotateCw size={12} className="mr-1 inline" aria-hidden="true" />刷新</button>
+        </>}
       >
         <UnifiedRunsTable
           rows={unifiedRows}
@@ -361,9 +386,18 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
           onCancel={run => void cancel(run)}
           onRetry={run => void retry(run)}
           onGoCompare={onGoCompare}
+          onOpenCompare={releaseId => setCompareReleaseId(releaseId)}
+          compareableCounts={compareableCounts}
           onRetryRefresh={() => { void releasesQuery.refetch(); void ledgerQuery.refetch(); void runsQuery.refetch() }}
         />
         <EvalRunDetailDrawer runId={detailEvalRun} onClose={() => setDetailEvalRun('')} />
+        {compareReleaseId && (() => {
+          const focus = releases.find(item => item.release_id === compareReleaseId)
+          const sameKey = focus ? releases.filter(item => item.prompt_key === focus.prompt_key && item.eval_run_id) : []
+          return sameKey.length >= 2
+            ? <RunCompareDrawer releases={sameKey} focusReleaseId={compareReleaseId} onClose={() => setCompareReleaseId('')} />
+            : null
+        })()}
       </Card>}
       {gateRunId && <GateApprovalPanel runId={gateRunId} onClose={() => setGateRunId('')} onSubmitted={() => void queryClient.invalidateQueries({ queryKey: ['admin', 'evaluation-v2-runs'] })} />}
     </section>}
@@ -393,7 +427,7 @@ function formatGateValue(key: string, value: unknown): string {
   return String(value)
 }
 
-function UnifiedRunsTable({ rows, domain, expandedId, busy, onToggle, onOpenEvalDetail, onOpenV2Detail, onToggleGate, onCancel, onRetry, onGoCompare, onRetryRefresh }: {
+function UnifiedRunsTable({ rows, domain, expandedId, busy, onToggle, onOpenEvalDetail, onOpenV2Detail, onToggleGate, onCancel, onRetry, onGoCompare, onOpenCompare, compareableCounts, onRetryRefresh }: {
   rows: UnifiedRunRow[]
   domain: DomainFilter
   expandedId: string
@@ -405,6 +439,8 @@ function UnifiedRunsTable({ rows, domain, expandedId, busy, onToggle, onOpenEval
   onCancel: (run: EvaluationV2Run) => void
   onRetry: (run: EvaluationV2Run) => void
   onGoCompare?: (runId: string) => void
+  onOpenCompare: (releaseId: string) => void
+  compareableCounts: Record<string, number>
   onRetryRefresh: () => void
 }) {
   if (rows.length === 0) return <div className="space-y-2 py-5 text-center">
@@ -445,6 +481,7 @@ function UnifiedRunsTable({ rows, domain, expandedId, busy, onToggle, onOpenEval
             {row.source === 'release' && record && <>
               <button type="button" className={ctlGhost} onClick={() => onToggle(record.release_id)}>{expandedId === record.release_id ? '收起' : '门禁详情'}</button>
               {record.eval_run_id && <button type="button" className={ctlGhost} onClick={() => onOpenEvalDetail(record.eval_run_id!)}>逐题</button>}
+              {record.eval_run_id && (compareableCounts[record.prompt_key] ?? 0) >= 2 && <button type="button" className={ctlGhost} onClick={() => onOpenCompare(record.release_id)}>对比</button>}
             </>}
             {row.source === 'ledger' && <button type="button" className={ctlGhost} onClick={() => onOpenEvalDetail(runId)}>逐题</button>}
             {row.source === 'v2' && row.v2Run && <>
