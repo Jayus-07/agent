@@ -247,6 +247,7 @@ jobs:
             backend/tests/rag/test_pdf_ocr.py::TestDashScopeUsageRecording::test_missing_provider_usage_is_not_recorded_as_free \
             backend/tests/rag/test_indexer_trace.py::test_doc_level_embedding_budget_failure_is_visible_in_trace \
             backend/tests/rag/test_indexer_trace.py::test_embedding_budget_preflight_records_estimate_and_rejection \
+            backend/tests/rag/test_rag_index_token_budget_config.py \
             backend/tests/rag/test_indexer_trace.py::TestHappyPath::test_candidate_trace_displays_logical_filename \
             backend/tests/rag/test_indexer_trace.py::test_candidate_indexing_does_not_skip_incomplete_same_hash_active_doc \
             backend/tests/rag/test_candidate_publish.py::test_publish_does_not_mark_success_when_active_vectors_are_missing \
