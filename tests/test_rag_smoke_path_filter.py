@@ -182,6 +182,9 @@ def test_migration_classification_categories():
     assert _mod.classify_migration(
         "backend/sql/migrations/152_retire_crawler_read_access.sql"
     ) == "non_ai"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/153_eval_case_golden.sql"
+    ) == "non_ai"
 
 
 def test_model_price_monitor_changes_do_not_trigger_main_paid_smoke():

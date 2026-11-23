@@ -96,6 +96,12 @@ class CaseRevisionCandidateCreate(StrictModel):
     idempotency_key: str = Field(pattern=r"^[A-Za-z0-9_-]{8,128}$")
 
 
+class CaseGoldenMark(StrictModel):
+    """Golden 标注请求（批次 6a）：标注独立成表，不触 revision 内容锁。"""
+    golden: bool
+    reason: str = Field(default="", max_length=1000)
+
+
 class EvidenceAnchorClaim(StrictModel):
     kb_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     doc_id: str = Field(min_length=1, max_length=200)
@@ -892,10 +898,40 @@ async def get_case_latest_revision(
 ):
     _role(actor, "admin")
     try:
-        return await asyncio.to_thread(
+        detail = await asyncio.to_thread(
             repository.get_case_latest_revision,
             identity.tenant_id,
             str(case_id),
+        )
+        # 批次 6a：golden 标注独立表，读侧合并进单 case 详情
+        golden_map = await asyncio.to_thread(
+            repository.latest_golden_map,
+            identity.tenant_id,
+            [str(case_id)],
+        )
+        detail["golden"] = golden_map.get(str(case_id), {}).get("golden")
+        return detail
+    except Exception as exc:  # noqa: BLE001 — API 输出不泄漏数据库细节
+        _safe_error(exc)
+
+
+@router.post("/cases/{case_id}/golden")
+async def set_case_golden(
+    case_id: uuid.UUID,
+    body: CaseGoldenMark,
+    identity: Identity = Depends(require_product_identity),
+    actor: OperatorIdentity = Depends(require_user_actor),
+):
+    """Golden 标注（批次 6a）：append-only 留历史；幂等同值不追加。"""
+    _role(actor, "admin")
+    try:
+        return await asyncio.to_thread(
+            repository.set_case_golden,
+            identity.tenant_id,
+            actor.actor,
+            str(case_id),
+            golden=body.golden,
+            reason=body.reason,
         )
     except Exception as exc:  # noqa: BLE001 — API 输出不泄漏数据库细节
         _safe_error(exc)
