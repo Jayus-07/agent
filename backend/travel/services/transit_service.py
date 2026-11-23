@@ -326,10 +326,14 @@ def schedule_day(
                 notes.append("当日可用时间不足，需另作安排")
 
         from backend.travel.services.poi_service import get_poi_experience_tip
+        from backend.travel.services.xiaohongshu_service import get_poi_xiaohongshu_spot
         tip_info = get_poi_experience_tip(poi.name)
         if tip_info:
             notes.append(f"💡避坑：{tip_info['tip']}")
             notes.append(f"📸机位：{tip_info['spot']}")
+        xhs_spot = get_poi_xiaohongshu_spot(poi.name)
+        if xhs_spot:
+            notes.append(f"📕小红书爆款机位：{xhs_spot['title']}（高赞{xhs_spot['likes']}） · {xhs_spot['note']}")
 
         item = ItineraryItem(
             title=poi.name, kind=KIND_VISIT,
@@ -349,6 +353,36 @@ def schedule_day(
         extra = (f"剩余时间不足以安排完整午餐（约 {lunch_minutes} 分钟），"
                  "请调整离开时间或自行安排午餐")
         last.note = f"{last.note}；{extra}" if last.note else extra
+
+    # 跨城首末日自动接入 12306 大交通推荐卡（去程/返程）
+    origin_city = (brief.origin or "").strip()
+    dest_city = (brief.destination or "").strip()
+    if origin_city and origin_city != dest_city:
+        if day_index == 1:
+            dep_start = max(0, day_start_min - 60)
+            train_item = ItineraryItem(
+                title=f"🚄 大交通去程：{origin_city} → {dest_city}",
+                kind="transport",
+                start=from_min(dep_start),
+                end=from_min(day_start_min),
+                minutes=60,
+                poi=None,
+                note=f"推荐乘坐早班高铁前往{dest_city}，支持 12306 实时动态车次查询与比价，建议预留充分候车时间",
+            )
+            day.items.insert(0, train_item)
+        if is_last_day and day.items:
+            last_end = to_min(day.items[-1].end, cursor)
+            ret_end = min(MINUTES_PER_DAY - 1, last_end + 60)
+            train_return_item = ItineraryItem(
+                title=f"🚄 大交通返程：{dest_city} → {origin_city}",
+                kind="transport",
+                start=from_min(last_end),
+                end=from_min(ret_end),
+                minutes=max(30, ret_end - last_end),
+                poi=None,
+                note=f"游程圆满结束，建议提前 60 分钟前往车站，乘坐晚班高铁返回{origin_city}",
+            )
+            day.items.append(train_return_item)
 
     # 有效活动时长只计到访项：用餐是必需开销不是游玩强度，通勤由地理轴
     # 单独约束。把这两者算进来会掩盖真正的超量，也会让两轴互相包含。
