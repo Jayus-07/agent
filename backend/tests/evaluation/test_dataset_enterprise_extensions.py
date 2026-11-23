@@ -753,3 +753,55 @@ def test_dispatch_preserves_cancel_and_pause_flags(monkeypatch, dispatch_type):
     monkeypatch.setattr(task_service, 'mark_queued', lambda *args, **kwargs: None)
     assert task_manager.enqueue_task(record, dispatch_type=dispatch_type) == 'celery-probe'
     assert sent == [{'args': ['control-probe'], 'queue': 'report'}]
+
+
+# ── 批次 6d：load_suite_config veto_rules 透传 ───────────────
+
+
+def _write_suite(tmp_path, module: str, selection: str, payload: dict):
+    suite_dir = tmp_path / module / 'suites'
+    suite_dir.mkdir(parents=True, exist_ok=True)
+    (suite_dir / f'{selection}.json').write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+
+
+def test_suite_config_passes_through_veto_rules(tmp_path, monkeypatch):
+    """suite JSON 声明的 veto_rules 原样透传；治理字段并存。"""
+    from backend.evaluation.dataset import loader
+
+    monkeypatch.setattr(loader, 'DATASET_DIR', tmp_path)
+    _write_suite(tmp_path, 'sql', 'with_veto', {
+        'name': 'with_veto', 'min_samples': 8,
+        'veto_rules': ['safety_reject_violation'],
+    })
+    config = loader.load_suite_config('sql', 'with_veto')
+    assert config['veto_rules'] == ['safety_reject_violation']
+    assert config['min_samples'] == 8
+    assert config['content_hash']
+
+
+def test_suite_config_absent_veto_rules_is_none(tmp_path, monkeypatch):
+    """未声明 veto_rules → None（runner 走默认启用），向后兼容。"""
+    from backend.evaluation.dataset import loader
+
+    monkeypatch.setattr(loader, 'DATASET_DIR', tmp_path)
+    _write_suite(tmp_path, 'rag', 'legacy', {'name': 'legacy', 'min_samples': 8})
+    config = loader.load_suite_config('rag', 'legacy')
+    assert config['veto_rules'] is None
+
+
+def test_suite_config_empty_veto_rules_preserved(tmp_path, monkeypatch):
+    """veto_rules=[] 显式关闭 → 保留空列表（区别于未声明 None）。"""
+    from backend.evaluation.dataset import loader
+
+    monkeypatch.setattr(loader, 'DATASET_DIR', tmp_path)
+    _write_suite(tmp_path, 'sql', 'no_veto', {'name': 'no_veto', 'veto_rules': []})
+    config = loader.load_suite_config('sql', 'no_veto')
+    assert config['veto_rules'] == []
+
+
+def test_suite_config_missing_file_returns_empty(tmp_path, monkeypatch):
+    """suite 不存在 → 空 dict（调用方走全局缺省，原有契约不变）。"""
+    from backend.evaluation.dataset import loader
+
+    monkeypatch.setattr(loader, 'DATASET_DIR', tmp_path)
+    assert loader.load_suite_config('sql', 'nonexistent') == {}
