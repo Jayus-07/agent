@@ -172,6 +172,9 @@ def load_suite_config(module: str, selection: str) -> dict:
         "name": str(data.get("name", selection)),
         "min_samples": data.get("min_samples"),
         "min_valid_samples": data.get("min_valid_samples"),
+        # 批次 6d：veto 一票否决规则启用清单（None=未声明走 runner 默认；
+        # []=显式关闭；规则实现内置在 prompt_release_runner）
+        "veto_rules": data.get("veto_rules"),
         "content_hash": file_content_hash(suite_path),
     }
 
