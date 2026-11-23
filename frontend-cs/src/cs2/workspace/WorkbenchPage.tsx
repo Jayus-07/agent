@@ -358,12 +358,13 @@ export default function WorkbenchPage() {
     return () => clearInterval(timer)
   }, [appendMessages, connected, refreshQueue, refreshOffers])
 
-  const hasOffers = offers.length > 0
+  const showWaitTimes = offers.length > 0 || (tab === 'queue' && queue.length > 0)
   useEffect(() => {
-    if (!hasOffers) return
+    if (!showWaitTimes) return
+    setNow(Date.now())
     const timer = setInterval(() => setNow(Date.now()), 1_000)
     return () => clearInterval(timer)
-  }, [hasOffers])
+  }, [showWaitTimes])
 
   const selectConversation = useCallback(
     (conversationId: string, entry?: MineEntry) => {

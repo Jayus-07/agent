@@ -660,13 +660,19 @@ class TestSanitizeFacts:
     def test_order_composer_keeps_all_order_facts_for_requested_format(self, monkeypatch):
         import json
 
-        captured = {}
+        from backend.prompts.loader import load_defaults
+        from backend.prompts.renderer import PromptRenderer
 
-        def render(_key, **kwargs):
+        captured = {}
+        templates = load_defaults()
+
+        def render(key, **kwargs):
             captured["facts"] = json.loads(kwargs["facts"])
-            return "已发布的基础提示词", 4
+            captured["rendered"] = PromptRenderer.render(templates[key], kwargs)
+            return captured["rendered"], 4
 
         def invoke(prompt, _timeout):
+            assert prompt == captured["rendered"]
             assert "可以按要求组织回复" in prompt
             return '{"answer":"以下是按订单整理的建议。"}'
 

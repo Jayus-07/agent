@@ -189,15 +189,6 @@ def _compose_with_llm(
         logger.warning("[CS ResponseComposer] prompt 渲染失败: %s", exc)
         return None
 
-    if is_order_query:
-        prompt += (
-            "\n订单查询补充规则：用户指定表格、分点或每单的建议数量时，"
-            "可以按要求组织回复，不受默认句数限制。建议另列为可选下一步，"
-            "只给用户可自行核对或操作的建议；不承诺结果，不新增订单事实。"
-            "金额、商品、状态和资格只来自已核验的结构化事实，"
-            "缺失的字段明确说暂时无法确认。仍然只输出原约定的 JSON。"
-        )
-
     content = llm_invoke_once(prompt, CS_RESPONSE_COMPOSER_TIMEOUT_MS)
     if content is None:
         return None

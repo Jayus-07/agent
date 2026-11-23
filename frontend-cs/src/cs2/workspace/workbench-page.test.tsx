@@ -180,6 +180,18 @@ describe('WorkbenchPage（/cs2/workspace）', () => {
     expect(claim).toBeDefined()
   })
 
+  it('没有定向邀请时，待接入队列的等待时间继续走动', async () => {
+    vi.useFakeTimers()
+    const c = await mount()
+    const queueTab = Array.from(c.querySelectorAll('[role="tab"]')).find(
+      (button) => button.textContent?.includes('待接入'),
+    )
+    await act(async () => queueTab?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(c.textContent).toContain('等待 01:24')
+    await act(async () => vi.advanceTimersByTimeAsync(1_000))
+    expect(c.textContent).toContain('等待 01:25')
+  })
+
   it('整页刷新后「我的会话」从服务端恢复（mine=true）', async () => {
     // 刷新丢失修复（2026-11-22）：refreshQueue 双拉，mine 队列来自服务端
     api.getHandoffQueue.mockImplementation(async (_states?: string, mine?: boolean) => {
