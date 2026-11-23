@@ -59,3 +59,34 @@ tests:
             exp_annotations:
               summary: "Tool 失败率环比突增（>2× 上一小时基线且当前 >2%）"
               description: "与 ToolFailureSpike（绝对阈值 10%）互补，抓高位前的早期劣化。按 tool/domain 标签对比突增前后窗口的失败构成（管理端 /admin/tools/stats top_failed_tools + top_error_classes），先看 error_class 是否集中（传输类=依赖故障，执行类=代码/配置变更）；灰度/发布窗口内出现优先回滚最近变更"
+
+  # ── AppProcessMemoryHigh：常驻内存超过 640MB 持续 5m 触发预警，低于阈值静默 ──
+  - interval: 1m
+    input_series:
+      - series: 'process_resident_memory_bytes{job="agent-platform-app"}'
+        # 前 10m 为 500MB，第 10m 升至 700MB（>640MB 阈值），第 20m 降回 500MB
+        values: "524288000+0x10 734003200+0x10 524288000+0x10"
+    alert_rule_test:
+      # t=9m：内存正常（500MB）→ 不触发
+      - eval_time: 9m
+        alertname: AppProcessMemoryHigh
+        exp_alerts: []
+      # t=14m：超过 640MB 仅 4 分钟（尚未满 for: 5m 防抖）→ 不触发
+      - eval_time: 14m
+        alertname: AppProcessMemoryHigh
+        exp_alerts: []
+      # t=16m：超过 640MB 满 6 分钟（>5m）→ 触发预警
+      - eval_time: 16m
+        alertname: AppProcessMemoryHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: agent-platform-app
+            exp_annotations:
+              summary: "FastAPI 后端进程物理内存逼近容器限额 (当前: 700Mi)"
+              description: "进程常驻内存(RSS)超过 640MB（容器上限 768MB 的 83% 水位）。排查大模型长上下文未截断、大文件加载或内存泄漏，防止触发 Linux OOM 强杀。"
+      # t=25m：内存降回 500MB → 自动恢复静默
+      - eval_time: 25m
+        alertname: AppProcessMemoryHigh
+        exp_alerts: []
+

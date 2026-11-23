@@ -332,13 +332,14 @@ groups:
           description: "allkeys-lru 已开始逐出：缓存键逐出可接受，但须确认无安全键（JWT 吊销黑名单/会话）混入缓存实例；broker 实例 noeviction 不应有此指标，出现即配置漂移"
 
       - alert: CeleryWorkerDown
-        expr: min(celery_worker_up) == 0 or absent(celery_worker_up) == 1
+        # 有 celery_worker_up 样本时判断心跳；未启用 celery-exporter 时回退判断真实 task-workers 存活，避免 absent 误报
+        expr: (min(celery_worker_up) == 0) or (min(up{job="task-workers"}) == 0)
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: "Celery Worker 全部离线或无 worker 心跳"
-          description: "celery_worker_up 无样本（absent）= 没有 worker 在跑；== 0 = 心跳超时。任务会积压无人消费，检查 compose worker 服务与健康检查"
+          description: "celery_worker_up 心跳超时或真实 task-workers 实例离线。任务会积压无人消费，检查 compose worker 服务与健康检查"
 
       - alert: CeleryQueueBacklog
         expr: celery_queue_length > 20
@@ -682,3 +683,26 @@ groups:
         annotations:
           summary: "旅游行程校验失败率超过 30%（15 分钟窗口）"
           description: "校验失败会触发 travel_repair 修复循环，连续失败阻塞交付。按约束类型看 Grafana 06 页「约束违例」面板（BUDGET_OVER/GEO_SCATTER 等），结合 trace 定位是需求本身不可满足还是 expert 产物质量退化"
+
+  # ── 进程与容器物理内存容量防线（P0 Capacity Guard）────────────────────
+  - name: agent-platform-memory-capacity
+    interval: 30s
+    rules:
+      - alert: AppProcessMemoryHigh
+        expr: process_resident_memory_bytes{job=~".*app.*"} > 671088640
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FastAPI 后端进程物理内存逼近容器限额 (当前: {{ $value | humanize1024 }})"
+          description: "进程常驻内存(RSS)超过 640MB（容器上限 768MB 的 83% 水位）。排查大模型长上下文未截断、大文件加载或内存泄漏，防止触发 Linux OOM 强杀。"
+
+      - alert: WorkerProcessMemoryHigh
+        expr: process_resident_memory_bytes{job=~".*worker.*"} > 671088640
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Celery Worker 进程物理内存逼近容器限额 (当前: {{ $value | humanize1024 }})"
+          description: "Worker 进程常驻内存(RSS)超过 640MB（容器上限 768MB 的 83% 水位）。排查向量全量重建、长耗时报告生成或复杂图编排任务的内存膨胀。"
+

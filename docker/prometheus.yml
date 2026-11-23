@@ -25,13 +25,13 @@ rule_files:
 
 scrape_configs:
   - job_name: agent-platform-app
-    # Python 后端跑在宿主机 8000；若后端改为容器部署（app 服务启用），改成 app:8000
-    # 凭据文件由容器 entrypoint 从 API_KEY 生成（标准 Authorization: Bearer）
+    # 容器部署优先使用同一 docker 网络的容器服务名 app:8000 直连（毫秒级响应，避免 host.docker.internal 在 Linux 环境下回环超时）；
+    # 宿主机直接调试 uvicorn 时回退至 host.docker.internal:8000
     authorization:
       type: Bearer
       credentials_file: /tmp/metrics_api_key
     static_configs:
-      - targets: ["host.docker.internal:8000"]
+      - targets: ["app:8000", "host.docker.internal:8000"]
 
   - job_name: rag-service
     # RAG 独立服务（remote 模式下 RAG 链进程：rag_query_total /
