@@ -43,10 +43,10 @@ _REFERENCE_PREDICATE = re.compile(
 # 省略主语的追问限金额、商品和能否退货，避免把新话题绑定到旧订单。
 _ORDER_FACT_FOLLOWUP = re.compile(
     r"^(?:那|请问)?[，,\s]*(?:"
-    r"(?:一共|总共|合计|总价|总金额|实付|花了|付了|是多少钱|是)?\s*"
-    r"(?:多少(?:钱|元)|几块钱)"
-    r"|(?:包含|包括|都?有|买了)(?:哪些|什么|啥)(?:商品|东西|产品)?"
-    r"|(?:还)?(?:能|可以)(?:退款|退货|退)(?:吗|么)?"
+    r"(?P<amount>(?:一共|总共|合计|总价|总金额|实付|花了|付了|是)?\s*"
+    r"(?:多少(?:钱|元)|几块钱))"
+    r"|(?P<products>(?:包含|包括|都?有|买了)(?:哪些|什么|啥)(?:商品|东西|产品)?)"
+    r"|(?:还)?(?:能|可以)(?:(?P<refund>退款|退)|(?P<return>退货))(?:吗|么)?"
     r")[？?。！!\s]*$"
 )
 _ORDER_FOLLOWUP_MAX_AGE_SECONDS = 600
@@ -101,6 +101,7 @@ class ContextResolution:
     source_intent: str = ""
     original_query: str = ""
     inherited_entities: dict = field(default_factory=dict)
+    order_fact_followup: str = ""
 
     def trace_fields(self) -> dict:
         """轻量 trace 字段（不含完整历史/隐私，订单号按现有口径记录）。"""
@@ -257,12 +258,14 @@ def resolve_turn_reference(
     if _REFERENCE_NEGATIVE.search(query):
         return None
 
-    fact_followup = False
-    if _ORDER_FACT_FOLLOWUP.fullmatch(query.strip()):
+    fact_followup = ""
+    match = _ORDER_FACT_FOLLOWUP.fullmatch(query.strip())
+    if match:
         try:
             updated_at = datetime.fromisoformat(str(recent.get("updated_at") or ""))
             age = (datetime.now(timezone.utc) - updated_at).total_seconds()
-            fact_followup = 0 <= age <= _ORDER_FOLLOWUP_MAX_AGE_SECONDS
+            if 0 <= age <= _ORDER_FOLLOWUP_MAX_AGE_SECONDS:
+                fact_followup = match.lastgroup or ""
         except (TypeError, ValueError):
             pass
 
@@ -297,6 +300,7 @@ def resolve_turn_reference(
         original_query=query,
         source_intent=str(recent.get("source_intent") or ""),
         inherited_entities={"order_id": order_id},
+        order_fact_followup=fact_followup,
     )
     logger.info(
         "[ContextResolver] inherited order=%s source_intent=%s query=%s",

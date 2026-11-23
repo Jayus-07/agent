@@ -201,6 +201,36 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     })
   })
 
+  it('首个字出现前停止时显示已停止，并能重试上一条消息', async () => {
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => { finish = resolve })
+    chatApi.streamChat.mockImplementationOnce(async function* () {
+      await pending
+    })
+    const c = await mount()
+    const chip = Array.from(c.querySelectorAll('[aria-label="快捷入口"] button')).find(
+      (button) => button.textContent?.includes('查询订单'),
+    )
+    await act(async () => chip?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const stop = c.querySelector<HTMLButtonElement>('button[aria-label="停止生成"]')
+    expect(stop).not.toBeNull()
+    await act(async () => {
+      stop?.click()
+      finish()
+    })
+    expect(c.textContent).toContain('已停止')
+    const retry = Array.from(c.querySelectorAll('button')).find(
+      (button) => button.textContent === '重试',
+    )
+    expect(retry).toBeDefined()
+    await act(async () => retry?.click())
+    expect(chatApi.streamChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ question: '帮我查一下我的订单状态' }),
+      expect.any(AbortSignal),
+      'customer-service',
+    )
+  })
+
   it('会话下拉恢复历史会话并显示消息', async () => {
     const c = await mount()
     await openConversation(c, '退款咨询')

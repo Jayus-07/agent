@@ -234,11 +234,13 @@ export default function CustomerServicePage() {
         // 断流已由 streamChat 内部 resume 兜底；走到这里多为主动中止
       }
 
+      if (abortRef.current !== controller) return
       const lastDraft = draftRef.current
       const lastMsg = [...lastDraft.messages].reverse().find((m) => m.role === 'assistant')
-      if (terminal && lastMsg && lastMsg.role === 'assistant' && !lastMsg.interrupted) {
+      if (terminal && !controller.signal.aborted && lastMsg && !lastMsg.interrupted) {
         setRevealing(true)
         await typer.run(buffer)
+        if (abortRef.current !== controller) return
         setRevealing(false)
       }
       patchDraft((d) => {
@@ -340,11 +342,10 @@ export default function CustomerServicePage() {
     setRevealing(false)
     patchDraft((d) => {
       d.streaming = false
-      for (let i = d.messages.length - 1; i >= 0; i -= 1) {
-        if (d.messages[i].role === 'assistant') {
-          d.messages[i].streaming = false
-          break
-        }
+      const message = d.messages.at(-1)
+      if (message?.role === 'assistant') {
+        message.streaming = false
+        message.interrupted = true
       }
     })
   }, [patchDraft])
@@ -596,7 +597,9 @@ export default function CustomerServicePage() {
               !['waiting_human', 'agent_offered', 'human_active'].includes(handoffState) &&
               lastMsg && lastMsg.role === 'assistant' && !lastMsg.content && (
               <div className="mx-auto flex w-full max-w-md items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                <span className="flex-1">抱歉，刚才的回复没有生成成功，请重试</span>
+                <span className="flex-1">
+                  {lastMsg.interrupted ? '已停止' : '抱歉，刚才的回复没有生成成功，请重试'}
+                </span>
                 <button
                   type="button"
                   className="shrink-0 rounded-full bg-amber-600 px-2.5 py-1 text-xs text-white hover:bg-amber-700"
@@ -1066,7 +1069,7 @@ function MessageBubble({ message }: { message: Cs2Message }) {
   const orderRef = orderRefOf(message)
 
   return (
-    <div className={`flex max-w-[78%] flex-col gap-0.5 ${align}`}>
+    <div className={`flex min-w-0 max-w-[78%] flex-col gap-0.5 [overflow-wrap:anywhere] ${align}`}>
       {message.role !== 'system' && (
         <div className={`flex items-center gap-1.5 text-[11px] text-slate-400 ${message.role === 'user' ? 'justify-end' : ''}`}>
           {message.role === 'assistant' && (

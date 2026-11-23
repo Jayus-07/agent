@@ -73,13 +73,19 @@ def test_t1_status_variant_resolves_without_logistics_word():
     assert "最新状态" in r.resolved_query
 
 
-@pytest.mark.parametrize("question", ["一共多少钱", "包含什么商品", "还可以退款吗"])
-def test_implicit_order_followup_stays_read_only(question):
+@pytest.mark.parametrize(("question", "topic"), [
+    ("一共多少钱", "amount"),
+    ("包含什么商品", "products"),
+    ("还可以退款吗", "refund"),
+    ("还能退货吗", "return"),
+])
+def test_implicit_order_followup_stays_read_only(question, topic):
     _seed()
     result = _resolve(question)
     assert result is not None
     assert result.order_id == "MO-1001"
     assert result.resolved_query == "查询订单 MO-1001 的最新状态"
+    assert result.order_fact_followup == topic
     assert _resolve(question, session="other-session") is None
 
 
