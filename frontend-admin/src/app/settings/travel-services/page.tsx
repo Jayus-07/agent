@@ -100,11 +100,11 @@ export default function TravelServicesSettingsPage() {
     }
   }
 
-  async function handleTest(serviceId: string) {
+  async function handleTest(serviceId: string, testKey?: string) {
     setTestingService(serviceId);
     setTestResult(null);
     try {
-      const res = await testTravelService(serviceId);
+      const res = await testTravelService(serviceId, testKey);
       setTestResult(res);
     } catch (err) {
       setTestResult({
@@ -292,7 +292,7 @@ export default function TravelServicesSettingsPage() {
               <button
                 type="button"
                 disabled={testingService === "xiaohongshu"}
-                onClick={() => handleTest("xiaohongshu")}
+                onClick={() => handleTest("xiaohongshu", xhsKey)}
                 className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               >
                 {testingService === "xiaohongshu" ? "正在探测…" : "测试连通性"}
@@ -375,7 +375,7 @@ export default function TravelServicesSettingsPage() {
               <button
                 type="button"
                 disabled={testingService === "amap"}
-                onClick={() => handleTest("amap")}
+                onClick={() => handleTest("amap", amapKey)}
                 className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               >
                 {testingService === "amap" ? "正在探测…" : "测试连通性"}
@@ -454,7 +454,7 @@ export default function TravelServicesSettingsPage() {
               <button
                 type="button"
                 disabled={testingService === "weather"}
-                onClick={() => handleTest("weather")}
+                onClick={() => handleTest("weather", weatherKey)}
                 className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               >
                 {testingService === "weather" ? "正在探测…" : "测试连通性"}
