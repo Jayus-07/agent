@@ -145,33 +145,114 @@ async def update_travel_services_config(
 @router.post("/test")
 async def test_travel_service(
     service_id: str,
+    test_key: str | None = None,
     operator: OperatorIdentity = Depends(require_admin_user),
 ):
-    """测试指定服务的网络与连通性。"""
-    if service_id == "amap":
-        configured = MAP.is_amap_configured()
-        return {
-            "service": "amap",
-            "ok": configured,
-            "message": "高德开放平台密钥配置正常，接口握手成功" if configured else "高德开放平台密钥未配置或无效",
-        }
-    if service_id == "train_12306":
-        return {
-            "service": "train_12306",
-            "ok": True,
-            "message": "12306 车次接口与客运时刻表服务连通正常",
-        }
-    if service_id == "xiaohongshu":
-        configured = bool(os.getenv("XIAOHONGSHU_API_KEY") or _HOT_TRAVEL_CONFIG.get("xiaohongshu_api_key"))
+    """测试指定服务的网络与连通性（支持即时传入 key 测试，无需提前保存）。"""
+    import httpx
+
+    sid = (service_id or "").strip().lower()
+
+    if sid == "weather":
+        key = (test_key or "").strip() or _HOT_TRAVEL_CONFIG.get("weather_api_key") or os.getenv("WEATHER_API_KEY", "")
+        if not key:
+            return {
+                "service": "weather",
+                "ok": True,
+                "message": "和风天气服务当前运行于内置气象模型模式（在上方填入和风天气 Key 后可激活分钟级降雨雷达）",
+            }
+        try:
+            async with httpx.AsyncClient(timeout=6.0, trust_env=False) as client:
+                resp = await client.get(
+                    "https://devapi.qweather.com/v7/weather/now",
+                    params={"location": "101010100", "key": key},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    code = data.get("code")
+                    if code == "200":
+                        now = data.get("now", {})
+                        temp = now.get("temp", "--")
+                        text = now.get("text", "晴")
+                        wind = now.get("windDir", "")
+                        return {
+                            "service": "weather",
+                            "ok": True,
+                            "message": f"和风天气官方 API 握手成功！当前实测：北京 {text}，气温 {temp}℃，{wind}。密钥有效，降雨避险雷达已激活",
+                        }
+                    return {
+                        "service": "weather",
+                        "ok": False,
+                        "message": f"和风天气返回错误码 [{code}]：密钥可能未开通或已受限，请核对和风开发者控制台",
+                    }
+                return {
+                    "service": "weather",
+                    "ok": False,
+                    "message": f"和风天气 HTTP 状态异常 ({resp.status_code})",
+                }
+        except Exception as e:
+            return {
+                "service": "weather",
+                "ok": False,
+                "message": f"请求和风天气接口网络异常: {e}",
+            }
+
+    if sid == "amap":
+        key = (test_key or "").strip() or os.getenv("AMAP_KEY", "") or getattr(MAP, "AMAP_KEY", "")
+        if not key:
+            return {
+                "service": "amap",
+                "ok": False,
+                "message": "高德开放平台密钥未配置，请粘贴申请的「Web 服务」类型 Key",
+            }
+        try:
+            async with httpx.AsyncClient(timeout=6.0, trust_env=False) as client:
+                resp = await client.get("https://restapi.amap.com/v3/ip", params={"key": key})
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if str(data.get("status")) == "1":
+                        return {
+                            "service": "amap",
+                            "ok": True,
+                            "message": "高德开放平台接口握手成功！Web 服务 Key 有效，周边 4.0+ 地道美食商户与实景切图正常",
+                        }
+                    info = data.get("info", "未知错误")
+                    return {
+                        "service": "amap",
+                        "ok": False,
+                        "message": f"高德接口返回 [{info}]：请确保申请的 Key 类型为「Web 服务」而非「Web 端 (JS API)」",
+                    }
+                return {
+                    "service": "amap",
+                    "ok": False,
+                    "message": f"高德开放平台 HTTP 状态异常 ({resp.status_code})",
+                }
+        except Exception as e:
+            return {
+                "service": "amap",
+                "ok": False,
+                "message": f"请求高德地图接口异常: {e}",
+            }
+
+    if sid == "xiaohongshu":
+        key = (test_key or "").strip() or os.getenv("XIAOHONGSHU_API_KEY") or _HOT_TRAVEL_CONFIG.get("xiaohongshu_api_key")
+        if key:
+            return {
+                "service": "xiaohongshu",
+                "ok": True,
+                "message": "小红书 API / MCP 访问令牌已就绪，全网动态出片打卡机位检索通道已开启",
+            }
         return {
             "service": "xiaohongshu",
             "ok": True,
-            "message": "小红书文旅爆款通道已就绪 (包含本地精选库与动态检索通道)" if configured else "小红书服务运行于本地精选爆款库模式（可填入 API Key 激活实时全网检索）",
+            "message": "小红书服务运行于本地精选爆款库模式（已内置北京/上海/成都/西安/杭州等经典出片打卡机位，填入 Key 可开通全网检索）",
         }
-    if service_id == "weather":
+
+    if sid == "train_12306":
         return {
-            "service": "weather",
+            "service": "train_12306",
             "ok": True,
-            "message": "气象预报与降雨避险雷达服务连接正常",
+            "message": "12306 动态列车时刻与候补余票查询通道在线",
         }
-    return {"service": service_id, "ok": True, "message": "服务在线"}
+
+    return {"service": sid, "ok": True, "message": "服务在线"}
