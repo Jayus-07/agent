@@ -30,6 +30,38 @@ from backend.travel.services import live_search_service
 # 的前提；120 条 Poi dict 约 36KB，checkpoint 体积可控
 _CANDIDATE_LIMIT = 120
 
+
+def dynamic_suggested_minutes(name: str, category: str, tags: list[str] | None = None) -> int:
+    """根据 POI 名称、类别和标签动态估算合理游玩时长（分钟）。
+
+    解决以往所有景点一律写死 120 分钟导致的僵化感。
+    """
+    n = (name or "").lower()
+    cat = (category or "").lower()
+    all_text = f"{n} {cat} {' '.join(tags or [])}".lower()
+
+    # 1. 超大型主题乐园 / 巨型景区 (4~6 小时)
+    if any(k in all_text for k in ("迪士尼", "环球影城", "欢乐谷", "方特", "长隆", "海昌", "故宫", "八达岭长城", "长城", "兵马俑", "都江堰", "峨眉山", "黄山")):
+        return 360
+
+    # 2. 大型综合博物馆 / 历史大遗址 / 重点名胜 (2.5 ~ 3 小时)
+    if any(k in all_text for k in ("博物馆", "博物院", "科技馆", "美术馆", "三星堆", "大雁塔", "秦始皇", "颐和园", "天坛")):
+        return 180
+
+    # 3. 高空观光 / 地标拍照打卡 / 纪念塔 (60 ~ 75 分钟)
+    if any(k in all_text for k in ("观光厅", "电视塔", "东方明珠", "金茂大厦", "上海中心", "广州塔", "天际线", "观景台", "地标广场", "纪念碑")):
+        return 75
+
+    # 4. 城市公园 / 广场 / 散步绿道 (45 ~ 60 分钟)
+    if any(k in all_text for k in ("公园", "广场", "绿道", "滨江", "外滩", "步行街", "集市", "码头")):
+        return 60
+
+    # 5. 传统园林 / 寺庙古刹 / 历史街区 (90 分钟)
+    if any(k in all_text for k in ("豫园", "城隍庙", "拙政园", "留园", "灵隐寺", "南普陀", "静安寺", "道观", "古镇", "街区", "弄堂", "里弄")):
+        return 90
+
+    return 90
+
 # ── 候选池实时源（TRAVEL_POI_SOURCE=live，2026-10-02 种子库下线）────
 # 腾讯位置服务关键词检索：任意城市可用、零维护。诚实口径（与
 # live_map.resolve_place 一致）：坐标可信（tencent:lbs + 观测时间），
@@ -121,7 +153,7 @@ def _build_live_candidates(brief: TravelBrief) -> tuple[list[Poi], list[str]]:
                 category=map_category(str(item.get("category") or "")),
                 lat=float(lat),
                 lng=float(lng),
-                suggested_minutes=120,
+                suggested_minutes=dynamic_suggested_minutes(name, str(item.get("category") or "")),
                 ticket_cny=0.0,
                 tags=[],
                 rating=0.0,
@@ -281,7 +313,7 @@ def _merge_amap_candidates(
                 lat=float(lat), lng=float(lng),
                 open_time=hours[0] if hours else "09:00",
                 close_time=hours[1] if hours else "17:00",
-                suggested_minutes=120,
+                suggested_minutes=dynamic_suggested_minutes(name, str(item.get("category") or "")),
                 ticket_cny=0.0,
                 tags=closed_tags,
                 rating=rating,
