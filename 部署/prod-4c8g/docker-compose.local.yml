@@ -108,7 +108,10 @@ services:
     environment: *python
     deploy:
       resources:
-        limits: { memory: 512m, cpus: "1" }
+        # D8（2026-11-23 生产 OOM 实测）：稳态 412MiB + 首问 jieba 词典构建
+        # 尖峰（anon-rss 521MB）越 512MiB 被 cgroup OOM kill，且缓存写不完
+        # → 首问必崩死循环。768MiB = 稳态 + 尖峰 + ~250MB 余量。
+        limits: { memory: 768m, cpus: "1" }
   mcp-service:
     <<: *runtime
     cpu_shares: 512

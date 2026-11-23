@@ -206,6 +206,10 @@ services:
       - KAFKA_CONSUMER_ENABLED=${KAFKA_CONSUMER_ENABLED:-false}
       # 客服模块（意图路由/转人工/确认态，.env 中 CS_ENABLED 控制）
       - CS_ENABLED=${CS_ENABLED:-true}
+      # 转人工总等待上限（total_deadline_at 在此容器写入，2026-11-23 定案：
+      # 此前 env 只配在 dispatcher、app 无 env → 恒落代码默认 30s，配置
+      # 形同虚设；reaper 只认 DB deadline。与 dispatcher 保持同源覆盖）
+      - CS_HANDOFF_TIMEOUT_SECONDS=${CS_HANDOFF_TIMEOUT_SECONDS:-30}
       # 客服演示沙盒（2026-09-17）：开启后业务查询身份映射为演示客户
       # 99001，配合 demo_sandbox.sql 的 DEMO- 前缀数据走完整客服流程；
       # 设 CS_DEMO_MODE=false 回到真实身份与真实数据
@@ -720,7 +724,11 @@ services:
       - CS_DISPATCH_MODE=${CS_DISPATCH_MODE:-off}
       - CS_OFFER_TIMEOUT_SECONDS=${CS_OFFER_TIMEOUT_SECONDS:-30}
       - CS_MAX_DISPATCH_ATTEMPTS=${CS_MAX_DISPATCH_ATTEMPTS:-3}
-      - CS_HANDOFF_TIMEOUT_SECONDS=${CS_HANDOFF_TIMEOUT_SECONDS:-120}
+      # 超时配置统一（2026-11-23 定案）：total_deadline_at 由 app 写入，
+      # dispatcher 的 reaper 只认 DB 值——此前本处默认 120 与 app 代码默认
+      # 30 漂移（工单文案 120s / 实际关单 30s 互相矛盾），两处默认统一为
+      # 30；调整时 app / dispatcher / .env 三处同值。
+      - CS_HANDOFF_TIMEOUT_SECONDS=${CS_HANDOFF_TIMEOUT_SECONDS:-30}
       - CS_DISPATCH_INTERVAL_SECONDS=${CS_DISPATCH_INTERVAL_SECONDS:-1.0}
       - CS_DISPATCHER_HEARTBEAT_TTL_SECONDS=${CS_DISPATCHER_HEARTBEAT_TTL_SECONDS:-30}
       - LOG_FORMAT=${LOG_FORMAT:-json}
