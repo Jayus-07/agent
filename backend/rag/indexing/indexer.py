@@ -591,6 +591,37 @@ def _filter_index_chunks(
 
 PREPAID_INTEGRITY_ISSUE_PREFIX = "quality_anomaly:prepaid_integrity"
 
+# 「预期内」软提醒白名单（2026-11-23 待复核分层，产品拍板）：
+# 这些 warn 级异常是语料/文档特性或解析器能力边界的机制声明，不构成
+# 「需要人工判断的审计缺口」，文档质量状态直接 pass（quality_issues 与
+# 质量记录仍完整留痕，观测面不变）。未列出的 warn 码一律保守进需复核——
+# 白名单语义：新 warn 码默认要人看，明确确认后才可加入。
+EXPECTED_SOFT_WARNING_CHECKS = frozenset({
+    # 扫描件走 OCR 兜底是正常链路；可靠性说明已在 detail。真正的 OCR
+    # 内容缺口由 ocr_coverage_partial（error，硬拦）把关。
+    "ocr_degraded",
+    # 图片语义不解析：解析器能力边界的显式声明（不还原图表结构）。
+    "parser_pdf_visual_content_unparsed",
+    # 超大文档覆盖审计退化为抽样：机制声明，内容丢失由 coverage_gap 硬拦兜底。
+    "coverage_audit_sampled",
+    # 过滤率观测：被过滤内容若属表格/正文丢失会先触发 coverage_gap 硬拦，
+    # 能走到这里的过滤都是合法排除。
+    "heavy_filtering",
+    # 空表格节点：多为跨页表尾/装饰性空表，行数据由 coverage_audit 逐行核对。
+    "table_split_nonempty",
+})
+
+
+def _reviewable_anomalies(anomalies: list) -> list:
+    """过滤掉「预期内」软提醒后，返回真正需要人工复核的异常。
+
+    硬异常不经过本函数（在上游已走 failed 终态），这里只处理 warn 级。
+    """
+    return [
+        item for item in (anomalies or [])
+        if str(item.get("check") or "") not in EXPECTED_SOFT_WARNING_CHECKS
+    ]
+
 _COVERAGE_AUDIT_FIELDS = {
     "leaf_total", "audited_leaf_count", "uncovered_count", "sampled",
 }
@@ -2186,7 +2217,7 @@ class IncrementalIndexer:
                         f"质量门禁硬异常: {_hard[0]['check']}({_hard[0]['detail']})"
                     )
                 doc_meta["quality_status"] = (
-                    "soft_warning" if _anomalies else "pass"
+                    "soft_warning" if _reviewable_anomalies(_anomalies) else "pass"
                 )
                 trace_collector.end_span(q_span,
                     metrics={**_quality_metrics,

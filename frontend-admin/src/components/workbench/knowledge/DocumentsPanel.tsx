@@ -671,6 +671,7 @@ export default function DocumentsPanel() {
                       const contentIssueLabels = contentIssues
                         .map(getQualityIssueLabel)
                         .filter(Boolean)
+                      const isFixture = d.fixture_set === 'rag_eval' || d.kb_id === 'rag_eval_kb'
                       const title = [
                         legacyReport
                           ? '历史质量记录缺少分块完整性、内容覆盖和清洗覆盖检查；当前需复核，旧分数仅供参考。'
@@ -681,11 +682,35 @@ export default function DocumentsPanel() {
                         !legacyReport && !contentIssueLabels.length
                           ? quality.title
                           : '',
+                        isFixture ? '评测/测试语料：此处提醒多由语料特性（近重复、扫描页、图表页）触发，属预期。' : '',
                       ].filter(Boolean).join(' ')
                       const scoreText = d.quality_score
                         ? `${legacyReport ? '旧分' : ''}${Number(d.quality_score).toFixed(0)}${legacyReport ? '' : '分'}`
                         : ''
-                      return <div className="mt-1"><span data-testid="quality-status" title={title} className={`inline-flex rounded px-1.5 py-0.5 text-[10px] ${quality.className}`}>{quality.label}{qualityKind ? ` · ${qualityKind}` : ''}{scoreText ? ` · ${scoreText}` : ''}</span></div>
+                      return (
+                        <div className="mt-1">
+                          <span
+                            data-testid="quality-status"
+                            title={title}
+                            className={`inline-flex cursor-help items-center rounded px-1.5 py-0.5 text-[10px] ${quality.className}`}
+                          >
+                            {quality.label}
+                            {qualityKind ? ` · ${qualityKind}` : ''}
+                            {scoreText ? ` · ${scoreText}` : ''}
+                            {isFixture ? ' · 属预期' : ''}
+                          </span>
+                          {d.quality_status === 'soft_warning' && (
+                            <button
+                              onClick={(e) => handleStopPropagation(e, () => { const params = new URLSearchParams(searchParams.toString()); params.set('tab', 'pending'); router.push(`/knowledge/workbench?${params.toString()}`) })}
+                              className="ml-1 inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-amber-700 underline decoration-amber-300 underline-offset-2 hover:bg-amber-50"
+                              aria-label={"去处理需复核：" + d.name}
+                              title="查看待复核列表并处理（通过 / 拒绝）"
+                            >
+                              去处理
+                            </button>
+                          )}
+                        </div>
+                      )
                     })()}
                     {(d.processing_status || d.metadata_route || d.model_count) && (
                       <div className="mt-1 text-[10px] text-text-muted">
