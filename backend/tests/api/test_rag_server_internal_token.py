@@ -15,6 +15,23 @@ from backend.services import rag_server as m
 from backend.services.rag_server import require_internal_boot
 
 
+def test_rag_cgroup_memory_metrics(tmp_path):
+    (tmp_path / "memory.peak").write_text("1250\n")
+    (tmp_path / "memory.max").write_text("1280\n")
+    (tmp_path / "memory.events").write_text("oom 3\noom_kill 2\n")
+    output = m._cgroup_memory_metrics(tmp_path)
+    assert b"rag_cgroup_memory_peak_bytes 1250\n" in output
+    assert b"rag_cgroup_memory_limit_bytes 1280\n" in output
+    assert b"rag_cgroup_oom_kills_total 2\n" in output
+
+    (tmp_path / "memory.max").write_text("max\n")
+    (tmp_path / "memory.events").unlink()
+    output = m._cgroup_memory_metrics(tmp_path)
+    assert b"rag_cgroup_memory_peak_bytes 1250\n" in output
+    assert b"rag_cgroup_memory_limit_bytes" not in output
+    assert b"rag_cgroup_oom_kills_total" not in output
+
+
 # ── 启动守卫（纯函数，参数注入）──
 
 def test_production_without_token_rejects_boot():

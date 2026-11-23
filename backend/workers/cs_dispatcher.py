@@ -145,6 +145,7 @@ async def reap_stage(now=None) -> ReapResult | None:
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 result = await reaper.reap_once(session, now=now, limit=chunk)
+            reaper.start_committed_timeout_summaries(session)
         total = ReapResult(
             scanned=total.scanned + result.scanned,
             released=total.released + result.released,

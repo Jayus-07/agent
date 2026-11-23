@@ -55,7 +55,7 @@ function roleOf(senderType: string): Cs2Message['role'] {
 function sessionFromItem(item: MyConversationItem): Cs2ConversationDraft {
   const draft = newConversationDraft(item.conversation_id)
   draft.title = item.summary?.slice(0, 24) || `会话 ${item.conversation_id.slice(0, 6)}`
-  draft.status = item.conversation_status
+  draft.status = item.latest_handoff_closed ? 'closed' : item.conversation_status
   draft.messages = (item.messages ?? []).map((m) => ({
     id: m.message_id || makeId(),
     role: roleOf(m.sender_type),
@@ -94,6 +94,7 @@ export default function CustomerServicePage() {
   const typerRef = useRef<ReturnType<typeof createTyper> | null>(null)
   const requestIdRef = useRef<string>('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const composerRef = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
   draftRef.current = draft
 
@@ -125,12 +126,6 @@ export default function CustomerServicePage() {
       setPreselectOrderNo(orderRef)
       setOrderSheetOpen(true)
     }
-    fetchMyConversations(10)
-      .then((items) => {
-        if (cancelled) return
-        setSessions(items.map(sessionFromItem))
-      })
-      .catch(() => {})
     fetchCustomerContext()
       .then((ctx) => {
         if (!cancelled) setCustomerCtx(ctx)
@@ -141,6 +136,19 @@ export default function CustomerServicePage() {
       abortRef.current?.abort()
     }
   }, [])
+
+  useEffect(() => {
+    if (!drawerOpen) return
+    let cancelled = false
+    fetchMyConversations(10)
+      .then((items) => {
+        if (!cancelled) setSessions(items.map(sessionFromItem))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [drawerOpen])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -533,7 +541,7 @@ export default function CustomerServicePage() {
     () =>
       sessions.map((s) => ({
         id: s.id,
-        label: `${s.title}（${s.status === 'closed' ? '已结束' : '进行中'}）`,
+        label: `${s.title}（${s.status === 'resolved' || s.status === 'closed' ? '已结束' : '进行中'}）`,
       })),
     [sessions],
   )
@@ -769,6 +777,7 @@ export default function CustomerServicePage() {
               <Headphones size={18} aria-hidden />
             </button>
             <textarea
+              ref={composerRef}
               className="min-h-11 max-h-32 flex-1 resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500"
               rows={1}
               placeholder="请描述您的问题…"
@@ -899,6 +908,11 @@ export default function CustomerServicePage() {
       <OrderPickerSheet
         open={orderSheetOpen}
         onClose={() => setOrderSheetOpen(false)}
+        onAskAnotherQuestion={() => {
+          setOrderSheetOpen(false)
+          // 保留点击时的用户手势，让移动浏览器可以打开键盘。
+          composerRef.current?.focus({ preventScroll: true })
+        }}
         onSendOrder={sendOrderRef}
         onSendText={sendSheetText}
         faqEntries={QUICK_ENTRIES}

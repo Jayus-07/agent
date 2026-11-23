@@ -94,8 +94,15 @@ const api = vi.hoisted(() => {
 })
 
 vi.mock('./api', () => api)
+const socket = vi.hoisted(() => ({
+  onEvent: undefined as ((event: { type: string; seq: number; payload: Record<string, unknown> }) => void) | undefined,
+  connected: true,
+}))
 vi.mock('./useAgentSocket', () => ({
-  useAgentSocket: () => ({ connected: true, lastSeq: 0 }),
+  useAgentSocket: (onEvent: typeof socket.onEvent) => {
+    socket.onEvent = onEvent
+    return { connected: socket.connected, lastSeq: 0 }
+  },
 }))
 
 import WorkbenchPage from './WorkbenchPage'
@@ -112,6 +119,9 @@ afterEach(() => {
     mounted.container.remove()
     mounted = null
   }
+  socket.connected = true
+  socket.onEvent = undefined
+  vi.useRealTimers()
   vi.clearAllMocks()
 })
 
@@ -127,6 +137,37 @@ async function mount() {
 }
 
 describe('WorkbenchPage（/cs2/workspace）', () => {
+  it('连接时推送即刷新队列和 offer，五秒后没有名单轮询', async () => {
+    vi.useFakeTimers()
+    await mount()
+    api.getHandoffQueue.mockClear()
+    api.listMyOffers.mockClear()
+
+    await act(async () => {
+      socket.onEvent?.({ type: 'conversation.waiting', seq: 1, payload: {} })
+      socket.onEvent?.({ type: 'conversation.offered', seq: 2, payload: {} })
+    })
+    expect(api.getHandoffQueue).toHaveBeenCalledWith()
+    expect(api.listMyOffers).toHaveBeenCalledTimes(1)
+
+    api.getHandoffQueue.mockClear()
+    api.listMyOffers.mockClear()
+    await act(async () => vi.advanceTimersByTimeAsync(5_000))
+    expect(api.getHandoffQueue).not.toHaveBeenCalled()
+    expect(api.listMyOffers).not.toHaveBeenCalled()
+  })
+
+  it('断线时用轮询补齐队列和 offer', async () => {
+    vi.useFakeTimers()
+    socket.connected = false
+    await mount()
+    api.getHandoffQueue.mockClear()
+    api.listMyOffers.mockClear()
+    await act(async () => vi.advanceTimersByTimeAsync(5_000))
+    expect(api.getHandoffQueue).toHaveBeenCalledWith()
+    expect(api.listMyOffers).toHaveBeenCalledTimes(1)
+  })
+
   it('队列 Tab 展示待接入项与认领按钮', async () => {
     const c = await mount()
     const queueTab = Array.from(c.querySelectorAll('[role="tab"]')).find((b) => b.textContent?.includes('待接入'))

@@ -204,7 +204,7 @@ def _merge_service_facts(fact_sets: list[dict[str, Any]]) -> dict[str, Any]:
 def _order_service_facts(orders: list[dict]) -> dict[str, Any]:
     allowed = (
         "order_no", "status", "total_amount", "currency", "created_at",
-        "refund_eligible",
+        "refund_eligible", "product_names",
     )
     return {
         "orders": [
@@ -1298,12 +1298,16 @@ def _format_order_list(orders: list[dict]) -> str:
             created = created.strftime("%Y-%m-%d")
         else:
             created = str(created)[:10] if created else ""
-        lines.append(
+        product_names = o.get("product_names")
+        line = (
             f"**{i}.** 订单号: `{order_no}` | "
             f"状态: {status} | "
             f"金额: ¥{amount} | "
             f"时间: {created}"
         )
+        if product_names:
+            line += f" | 商品: {product_names}"
+        lines.append(line)
 
     if len(orders) > 10:
         lines.append(f"\n*仅显示最近 10 条，共 {len(orders)} 条订单。*")

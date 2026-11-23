@@ -20,6 +20,7 @@ export interface MyConversationItem {
   conversation_id: string
   summary?: string | null
   conversation_status: string
+  latest_handoff_closed?: boolean
   handling_mode: string
   created_at: string
   last_activity_at?: string | null
@@ -256,13 +257,8 @@ export interface TicketRow {
   status_display?: string
 }
 
-export async function listMyTickets(limit = 10): Promise<TicketRow[]> {
-  try {
-    const data = await request<{ tickets?: TicketRow[]; items?: TicketRow[] }>(
-      `/api/cs/tickets?limit=${limit}`,
-    )
-    return data.tickets ?? data.items ?? []
-  } catch {
-    return []
-  }
+export async function listMyTickets(limit: number, offset: number) {
+  return request<{ items: TicketRow[]; total: number }>(
+    `/api/cs/tickets?limit=${limit}&offset=${offset}`,
+  )
 }

@@ -170,6 +170,8 @@ def _compose_with_llm(
 
     facts = build_fact_set(expert_result)
     masked_message = mask_for_llm(str(state.get("user_message", "") or ""))
+    is_order_query = expert_name == "query" and (cs_route or {}).get("intent") == "t_order_status"
+    facts_json = json.dumps(facts, ensure_ascii=False, default=str)
 
     try:
         from backend.customer_service.prompting import render_prompt_with_version
@@ -178,7 +180,7 @@ def _compose_with_llm(
             "customer_service.response_composer",
             expert_type=expert_name,
             user_message=masked_message[:300],
-            facts=json.dumps(facts, ensure_ascii=False, default=str)[:1500],
+            facts=facts_json if is_order_query else facts_json[:1500],
             # 注册 Prompt 保留 draft 变量以兼容已发布版本，但模板草稿
             # 不进入模型上下文；事实只来自白名单 FactSet。
             draft="",
@@ -186,6 +188,15 @@ def _compose_with_llm(
     except Exception as exc:  # noqa: BLE001 — prompt 链故障回模板
         logger.warning("[CS ResponseComposer] prompt 渲染失败: %s", exc)
         return None
+
+    if is_order_query:
+        prompt += (
+            "\n订单查询补充规则：用户指定表格、分点或每单的建议数量时，"
+            "可以按要求组织回复，不受默认句数限制。建议另列为可选下一步，"
+            "只给用户可自行核对或操作的建议；不承诺结果，不新增订单事实。"
+            "金额、商品、状态和资格只来自已核验的结构化事实，"
+            "缺失的字段明确说暂时无法确认。仍然只输出原约定的 JSON。"
+        )
 
     content = llm_invoke_once(prompt, CS_RESPONSE_COMPOSER_TIMEOUT_MS)
     if content is None:

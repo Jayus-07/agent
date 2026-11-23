@@ -88,16 +88,22 @@ export default function WorkbenchPage() {
   const lastIdRef = useRef(0)
   const selectedRef = useRef<string | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const queueRequestRef = useRef(0)
+  const offersRequestRef = useRef(0)
 
   const refreshQueue = useCallback(() => {
+    const request = ++queueRequestRef.current
     getHandoffQueue()
-      .then((res) => setQueue(res.items ?? []))
+      .then((res) => {
+        if (request === queueRequestRef.current) setQueue(res.items ?? [])
+      })
       .catch(() => {})
     // 「我的会话」服务端数据源（mine=true → 本人 human_active）：与认领/
     // 接单的乐观写入收敛到同一来源，整页刷新后不再清空。合并且保留本地
-    // unread（WS 增量不被 5s 轮询清零）；失败保持现状，不清空乐观数据。
+    // unread（WS 增量不被全量对账清零）；失败时保留当前数据。
     getHandoffQueue(undefined, true)
       .then((res) => {
+        if (request !== queueRequestRef.current) return
         const fetched = (res.items ?? [])
           .map((item) => ({
             conversationId: item.conversation_id,
@@ -169,8 +175,11 @@ export default function WorkbenchPage() {
   }, [])
 
   const refreshOffers = useCallback(() => {
+    const request = ++offersRequestRef.current
     listMyOffers()
-      .then(setOffers)
+      .then((res) => {
+        if (request === offersRequestRef.current) setOffers(res)
+      })
       .catch(() => {})
   }, [])
 
@@ -179,29 +188,6 @@ export default function WorkbenchPage() {
     refreshQueue()
     refreshOffers()
   }, [refreshQueue, refreshOffers])
-
-  // 降级轮询：WS 断开时 3s 拉选中会话增量 + 5s 拉队列；连接正常时 20s 对账
-  useEffect(() => {
-    const t = setInterval(() => {
-      setNow(Date.now())
-      const cid = selectedRef.current
-      if (cid) {
-        getHandoffMessages(cid, lastIdRef.current)
-          .then((res) => {
-            appendMessages(res.messages ?? [])
-            setHandoffState(res.handoff_state ?? 'none')
-          })
-          .catch(() => {})
-        getPendingProposal(cid)
-          .then((snap) => {
-            if (selectedRef.current === cid) setPendingProposal(snap)
-          })
-          .catch(() => {})
-      }
-      refreshQueue()
-    }, 5_000)
-    return () => clearInterval(t)
-  }, [appendMessages, refreshQueue])
 
   const onSocketEvent = useCallback(
     (evt: { type: string; seq: number | null; payload: Record<string, unknown> }) => {
@@ -226,7 +212,11 @@ export default function WorkbenchPage() {
         setUserTypingAt(Date.now())
         return
       }
-      if (evt.type === 'conversation.waiting' || evt.type === 'conversation.reassigned') {
+      if (
+        evt.type === 'conversation.waiting' ||
+        evt.type === 'conversation.reassigned' ||
+        evt.type === 'conversation.human_active_recovered'
+      ) {
         refreshQueue()
         return
       }
@@ -237,7 +227,9 @@ export default function WorkbenchPage() {
           text: '收到新的接入邀请（offer），请尽快接单',
           conversationId: cid,
         })
+        setNow(Date.now())
         refreshOffers()
+        refreshQueue()
         return
       }
       if (evt.type === 'conversation.offer_declined' || evt.type === 'conversation.offer_expired') {
@@ -269,6 +261,7 @@ export default function WorkbenchPage() {
         return
       }
       if (evt.type === 'conversation.claimed') {
+        refreshOffers()
         refreshQueue()
         return
       }
@@ -288,8 +281,9 @@ export default function WorkbenchPage() {
         }
         return
       }
-      if (evt.type === 'conversation.closed') {
+      if (evt.type === 'conversation.closed' || evt.type === 'conversation.handoff_closed') {
         if (cid === selectedRef.current) setHandoffState('closed')
+        refreshOffers()
         refreshQueue()
       }
     },
@@ -299,11 +293,11 @@ export default function WorkbenchPage() {
   // 重连对账：队列全量 + 选中会话按 seq 游标补发（>lastSeq 的持久化事件）
   const lastSeqRef = useRef(0)
   const onReconnect = useCallback(() => {
-    refreshQueue()
     const cid = selectedRef.current
     if (!cid) return
     getConversationEvents(cid, lastSeqRef.current)
       .then((res) => {
+        if (selectedRef.current !== cid) return
         const missed = (res.events ?? [])
           .filter((e) => e.type === 'message.created')
           .map((e) => (e.payload as { message?: MessageDTO }).message)
@@ -311,7 +305,7 @@ export default function WorkbenchPage() {
         appendMessages(missed)
       })
       .catch(() => {})
-  }, [appendMessages, refreshQueue])
+  }, [appendMessages])
 
   const { connected } = useAgentSocket(
     useCallback(
@@ -325,6 +319,51 @@ export default function WorkbenchPage() {
     ),
     { onReconnect },
   )
+
+  useEffect(() => {
+    if (!connected) return
+    const reconcile = () => {
+      refreshQueue()
+      refreshOffers()
+    }
+    reconcile()
+    // 对账兜底 Redis 短暂中断时漏掉的推送，不依赖它刷新新 offer。
+    const timer = setInterval(reconcile, 30_000)
+    return () => clearInterval(timer)
+  }, [connected, refreshQueue, refreshOffers])
+
+  useEffect(() => {
+    const refresh = () => {
+      const cid = selectedRef.current
+      if (cid) {
+        getHandoffMessages(cid, lastIdRef.current)
+          .then((res) => {
+            if (selectedRef.current !== cid) return
+            appendMessages(res.messages ?? [])
+            setHandoffState(res.handoff_state ?? 'none')
+          })
+          .catch(() => {})
+        getPendingProposal(cid)
+          .then((snap) => {
+            if (selectedRef.current === cid) setPendingProposal(snap)
+          })
+          .catch(() => {})
+      }
+      if (!connected) {
+        refreshQueue()
+        refreshOffers()
+      }
+    }
+    const timer = setInterval(refresh, 5_000)
+    return () => clearInterval(timer)
+  }, [appendMessages, connected, refreshQueue, refreshOffers])
+
+  const hasOffers = offers.length > 0
+  useEffect(() => {
+    if (!hasOffers) return
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [hasOffers])
 
   const selectConversation = useCallback(
     (conversationId: string, entry?: MineEntry) => {
