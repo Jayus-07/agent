@@ -40,14 +40,43 @@ from backend.travel.timeutil import MINUTES_PER_DAY, from_min, to_min
 # 单项最短时长：低于此值的到访没有意义（路上时间都比参观久）
 _MIN_VISIT_MINUTES = 15
 
+# 热门城市特色地道美食清单（消除「午餐建议自理」冷冰冰体验）
+CITY_SIGNATURE_DELICACIES: dict[str, str] = {
+    "上海": "南翔小笼馒头、弄堂生煎、本帮红烧肉、排骨年糕",
+    "北京": "老北京烤鸭、炸酱面、铜锅涮肉、门框卤煮",
+    "成都": "地道老火锅、担担面、龙抄手、钵钵鸡",
+    "重庆": "九宫格老火锅、重庆小面、酸辣粉、毛血旺",
+    "杭州": "西湖醋鱼、东坡肉、龙井虾仁、葱包桧、片儿川",
+    "西安": "牛羊肉泡馍、腊汁肉夹馍、秦镇凉皮、biangbiang面",
+    "广州": "广式早茶点心、深井烧鹅、云吞面、煲仔饭",
+    "厦门": "沙茶面、海蛎煎、鼓浪屿馅饼、花生汤",
+    "长沙": "茶颜悦色、剁椒鱼头、文和友小龙虾、长沙臭豆腐",
+    "南京": "金陵盐水鸭、鸭血粉丝汤、鸡汁汤包",
+    "苏州": "松鼠鳜鱼、响油鳝糊、苏式汤面、青团",
+    "武汉": "热干面、三鲜豆皮、武昌鱼、排骨藕汤",
+}
+
+_NIGHT_KEYWORDS = (
+    "夜景", "外滩", "东方明珠", "浦江", "游船", "游轮", "灯光秀", "洪崖洞",
+    "酒吧街", "夜市", "水幕秀", "不夜城", "观光厅", "天际线", "高空观光",
+)
+
+
+def _is_night_preferred(p: Poi) -> bool:
+    """是否属于更适宜傍晚/夜间游览的地标（夜景、高空天际线、游轮、夜市等）。"""
+    text = f"{p.name} {p.category} {' '.join(p.tags or [])}"
+    return any(k in text for k in _NIGHT_KEYWORDS)
+
 
 def order_pois(pois: list[Poi], day_start_min: int | None = None) -> list[Poi]:
-    """就近串联（最近邻），并挑一个不会让人干等的起点。
+    """就近串联（考虑开门时间与夜景黄金时段）。
 
     起点选择的关键不是「最热」而是「已经开门」：实测中把 11:00 才营业的
     美食街选作起点，会在门口干等 150 分钟，整条行程前半天空转。因此
     排序键为「已在开放时间内 → 必去 → 热度 → 稳定 id」，随后每次走
     最近的一个。
+    若存在适宜夜间游览的地标（如外滩、东方明珠、浦江游览），白天先排常规景点，
+    将夜景点排在傍晚/夜间，保证游客享受最美城市夜色。
     """
     if len(pois) <= 1:
         return list(pois)
@@ -55,12 +84,19 @@ def order_pois(pois: list[Poi], day_start_min: int | None = None) -> list[Poi]:
     day_start = (to_min(T.TRAVEL_DAY_START, 8 * 60 + 30)
                  if day_start_min is None else day_start_min)
 
+    day_pois = [p for p in pois if not _is_night_preferred(p)]
+    night_pois = [p for p in pois if _is_night_preferred(p)]
+
+    # 白天景点优先排，随后串联夜景景点；若全部都是夜景（或全非夜景），则不拆分
+    target_pois = day_pois if (day_pois and night_pois) else pois
+    deferred_pois = night_pois if (day_pois and night_pois) else []
+
     def _start_key(p: Poi) -> tuple:
         open_min = to_min(p.open_time, 0)
         return (open_min > day_start, not p.required, -p.rating, p.poi_id)
 
-    start = min(pois, key=_start_key)
-    remaining = [p for p in pois if p.poi_id != start.poi_id]
+    start = min(target_pois, key=_start_key)
+    remaining = [p for p in target_pois if p.poi_id != start.poi_id]
     ordered = [start]
     current = start
     while remaining:
@@ -70,15 +106,48 @@ def order_pois(pois: list[Poi], day_start_min: int | None = None) -> list[Poi]:
         ordered.append(nxt)
         remaining.remove(nxt)
         current = nxt
+
+    # 串联夜景打卡点（如有）
+    if deferred_pois:
+        rem_night = list(deferred_pois)
+        while rem_night:
+            nxt = min(rem_night, key=lambda p: (
+                route_km(current.lat, current.lng, p.lat, p.lng), p.poi_id,
+            ))
+            ordered.append(nxt)
+            rem_night.remove(nxt)
+            current = nxt
+
     return ordered
 
 
-def _meal_item(start_min: int, minutes: int) -> ItineraryItem:
+def _meal_item(
+    start_min: int,
+    minutes: int,
+    destination: str = "",
+    near_poi: str = "",
+) -> ItineraryItem:
     end_min = min(MINUTES_PER_DAY - 1, start_min + minutes)
+    city = (destination or "").strip()
+    delicacy = CITY_SIGNATURE_DELICACIES.get(city)
+    if not delicacy:
+        for k, v in CITY_SIGNATURE_DELICACIES.items():
+            if k in city:
+                delicacy = v
+                break
+    if delicacy and near_poi:
+        note = f"在{near_poi}周边寻味，推荐品尝{city or '当地'}特色：{delicacy}"
+    elif delicacy:
+        note = f"推荐品尝{city}地道特色美食：{delicacy}"
+    elif near_poi:
+        note = f"在{near_poi}周边品尝特色美食与风味小吃"
+    else:
+        note = "品尝当地特色美食与风味小吃"
+
     return ItineraryItem(
         title="午餐", kind=KIND_MEAL,
         start=from_min(start_min), end=from_min(end_min),
-        minutes=end_min - start_min, poi=None, note="就近用餐",
+        minutes=end_min - start_min, poi=None, note=note,
     )
 
 
@@ -128,7 +197,12 @@ def schedule_day(
 
     def _place_lunch() -> None:
         nonlocal cursor, lunch_done, prev_item
-        item = _meal_item(cursor, lunch_minutes)
+        near_poi = prev_item.title if (prev_item and prev_item.poi) else ""
+        item = _meal_item(
+            cursor, lunch_minutes,
+            destination=brief.destination,
+            near_poi=near_poi,
+        )
         day.items.append(item)
         cursor = to_min(item.end, cursor)
         lunch_done = True

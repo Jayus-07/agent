@@ -527,3 +527,18 @@ it('发布评测行在同 prompt_key 有两条可选记录时出现「对比」�
     await cleanup(root, container, queryClient)
   }
 })
+
+it('发起评测表单挂载 RAG 五维黄金指标与联合 Ragas 可选评测配置', async () => {
+  ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  const { root, container, queryClient } = await mountRunsTab({
+    promptPrefill: { key: 'rag.qa', version: '2' },
+    domain: 'rag',
+  })
+  try {
+    expect(container.textContent).toContain('评测指标与评估套件')
+    expect(container.textContent).toContain('RAG 五维核心黄金量化指标')
+    expect(container.textContent).toContain('联合 Ragas 深度评测套件')
+  } finally {
+    await cleanup(root, container, queryClient)
+  }
+})
