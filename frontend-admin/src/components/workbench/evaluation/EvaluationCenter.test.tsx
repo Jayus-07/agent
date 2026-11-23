@@ -107,4 +107,22 @@ describe('EvaluationCenter', () => {
     expect(none.container.querySelector('[data-panel="runs"]')?.getAttribute('data-domain')).toBe('all')
     act(() => none.root.unmount())
   })
+  it('数据集中心挂载 RAG 五维质量雷达与 36 份评测语料中心', () => {
+    const { root, container } = mount()
+    expect(container.textContent).toContain('RAG 五维核心质量雷达')
+    expect(container.textContent).toContain('36 份评测基准语料中心')
+    expect(container.textContent).toContain('已入库 36 份全量测试文件')
+    expect(container.textContent).toContain('TEST-CS-001_虚构客服退换与工单处理规则.md')
+
+    // 切换到传统用例集
+    const casesBtn = Array.from(container.querySelectorAll('button')).find(b =>
+      b.textContent?.includes('用例与数据集管理'),
+    )
+    expect(casesBtn).toBeDefined()
+    act(() => {
+      casesBtn?.click()
+    })
+    expect(container.textContent).toContain('管理测试用例与发布版本')
+    act(() => root.unmount())
+  })
 })
