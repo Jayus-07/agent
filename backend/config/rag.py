@@ -58,18 +58,18 @@ CHUNK_LLM_MODEL = os.getenv("CHUNK_LLM_MODEL", "qwen2.5:3b")
 # 上限，为 multipart 封装留出空间。提高文件上限前需先同步调整入口配置。
 RAG_MAX_FILE_SIZE = int(os.getenv("RAG_MAX_FILE_SIZE", "50"))  # 单位 MB
 # 每个 RAG 索引任务的累计模型 Token 上限。与聊天等通用请求预算分开，
-# 上传/重解析可能包含元数据和多批嵌入，32K 对中等表格文档偏低。
+# 上传/重解析可能包含元数据和多批嵌入。千页 PDF / 4000+ chunks 大文档
+# 向量化预估 Token 需达数百万（默认 500 万 Token），上限放宽至 10,000,000。
 RAG_INDEX_REQUEST_MAX_TOKENS = int(
-    os.getenv("RAG_INDEX_REQUEST_MAX_TOKENS", "128000")
+    os.getenv("RAG_INDEX_REQUEST_MAX_TOKENS", "5000000")
 )
 if RAG_INDEX_REQUEST_MAX_TOKENS <= 0:
     raise ValueError("RAG_INDEX_REQUEST_MAX_TOKENS 必须为正整数")
 # #480：只校验正值时，手滑多打一个 0（如 1280000）会让索引任务的 Token
-# 预算形同虚设。上限取当前云端模型上下文量级的硬保护，超出直接失败而非
-# 静默钳制——配置错误应在启动时暴露。
-if RAG_INDEX_REQUEST_MAX_TOKENS > 1_000_000:
+# 预算形同虚设。上限取硬保护，超出直接失败而非静默钳制——配置错误应在启动时暴露。
+if RAG_INDEX_REQUEST_MAX_TOKENS > 10_000_000:
     raise ValueError(
-        "RAG_INDEX_REQUEST_MAX_TOKENS 超出合理上限 1000000，请核对配置"
+        "RAG_INDEX_REQUEST_MAX_TOKENS 超出合理上限 10000000，请核对配置"
     )
 # 临时文件目录 (atomic rename 前存这里, Docker 容器内安全)
 # 用 RAG_DATA_DIR 派生绝对路径，消除相对路径的 CWD 依赖
