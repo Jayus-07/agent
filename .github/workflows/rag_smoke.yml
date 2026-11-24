@@ -79,6 +79,10 @@ jobs:
             exit 1
           fi
 
+          if [[ -n "$BASE_SHA" ]] && ! git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+            git fetch origin "$BASE_SHA" --depth=1 || git fetch origin "${{ github.base_ref || 'main' }}" --depth=10 || true
+          fi
+
           changed_paths="$RUNNER_TEMP/rag-smoke-changed-paths.txt"
           if ! git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_paths"; then
             echo "::error::Unable to determine changed paths for the RAG smoke gate."
@@ -230,6 +234,11 @@ jobs:
             backend/tests/customer_service/test_mall_cancel_sandbox_pg.py \
             backend/tests/customer_service/test_mall_order_create_sandbox_pg.py \
             backend/tests/customer_service/test_handoff_repo.py \
+            backend/tests/customer_service/test_dispatch_reaper.py \
+            backend/tests/customer_service/test_p4_handoff_ingress.py::test_active_handoff_is_reused_without_creating_a_second_row \
+            backend/tests/workers/test_cs_dispatcher.py \
+            backend/tests/api/test_cs_tickets_api.py \
+            backend/tests/api/test_cs_admin_api.py \
             backend/tests/customer_service/test_cs_faq_pg.py \
             backend/tests/customer_service/test_points_flow.py \
             backend/tests/customer_service/test_coupon_flow.py \

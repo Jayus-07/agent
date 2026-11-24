@@ -27,6 +27,15 @@ from backend.customer_service.security.permission import PermissionChecker
 
 _ORDER_ID_RE = re.compile(r"^[a-zA-Z0-9\-]+$")
 
+_ORDER_PRODUCT_NAMES_SQL = """
+    COALESCE((
+        SELECT string_agg(DISTINCT p.product_name, '、' ORDER BY p.product_name)
+        FROM "order".order_items oi
+        LEFT JOIN product.products p ON p.id = oi.product_id
+        WHERE oi.order_id = o.id
+    ), '') AS product_names
+"""
+
 
 def _use_http_gateway() -> bool:
     from backend.config.customer_service import CS_BUSINESS_GATEWAY_MODE
@@ -195,12 +204,12 @@ class OrderService:
         user_id = resolve_user_id(user_id)
         from backend.sql.executor import execute_sql_struct
 
-        sql = """
-            SELECT id, order_no, customer_id, total_amount, status,
-                   payment_status, created_at
-            FROM "order".orders
-            WHERE (id::text = %(order_id)s OR order_no = %(order_id)s)
-              AND customer_id::text = %(user_id)s
+        sql = f"""
+            SELECT o.id, o.order_no, o.customer_id, o.total_amount, o.status,
+                   o.payment_status, o.created_at, {_ORDER_PRODUCT_NAMES_SQL}
+            FROM "order".orders o
+            WHERE (o.id::text = %(order_id)s OR o.order_no = %(order_id)s)
+              AND o.customer_id::text = %(user_id)s
         """
         result = execute_sql_struct(
             sql, params={"order_id": order_id, "user_id": str(user_id)}
@@ -223,11 +232,12 @@ class OrderService:
         user_id = resolve_user_id(user_id)
         from backend.sql.executor import execute_sql_struct
 
-        sql = """
-            SELECT id, order_no, total_amount, status, payment_status, created_at
-            FROM "order".orders
-            WHERE customer_id::text = %(user_id)s
-            ORDER BY created_at DESC
+        sql = f"""
+            SELECT o.id, o.order_no, o.total_amount, o.status,
+                   o.payment_status, o.created_at, {_ORDER_PRODUCT_NAMES_SQL}
+            FROM "order".orders o
+            WHERE o.customer_id::text = %(user_id)s
+            ORDER BY o.created_at DESC
             LIMIT 20
         """
         result = execute_sql_struct(sql, params={"user_id": str(user_id)})
@@ -270,14 +280,9 @@ class OrderService:
         user_id = resolve_user_id(user_id)
         from backend.sql.executor import execute_sql_struct
 
-        sql = """
+        sql = f"""
             SELECT o.id, o.order_no, o.total_amount, o.status, o.created_at,
-                   COALESCE((
-                       SELECT string_agg(DISTINCT p.product_name, '、')
-                       FROM "order".order_items oi
-                       LEFT JOIN product.products p ON p.id = oi.product_id
-                       WHERE oi.order_id = o.id
-                   ), '') AS product_names
+                   {_ORDER_PRODUCT_NAMES_SQL}
             FROM "order".orders o
             WHERE o.customer_id::text = %(user_id)s
             ORDER BY o.created_at DESC
@@ -312,14 +317,9 @@ class OrderService:
         user_id = resolve_user_id(user_id)
         from backend.sql.executor import execute_sql_struct
 
-        sql = """
+        sql = f"""
             SELECT o.id, o.order_no, o.total_amount, o.status, o.created_at,
-                   COALESCE((
-                       SELECT string_agg(DISTINCT p.product_name, '、')
-                       FROM "order".order_items oi
-                       LEFT JOIN product.products p ON p.id = oi.product_id
-                       WHERE oi.order_id = o.id
-                   ), '') AS product_names
+                   {_ORDER_PRODUCT_NAMES_SQL}
             FROM "order".orders o
             WHERE o.customer_id::text = %(user_id)s
               AND o.status = ANY(%(statuses)s)

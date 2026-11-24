@@ -67,8 +67,8 @@ export default function TravelHome() {
           </div>
         </section>
 
-        {/* B4 能力橱窗：Hero 与最近行程之间；与最近行程共用同一次 fetchTravelTripsV2 */}
-        <TravelShowcase trips={trips} loading={tripsLoading} />
+        {/* 推荐行程：优先展示真实行程；无保存行程时优雅展示官方精选特色路线 */}
+        <TravelShowcase trips={trips} templates={templates} loading={tripsLoading} />
 
         <section className="mt-8 md:mt-10">
           <div className="mb-4 flex items-end justify-between gap-4"><div><p className="text-[10px] font-semibold text-[#4a82c5]">接着上次的计划</p><h2 className="mt-1 text-lg font-bold tracking-[-.025em] text-[#17283f] md:text-[21px]">我的最近行程</h2></div><a href="/travel/itineraries" className="text-xs font-medium text-[#2878f5]">全部行程</a></div>

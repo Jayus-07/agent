@@ -150,6 +150,20 @@ async def _create_in_transaction(
     conversation.handling_mode = "waiting_human"
     conversation.updated_at = now
     conversation.last_activity_at = now
+    outbox.append_event(
+        session,
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        type="conversation.waiting",
+        payload={
+            "conversation_id": conversation_id,
+            "handoff_id": handoff.handoff_id,
+            "handoff_state": handoff.handoff_state,
+        },
+        handoff_id=handoff.handoff_id,
+        actor_user_id=user_id,
+        now=now,
+    )
     await session.flush()
     return _as_result(handoff, reused=False)
 

@@ -132,6 +132,10 @@ async def _seed_conversation(
 async def _cleanup_conversation(conversation_id: str) -> None:
     async with AsyncSessionLocal() as db:
         await db.execute(
+            text("DELETE FROM customer_service.events WHERE conversation_id = :conversation_id"),
+            {"conversation_id": conversation_id},
+        )
+        await db.execute(
             text(
                 "DELETE FROM customer_service.handoffs "
                 "WHERE conversation_id = :conversation_id"
@@ -258,7 +262,21 @@ async def test_active_handoff_is_reused_without_creating_a_second_row():
                 ),
                 {"tenant_id": "tenant-a", "conversation_id": conversation_id},
             )
+            event = (
+                await db.execute(
+                    text(
+                        """
+                        SELECT handoff_id, tenant_id, target_agent_id, outbox_status
+                        FROM customer_service.events
+                        WHERE conversation_id = :conversation_id
+                          AND type = 'conversation.waiting'
+                        """
+                    ),
+                    {"conversation_id": conversation_id},
+                )
+            ).one()
         assert count == 1
+        assert tuple(event) == (first.handoff_id, "tenant-a", None, "pending")
     finally:
         try:
             await _cleanup_conversation(conversation_id)

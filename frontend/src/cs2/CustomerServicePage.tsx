@@ -55,7 +55,7 @@ function roleOf(senderType: string): Cs2Message['role'] {
 function sessionFromItem(item: MyConversationItem): Cs2ConversationDraft {
   const draft = newConversationDraft(item.conversation_id)
   draft.title = item.summary?.slice(0, 24) || `会话 ${item.conversation_id.slice(0, 6)}`
-  draft.status = item.conversation_status
+  draft.status = item.latest_handoff_closed ? 'closed' : item.conversation_status
   draft.messages = (item.messages ?? []).map((m) => ({
     id: m.message_id || makeId(),
     role: roleOf(m.sender_type),
@@ -94,6 +94,7 @@ export default function CustomerServicePage() {
   const typerRef = useRef<ReturnType<typeof createTyper> | null>(null)
   const requestIdRef = useRef<string>('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const composerRef = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
   draftRef.current = draft
 
@@ -125,12 +126,6 @@ export default function CustomerServicePage() {
       setPreselectOrderNo(orderRef)
       setOrderSheetOpen(true)
     }
-    fetchMyConversations(10)
-      .then((items) => {
-        if (cancelled) return
-        setSessions(items.map(sessionFromItem))
-      })
-      .catch(() => {})
     fetchCustomerContext()
       .then((ctx) => {
         if (!cancelled) setCustomerCtx(ctx)
@@ -141,6 +136,19 @@ export default function CustomerServicePage() {
       abortRef.current?.abort()
     }
   }, [])
+
+  useEffect(() => {
+    if (!drawerOpen) return
+    let cancelled = false
+    fetchMyConversations(10)
+      .then((items) => {
+        if (!cancelled) setSessions(items.map(sessionFromItem))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [drawerOpen])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -226,11 +234,13 @@ export default function CustomerServicePage() {
         // 断流已由 streamChat 内部 resume 兜底；走到这里多为主动中止
       }
 
+      if (abortRef.current !== controller) return
       const lastDraft = draftRef.current
       const lastMsg = [...lastDraft.messages].reverse().find((m) => m.role === 'assistant')
-      if (terminal && lastMsg && lastMsg.role === 'assistant' && !lastMsg.interrupted) {
+      if (terminal && !controller.signal.aborted && lastMsg && !lastMsg.interrupted) {
         setRevealing(true)
         await typer.run(buffer)
+        if (abortRef.current !== controller) return
         setRevealing(false)
       }
       patchDraft((d) => {
@@ -332,11 +342,10 @@ export default function CustomerServicePage() {
     setRevealing(false)
     patchDraft((d) => {
       d.streaming = false
-      for (let i = d.messages.length - 1; i >= 0; i -= 1) {
-        if (d.messages[i].role === 'assistant') {
-          d.messages[i].streaming = false
-          break
-        }
+      const message = d.messages.at(-1)
+      if (message?.role === 'assistant') {
+        message.streaming = false
+        message.interrupted = true
       }
     })
   }, [patchDraft])
@@ -533,7 +542,7 @@ export default function CustomerServicePage() {
     () =>
       sessions.map((s) => ({
         id: s.id,
-        label: `${s.title}（${s.status === 'closed' ? '已结束' : '进行中'}）`,
+        label: `${s.title}（${s.status === 'resolved' || s.status === 'closed' ? '已结束' : '进行中'}）`,
       })),
     [sessions],
   )
@@ -588,7 +597,9 @@ export default function CustomerServicePage() {
               !['waiting_human', 'agent_offered', 'human_active'].includes(handoffState) &&
               lastMsg && lastMsg.role === 'assistant' && !lastMsg.content && (
               <div className="mx-auto flex w-full max-w-md items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                <span className="flex-1">抱歉，刚才的回复没有生成成功，请重试</span>
+                <span className="flex-1">
+                  {lastMsg.interrupted ? '已停止' : '抱歉，刚才的回复没有生成成功，请重试'}
+                </span>
                 <button
                   type="button"
                   className="shrink-0 rounded-full bg-amber-600 px-2.5 py-1 text-xs text-white hover:bg-amber-700"
@@ -769,6 +780,7 @@ export default function CustomerServicePage() {
               <Headphones size={18} aria-hidden />
             </button>
             <textarea
+              ref={composerRef}
               className="min-h-11 max-h-32 flex-1 resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-base text-slate-900 outline-none focus:border-indigo-500"
               rows={1}
               placeholder="请描述您的问题…"
@@ -899,6 +911,11 @@ export default function CustomerServicePage() {
       <OrderPickerSheet
         open={orderSheetOpen}
         onClose={() => setOrderSheetOpen(false)}
+        onAskAnotherQuestion={() => {
+          setOrderSheetOpen(false)
+          // 保留点击时的用户手势，让移动浏览器可以打开键盘。
+          composerRef.current?.focus({ preventScroll: true })
+        }}
         onSendOrder={sendOrderRef}
         onSendText={sendSheetText}
         faqEntries={QUICK_ENTRIES}
@@ -1052,7 +1069,7 @@ function MessageBubble({ message }: { message: Cs2Message }) {
   const orderRef = orderRefOf(message)
 
   return (
-    <div className={`flex max-w-[78%] flex-col gap-0.5 ${align}`}>
+    <div className={`flex min-w-0 max-w-[78%] flex-col gap-0.5 [overflow-wrap:anywhere] ${align}`}>
       {message.role !== 'system' && (
         <div className={`flex items-center gap-1.5 text-[11px] text-slate-400 ${message.role === 'user' ? 'justify-end' : ''}`}>
           {message.role === 'assistant' && (

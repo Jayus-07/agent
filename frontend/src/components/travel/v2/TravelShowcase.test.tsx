@@ -134,6 +134,37 @@ it('无任何真实行程时如实空态，不垫种子/演示数据', async () 
   expect(container!.querySelector('img')).toBeNull()
 })
 
+it('无自建行程但有官方模板时，展示官方精选特色路线卡片', async () => {
+  const dummyTemplate = {
+    template_id: 'tpl-bj-1',
+    slug: 'beijing-heritage',
+    title: '北京古都与红墙机位',
+    destination: '北京',
+    summary: '景山万春亭俯瞰紫禁城全景',
+    cover_image_url: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d',
+    tags: ['古都文化', '绝美机位'],
+    version: 1,
+    status: 'published' as const,
+    sort_weight: 95,
+    content: makeTrip({ destination: '北京', title: '北京古都与红墙机位', tier: 'comfortable', interests: ['人文', '摄影'] }).document,
+    created_by: 'seed',
+    published_at: '2026-11-20T00:00:00Z',
+    created_at: '2026-11-20T00:00:00Z',
+    updated_at: '2026-11-20T00:00:00Z',
+  }
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  await act(async () => root?.render(<TravelShowcase trips={[]} templates={[dummyTemplate]} loading={false} />))
+
+  expect(container!.textContent).toContain('精选特色行程')
+  expect(container!.textContent).toContain('北京古都与红墙机位')
+  expect(container!.textContent).toContain('官方精选')
+  expect(container!.textContent).toContain('可一键套用')
+  expect(container!.querySelector('a[href="/travel/templates/beijing-heritage"]')).not.toBeNull()
+})
+
 it('加载中如实展示加载态', async () => {
   await renderShowcase([], true)
   expect(container!.textContent).toContain('正在加载推荐行程…')

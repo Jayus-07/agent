@@ -71,6 +71,17 @@ class TestAdminTravelServices:
             assert probe["service"] == s
             assert "message" in probe
 
+    @pytest.mark.asyncio
+    async def test_weather_probe_with_valid_key(self, fake_admin_operator):
+        probe = await mod.test_travel_service(
+            service_id="weather",
+            test_key="fc569b267e6a4ae1b7b4ee4f490a288e",
+            operator=fake_admin_operator,
+        )
+        assert probe["service"] == "weather"
+        assert probe["ok"] is True
+        assert "和风天气官方 API 握手成功" in probe["message"]
+
 
 class TestXiaohongshuService:
     def test_search_xiaohongshu_guides(self):

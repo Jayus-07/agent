@@ -75,11 +75,12 @@ def compose_reply(
 
     policy = EXPERT_RESPONSE_POLICY.get(expert_name, ResponsePolicy.TEMPLATE)
 
-    # 支付流水回复包含逐笔事实和强制的重试/退款确认边界；保留 QueryExpert
-    # 的确定性模板，避免 LLM 转写时漏掉必要指引或人工审核说明。
-    if (
-        expert_name == "query"
-        and str((cs_route or {}).get("intent") or "") == "t_payment_issue"
+    # 支付流水与订单定向追问已有核验后的直接答复。
+    route = cs_route or {}
+    order_fact_followup = (route.get("metadata") or {}).get("order_fact_followup")
+    if expert_name == "query" and (
+        route.get("intent") == "t_payment_issue"
+        or order_fact_followup in {"products", "refund", "return"}
     ):
         _metrics_inc("cs_response_total", {"source": "template"})
         _tag_trace(cs_response_source="template")
@@ -170,6 +171,8 @@ def _compose_with_llm(
 
     facts = build_fact_set(expert_result)
     masked_message = mask_for_llm(str(state.get("user_message", "") or ""))
+    is_order_query = expert_name == "query" and (cs_route or {}).get("intent") == "t_order_status"
+    facts_json = json.dumps(facts, ensure_ascii=False, default=str)
 
     try:
         from backend.customer_service.prompting import render_prompt_with_version
@@ -178,7 +181,7 @@ def _compose_with_llm(
             "customer_service.response_composer",
             expert_type=expert_name,
             user_message=masked_message[:300],
-            facts=json.dumps(facts, ensure_ascii=False, default=str)[:1500],
+            facts=facts_json if is_order_query else facts_json[:1500],
             # 注册 Prompt 保留 draft 变量以兼容已发布版本，但模板草稿
             # 不进入模型上下文；事实只来自白名单 FactSet。
             draft="",

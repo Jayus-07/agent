@@ -15,6 +15,7 @@ const cs2Api = vi.hoisted(() => ({
       conversation_id: string
       summary?: string | null
       conversation_status: string
+      latest_handoff_closed?: boolean
       handling_mode: string
       created_at: string
       last_activity_at?: string | null
@@ -73,7 +74,10 @@ const cs2Api = vi.hoisted(() => ({
   confirmAction: vi.fn(async () => ({ status: 'success', answer: '' })),
   updateRefundReason: vi.fn(async () => {}),
   listRefundRequests: vi.fn(async () => []),
-  listMyTickets: vi.fn(async () => []),
+  listMyTickets: vi.fn(async (_limit: number, _offset: number): Promise<{
+    items: Array<{ ticket_id: string; title: string }>
+    total: number
+  }> => ({ items: [], total: 0 })),
 }))
 
 const mallApi = vi.hoisted(() => ({
@@ -197,6 +201,36 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     })
   })
 
+  it('首个字出现前停止时显示已停止，并能重试上一条消息', async () => {
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => { finish = resolve })
+    chatApi.streamChat.mockImplementationOnce(async function* () {
+      await pending
+    })
+    const c = await mount()
+    const chip = Array.from(c.querySelectorAll('[aria-label="快捷入口"] button')).find(
+      (button) => button.textContent?.includes('查询订单'),
+    )
+    await act(async () => chip?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const stop = c.querySelector<HTMLButtonElement>('button[aria-label="停止生成"]')
+    expect(stop).not.toBeNull()
+    await act(async () => {
+      stop?.click()
+      finish()
+    })
+    expect(c.textContent).toContain('已停止')
+    const retry = Array.from(c.querySelectorAll('button')).find(
+      (button) => button.textContent === '重试',
+    )
+    expect(retry).toBeDefined()
+    await act(async () => retry?.click())
+    expect(chatApi.streamChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ question: '帮我查一下我的订单状态' }),
+      expect.any(AbortSignal),
+      'customer-service',
+    )
+  })
+
   it('会话下拉恢复历史会话并显示消息', async () => {
     const c = await mount()
     await openConversation(c, '退款咨询')
@@ -285,7 +319,7 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     expect(c.textContent).toContain('订单卡')
   })
 
-  it('订单抽屉搜索本地过滤 + 常见问题 Tab + 兜底关闭', async () => {
+  it('订单抽屉搜索本地过滤 + 常见问题 Tab + 兜底关闭并聚焦咨询输入框', async () => {
     const c = await mount()
     const chip = Array.from(c.querySelectorAll('[aria-label="快捷入口"] button')).find(
       (b) => b.textContent?.includes('发订单给客服'),
@@ -321,6 +355,7 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
       closeBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     expect(c.querySelector('[aria-label="订单选择"]')).toBeNull()
+    expect(document.activeElement).toBe(c.querySelector('[aria-label="咨询输入框"]'))
   })
 
   it('商城深链 cs2-order-ref：自动开抽屉并预选订单但不自动发送', async () => {
@@ -333,6 +368,40 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     expect(row?.getAttribute('aria-selected')).toBe('true')
     // 预选只高亮：不自动发送
     expect(chatApi.streamChat).not.toHaveBeenCalled()
+  })
+
+  it('个人中心按会话终态显示已结束', async () => {
+    cs2Api.fetchMyConversations.mockResolvedValueOnce([
+      { conversation_id: 'active', summary: '进行中的咨询', conversation_status: 'open',
+        handling_mode: 'ai', created_at: '2026-11-22T10:00:00Z' },
+      { conversation_id: 'resolved', summary: '已处理的咨询', conversation_status: 'resolved',
+        handling_mode: 'ai', created_at: '2026-11-22T10:00:00Z' },
+      { conversation_id: 'handoff', summary: '坐席已关单', conversation_status: 'open',
+        latest_handoff_closed: true, handling_mode: 'ai', created_at: '2026-11-22T10:00:00Z' },
+    ])
+    const c = await mount()
+    await act(async () => c.querySelector<HTMLButtonElement>('[aria-label="打开个人中心"]')?.click())
+    const drawer = c.querySelector('[aria-label="个人中心"]')
+    expect(drawer?.textContent).toContain('进行中的咨询（进行中）')
+    expect(drawer?.textContent).toContain('已处理的咨询（已结束）')
+    expect(drawer?.textContent).toContain('坐席已关单（已结束）')
+  })
+
+  it('我的工单显示归属总数，下一页仍使用同一口径', async () => {
+    cs2Api.listMyTickets
+      .mockResolvedValueOnce({ items: [{ ticket_id: 'first', title: '首张工单' }], total: 14 })
+      .mockResolvedValueOnce({ items: [{ ticket_id: 'last', title: '末张工单' }], total: 14 })
+    const c = await mount()
+    await openConversation(c, '退款咨询')
+    const button = (label: string) => Array.from(c.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes(label))
+    expect(button('我的工单（14）')).toBeDefined()
+    await act(async () => button('我的工单（14）')?.click())
+    expect(c.textContent).toContain('首张工单')
+    await act(async () => button('下一页')?.click())
+    expect(cs2Api.listMyTickets).toHaveBeenLastCalledWith(10, 10)
+    expect(c.textContent).toContain('末张工单')
+    expect(c.textContent).not.toContain('首张工单')
   })
 
   it('D7：card+order_ref 历史消息渲染成订单卡而非纯文本', async () => {

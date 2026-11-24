@@ -126,6 +126,8 @@ def try_cs_prefilter(query: str, state: dict, forced: bool = False) -> dict | No
             cs_result = get_cs_router().route(route_query, route_detection)
             if resolution is not None:
                 cs_result.metadata["order_id"] = resolution.order_id
+                if resolution.order_fact_followup:
+                    cs_result.metadata["order_fact_followup"] = resolution.order_fact_followup
                 cs_result.metadata["context_original_query"] = (
                     resolution.original_query
                 )

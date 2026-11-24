@@ -21,7 +21,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config.cs_dispatch import (
@@ -64,8 +64,23 @@ def _now() -> datetime:
 
 
 # ── B 案（2026-10-08 拍板）：总等待期到点不再干等——压缩诉求、登记留言
-# 工单（24h 回访承诺）、把工单号作为会话消息告知用户。压缩走 llm 代理
-# （G7：限流/韧性/记账），失败确定性降级为原文拼接，绝不阻塞关单本身。
+# 工单（24h 回访承诺）、把工单号作为会话消息告知用户。先保存原文摘要，
+# 再由 dispatcher 在事务提交后通过 LLM 代理优化工单摘要。
+
+@dataclass(frozen=True)
+class TimeoutSummary:
+    ticket_id: str
+    tenant_id: str
+    user_texts: list[str]
+    title: str
+    description: str
+    footer: str
+
+
+_SUMMARY_JOBS = "cs_timeout_summary_jobs"
+_MAX_SUMMARY_TASKS = 4
+_summary_tasks: set[asyncio.Task] = set()
+
 
 _COMPRESS_PROMPT = (
     "以下是用户在客服会话中的几条消息。请把它们合并压缩成一句不超过60字的"
@@ -94,6 +109,44 @@ def _compress_request_sync(user_texts: list[str]) -> str | None:
     except Exception as e:
         logger.warning(f"[Reaper] 诉求压缩失败，降级原文拼接: {e}")
         return None
+
+
+async def _enrich_timeout_ticket(job: TimeoutSummary) -> None:
+    from backend.customer_service.models.ticket import CSTicket
+    from backend.memory.database import AsyncSessionLocal
+
+    try:
+        summary = await asyncio.to_thread(_compress_request_sync, job.user_texts)
+        if not summary:
+            return
+        async with AsyncSessionLocal() as session, session.begin():
+            await session.execute(
+                update(CSTicket)
+                .where(
+                    CSTicket.tenant_id == job.tenant_id,
+                    CSTicket.ticket_id == job.ticket_id,
+                    CSTicket.status == "open",
+                    CSTicket.title == job.title,
+                    CSTicket.description == job.description,
+                )
+                .values(
+                    title=f"人工超时留言：{summary[:60]}",
+                    description=f"[超时降级] {summary}\n{job.footer}",
+                )
+            )
+    except Exception:
+        logger.warning("[Reaper] 异步诉求压缩失败，保留已登记的诉求", exc_info=True)
+
+
+def start_committed_timeout_summaries(session: AsyncSession) -> None:
+    """事务提交后安排摘要优化，工单已保存，后台繁忙时保留原文摘要。"""
+    for job in session.info.pop(_SUMMARY_JOBS, []):
+        if len(_summary_tasks) >= _MAX_SUMMARY_TASKS:
+            logger.info("[Reaper] 摘要任务达到并发上限，保留工单诉求: %s", job.ticket_id)
+            continue
+        task = asyncio.create_task(_enrich_timeout_ticket(job))
+        _summary_tasks.add(task)
+        task.add_done_callback(_summary_tasks.discard)
 
 
 async def _build_timeout_ticket(
@@ -131,14 +184,6 @@ async def _build_timeout_ticket(
         logger.warning(f"[Reaper] 超时工单读取会话原文失败: {e}")
     fallback = "；".join(t[:60] for t in user_texts[-3:]) or "用户请求人工服务（会话原文缺失）"
 
-    compressed: str | None = None
-    if user_texts:
-        try:
-            compressed = await asyncio.to_thread(_compress_request_sync, user_texts)
-        except Exception as e:  # noqa: BLE001 — to_thread 传播的非 LLC 失败同样降级
-            logger.warning(f"[Reaper] 诉求压缩线程失败: {e}")
-    summary = compressed or fallback
-
     # handoffs.priority 是宽松字符串域（"medium"/"P2"/历史 int），收敛到
     # tickets 的合法枚举（TICKET_PRIORITIES），未知值一律 medium。
     raw_priority = str(handoff.priority or "medium")
@@ -161,6 +206,9 @@ async def _build_timeout_ticket(
                 ))
         except (TypeError, ValueError):
             pass
+        title = f"人工超时留言：{fallback[:60]}"
+        footer = f"（会话 {handoff.conversation_id}，等待人工 {waited_seconds}s 无人接入）"
+        description = f"[超时降级] {fallback}\n{footer}"
         session.add(CSTicket(
             ticket_id=ticket_id,
             tenant_id=tenant_id,
@@ -171,17 +219,18 @@ async def _build_timeout_ticket(
             user_id=str(handoff.user_id or ""),
             handoff_id=str(handoff.handoff_id),
             priority=ticket_priority,
-            title=f"人工超时留言：{summary[:60]}",
-            description=(
-                f"[超时降级] {summary}\n"
-                f"（会话 {handoff.conversation_id}，等待人工 {waited_seconds}s 无人接入）"
-            ),
+            title=title,
+            description=description,
         ))
         await session.flush()
-        return ticket_id, summary
+        if user_texts:
+            session.info.setdefault(_SUMMARY_JOBS, []).append(
+                TimeoutSummary(ticket_id, tenant_id, user_texts, title, description, footer)
+            )
+        return ticket_id, fallback
     except Exception as e:
         logger.warning(f"[Reaper] 超时留言工单创建失败（关单继续）: {e}")
-        return None, summary
+        return None, fallback
 
 
 def _terminal_reason(handoff, now: datetime) -> str | None:
@@ -315,7 +364,7 @@ async def _close_handoff(
                     f"您也可以继续问我其他问题～"
                 )
                 await MessageManager(session).create(
-                    str(handoff.conversation_id), notice, sender_type="assistant",
+                    str(handoff.conversation_id), notice, sender_type="system",
                     metadata={"kind": "handoff_timeout_ticket", "ticket_id": ticket_id},
                 )
             except Exception as e:  # noqa: BLE001 — 通知是增强，不是关单的前置

@@ -8,6 +8,9 @@ import { request, mutationRequest } from "./client";
 export interface TravelServiceItem {
   name: string;
   configured: boolean;
+  type?: string;
+  endpoint?: string;
+  has_custom_key?: boolean;
   enabled?: boolean;
   key_preview?: string;
   description: string;
@@ -43,22 +46,29 @@ export interface TravelServiceTestResult {
 }
 
 export async function getTravelServicesConfig(): Promise<TravelServicesConfigResponse> {
-  return request<TravelServicesConfigResponse>("/admin/travel-services/config");
+  return request<TravelServicesConfigResponse>("/api/admin/travel-services/config");
 }
 
 export async function updateTravelServicesConfig(
   payload: TravelServicesConfigUpdatePayload,
 ): Promise<{ status: string; message: string; actor?: string }> {
-  return mutationRequest("/admin/travel-services/config", {
+  return mutationRequest("/api/admin/travel-services/config", {
     operation: "update_travel_services_config",
     method: "PUT",
     body: payload,
   });
 }
 
-export async function testTravelService(serviceId: string): Promise<TravelServiceTestResult> {
+export async function testTravelService(
+  serviceId: string,
+  testKey?: string,
+): Promise<TravelServiceTestResult> {
+  const query = new URLSearchParams({ service_id: serviceId });
+  if (testKey && testKey.trim()) {
+    query.set("test_key", testKey.trim());
+  }
   return mutationRequest<TravelServiceTestResult>(
-    `/admin/travel-services/test?service_id=${encodeURIComponent(serviceId)}`,
+    `/api/admin/travel-services/test?${query.toString()}`,
     {
       operation: `test_travel_service_${serviceId}`,
       method: "POST",

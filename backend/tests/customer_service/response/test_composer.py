@@ -657,6 +657,45 @@ class TestSanitizeFacts:
         assert "ticket_id" not in facts
         assert facts["complaint"]["severity"] == "medium"
 
+    def test_order_composer_keeps_all_order_facts_for_requested_format(self, monkeypatch):
+        import json
+
+        from backend.prompts.loader import load_defaults
+        from backend.prompts.renderer import PromptRenderer
+
+        captured = {}
+        templates = load_defaults()
+
+        def render(key, **kwargs):
+            captured["facts"] = json.loads(kwargs["facts"])
+            captured["rendered"] = PromptRenderer.render(templates[key], kwargs)
+            return captured["rendered"], 4
+
+        def invoke(prompt, _timeout):
+            assert prompt == captured["rendered"]
+            assert "可以按要求组织回复" in prompt
+            return '{"answer":"以下是按订单整理的建议。"}'
+
+        monkeypatch.setattr(
+            "backend.customer_service.prompting.render_prompt_with_version", render,
+        )
+        monkeypatch.setattr(
+            "backend.customer_service.understanding.llm_runtime.llm_invoke_once",
+            invoke,
+        )
+        orders = [
+            {"order_no": f"MO-{1000 + index}", "product_names": "商品" * 70}
+            for index in range(10)
+        ]
+        result = composer._compose_with_llm(
+            "query", "订单模板",
+            {"data": {"service_facts": {"orders": orders}}},
+            {"intent": "t_order_status"},
+            {"user_message": "请按每单给三条建议"},
+        )
+        assert result is not None
+        assert captured["facts"]["orders"] == orders
+
     def test_prompt_uses_projected_fact_set_and_no_template_draft(self, monkeypatch):
         captured = {}
 

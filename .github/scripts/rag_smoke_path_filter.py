@@ -304,6 +304,8 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     # 只读角色默认授权收官（issue #440）：product/order/inventory/crawler
     # 不再自动授予新表，不改变模型调用面。
     "backend/sql/migrations/148_readonly_default_privileges_completion.sql",
+    # 旅游 V2 扩展精选模板（北京古都/成都烟火，纯模板数据注入，无模型调用/计费）
+    "backend/sql/migrations/155_travel_v2_featured_templates.sql",
 })
 
 

@@ -12,6 +12,56 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
+  - interval: 1m
+    input_series:
+      - series: 'process_start_time_seconds{job="rag-service",instance="rag-service:8090"}'
+        values: "100+0x4 400+0x15"
+      - series: 'rag_cgroup_oom_kills_total{job="rag-service",instance="rag-service:8090"}'
+        values: "0+0x4 1+0x15"
+      - series: 'rag_cgroup_memory_peak_bytes{job="rag-service",instance="rag-service:8090"}'
+        values: "800+0x4 950+0x15"
+      - series: 'rag_cgroup_memory_limit_bytes{job="rag-service",instance="rag-service:8090"}'
+        values: "1000+0x20"
+      - series: 'rag_cgroup_memory_current_bytes{job="rag-service",instance="rag-service:8090"}'
+        values: "700+0x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: RagServiceOomKill
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: RagServiceOomKill
+        exp_alerts:
+          - exp_labels:
+              job: rag-service
+              instance: rag-service:8090
+              severity: critical
+            exp_annotations:
+              summary: "RAG 容器发生内存不足杀进程"
+              description: "检查容器内存峰值、限制和 RAG 日志。"
+      - eval_time: 6m
+        alertname: RagServiceProcessRestarted
+        exp_alerts:
+          - exp_labels:
+              job: rag-service
+              instance: rag-service:8090
+              severity: warning
+            exp_annotations:
+              summary: "RAG 服务进程在 10 分钟内重启"
+              description: "结合发布记录、Docker ExitCode/OOMKilled 和容器日志确认原因。"
+      - eval_time: 6m
+        alertname: RagServiceMemoryPeakNearLimit
+        exp_alerts:
+          - exp_labels:
+              job: rag-service
+              instance: rag-service:8090
+              severity: warning
+            exp_annotations:
+              summary: "RAG 容器内存峰值超过上限的 90%"
+              description: "近 10 分钟内出现新峰值，或当前使用量仍高于阈值；检查查询并发和容器内存。"
+      - eval_time: 16m
+        alertname: RagServiceMemoryPeakNearLimit
+        exp_alerts: []
+
   # ── ToolUnregisteredCallDetected：未注册调用出现即告警，全程为 0 则静默 ──
   - interval: 1m
     input_series:

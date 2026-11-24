@@ -17,6 +17,7 @@ app 等消费方通过 RAG_MODE=remote + backend/rag/client.py 代理调用。
 """
 import contextlib
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 import hmac
 import math
 import threading
@@ -843,6 +844,36 @@ def healthz() -> dict[str, str]:
     return {"status": "ok", "service": "rag-service"}
 
 
+_CGROUP_PATH = Path("/sys/fs/cgroup")
+
+
+def _cgroup_memory_metrics(path: Path) -> bytes:
+    """读取 cgroup v2 的内存峰值、上限及 OOM 次数，缺失时跳过。"""
+    samples = []
+    for file_name, metric in (
+        ("memory.current", "rag_cgroup_memory_current_bytes"),
+        ("memory.peak", "rag_cgroup_memory_peak_bytes"),
+        ("memory.max", "rag_cgroup_memory_limit_bytes"),
+    ):
+        try:
+            value = int((path / file_name).read_text().strip())
+        except (OSError, ValueError):
+            continue
+        samples.append(f"# TYPE {metric} gauge\n{metric} {value}\n")
+
+    try:
+        events = dict(line.split() for line in (path / "memory.events").read_text().splitlines())
+        oom_kills = int(events["oom_kill"])
+    except (OSError, ValueError, KeyError):
+        pass
+    else:
+        samples.append(
+            "# TYPE rag_cgroup_oom_kills_total counter\n"
+            f"rag_cgroup_oom_kills_total {oom_kills}\n"
+        )
+    return "".join(samples).encode("ascii")
+
+
 @app.get("/metrics", include_in_schema=False)
 def metrics_endpoint() -> Any:
     """Prometheus 指标出口（2026-10-06 观测重构）。
@@ -857,7 +888,10 @@ def metrics_endpoint() -> Any:
     from backend.observability.metrics import render_metrics
 
     body, content_type = render_metrics()
-    return Response(content=body, media_type=content_type)
+    return Response(
+        content=body + _cgroup_memory_metrics(_CGROUP_PATH),
+        media_type=content_type,
+    )
 
 
 @app.get("/readyz")

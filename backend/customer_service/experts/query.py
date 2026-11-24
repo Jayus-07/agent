@@ -204,15 +204,48 @@ def _merge_service_facts(fact_sets: list[dict[str, Any]]) -> dict[str, Any]:
 def _order_service_facts(orders: list[dict]) -> dict[str, Any]:
     allowed = (
         "order_no", "status", "total_amount", "currency", "created_at",
-        "refund_eligible",
+        "refund_eligible", "product_names",
     )
-    return {
-        "orders": [
-            {key: order[key] for key in allowed if key in order}
-            for order in orders[:10] if isinstance(order, dict)
-        ],
-        "source": _task_query_source("order"),
-    }
+    facts = []
+    for order in orders[:10]:
+        if not isinstance(order, dict):
+            continue
+        row = {key: order[key] for key in allowed if key in order}
+        if not row.get("product_names") and order.get("item_summary"):
+            row["product_names"] = order["item_summary"]
+        facts.append(row)
+    return {"orders": facts, "source": _task_query_source("order")}
+
+
+def _order_query_answer(orders: list[dict], cs_route: dict, user_id: str) -> str:
+    topic = (cs_route.get("metadata") or {}).get("order_fact_followup")
+    if len(orders) != 1 or topic not in {"products", "refund", "return"}:
+        return _format_order_list(orders)
+    order = orders[0]
+    order_no = str(order.get("order_no") or order.get("id") or "")
+    if topic == "products":
+        products = order.get("product_names") or order.get("item_summary")
+        if products:
+            return f"订单 {order_no} 包含：{products}。"
+        return f"暂时无法核实订单 {order_no} 的商品明细，您可以在「我的订单」查看。"
+
+    from backend.customer_service.errors import CustomerServiceError, OrderNotEligibleError
+    from backend.customer_service.service.after_sales_service import get_after_sales_service
+    from backend.customer_service.service.refund_service import get_refund_service
+
+    action = "退货" if topic == "return" else "退款"
+    try:
+        if topic == "return":
+            eligibility = get_after_sales_service().check_return_eligibility(user_id, order_no)
+        else:
+            eligibility = get_refund_service().check_refund_eligibility(user_id, order_no)
+    except OrderNotEligibleError as exc:
+        return f"订单 {order_no}：{exc.user_message}"
+    except CustomerServiceError:
+        return f"暂时无法核实订单 {order_no} 是否符合{action}条件，请稍后再试。"
+    if not eligibility.eligible:
+        return f"订单 {order_no} 当前不符合{action}申请条件。"
+    return f"订单 {order_no} 当前符合{action}申请条件。您可以继续告诉我是否要申请。"
 
 
 def _execute_task_query(
@@ -408,8 +441,12 @@ def _execute_task_query(
             )
             return ExpertResult(
                 expert="query", status=ExpertStatus.SUCCESS.value,
-                response_draft=_format_order_list([order]),
-                data={"task_result": result.model_dump(), "intent": "t_order_status"},
+                response_draft=_order_query_answer([order], cs_route, user_id),
+                data={
+                    "task_result": result.model_dump(),
+                    "intent": "t_order_status",
+                    "service_facts": _order_service_facts([order]),
+                },
             )
 
         from backend.customer_service.service.logistics_service import (
@@ -1054,7 +1091,7 @@ def _dispatch_service(
                         source_intent=intent,
                     )
                 return _QueryServiceResponse(
-                    _format_order_list(result.orders),
+                    _order_query_answer(result.orders, cs_route, user_id),
                     _order_service_facts(result.orders),
                 )
             try:
@@ -1298,12 +1335,16 @@ def _format_order_list(orders: list[dict]) -> str:
             created = created.strftime("%Y-%m-%d")
         else:
             created = str(created)[:10] if created else ""
-        lines.append(
+        product_names = o.get("product_names") or o.get("item_summary")
+        line = (
             f"**{i}.** 订单号: `{order_no}` | "
             f"状态: {status} | "
             f"金额: ¥{amount} | "
             f"时间: {created}"
         )
+        if product_names:
+            line += f" | 商品: {product_names}"
+        lines.append(line)
 
     if len(orders) > 10:
         lines.append(f"\n*仅显示最近 10 条，共 {len(orders)} 条订单。*")

@@ -389,6 +389,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "152_retire_crawler_read_access.sql": "business",
     "153_eval_case_golden.sql": "memory",
     "154_sys_config_ddl_and_price_seed.sql": "memory",
+    # 旅游 V2 官方精选特色模板扩充（北京古都红墙与成都慢调漫步）
+    "155_travel_v2_featured_templates.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
