@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""130 号扩展特色模板种子迁移的契约守护。"""
+"""155 号扩展特色模板种子迁移的契约守护。"""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from backend.travel_v2.models.trip import TripDocumentV2
 
-MIGRATION = Path(__file__).resolve().parents[2] / "sql" / "migrations" / "130_travel_v2_featured_templates.sql"
+MIGRATION = Path(__file__).resolve().parents[2] / "sql" / "migrations" / "155_travel_v2_featured_templates.sql"
 
 EXPECTED_SLUGS = ["beijing-heritage", "chengdu-chill"]
 
