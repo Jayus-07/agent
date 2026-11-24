@@ -79,6 +79,10 @@ jobs:
             exit 1
           fi
 
+          if [[ -n "$BASE_SHA" ]] && ! git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
+            git fetch origin "$BASE_SHA" --depth=1 || git fetch origin "${{ github.base_ref || 'main' }}" --depth=10 || true
+          fi
+
           changed_paths="$RUNNER_TEMP/rag-smoke-changed-paths.txt"
           if ! git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_paths"; then
             echo "::error::Unable to determine changed paths for the RAG smoke gate."
