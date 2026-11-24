@@ -110,7 +110,8 @@ class RAGPipeline:
         防止服务重启后进程内 _seen_sessions 丢失，把带 PG 历史的多轮对话
         误判为首轮，用不含上下文的首轮缓存答案回填请求。
         """
-        memory = getattr(self.lc_chain, "_memory", None)
+        chain = getattr(self, "lc_chain", None)
+        memory = getattr(chain, "_memory", None) if chain is not None else None
         if memory is None or not session_id:
             return False
         try:

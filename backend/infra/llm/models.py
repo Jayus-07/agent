@@ -625,11 +625,14 @@ def thinking_disabled_extra_body(
 
     hostname = urlparse(str(base_url or "")).hostname or ""
     thinking_value = body.get("thinking")
+    lowered_name = (model_name or "").lower()
     if (
         hostname.endswith(".volces.com")
         # 智谱 GLM-4.5+/5 系 API 与火山同款 thinking.type 协议；未适配前
         # 智谱模型无法关思考（默认开），结构化短任务元数据提取频繁超时。
         or hostname.endswith(".bigmodel.cn")
+        or "glm" in lowered_name
+        or "doubao" in lowered_name
         or isinstance(thinking_value, Mapping)
     ):
         thinking = dict(thinking_value) if isinstance(thinking_value, Mapping) else {}
@@ -638,10 +641,15 @@ def thinking_disabled_extra_body(
     elif (
         provider in {"qwen", "qwen_tp", "siliconflow"}
         or hostname.endswith(".siliconflow.cn")
-        or "qwen" in model_name.lower()
-        or "qwq" in model_name.lower()
+        or "qwen" in lowered_name
+        or "qwq" in lowered_name
         or "enable_thinking" in body
     ):
+        body["enable_thinking"] = False
+    elif "deepseek" in lowered_name:
+        thinking = dict(thinking_value) if isinstance(thinking_value, Mapping) else {}
+        thinking["type"] = "disabled"
+        body["thinking"] = thinking
         body["enable_thinking"] = False
     else:
         return None

@@ -1343,7 +1343,8 @@ class RAGChain:
         from backend.core.request_context import get_current_product_id
         l1 = (self._memory.start_session(session_id, question, user_id=user_id,
                                          tenant_id=tenant_id,
-                                         product=get_current_product_id())
+                                         product=get_current_product_id(),
+                                         timeout=1.5)
               if self._memory else None)
         return list(l1.messages) if l1 else []
 
