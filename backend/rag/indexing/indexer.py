@@ -2823,32 +2823,10 @@ class IncrementalIndexer:
             raise
 
         # ── ⑤.5 全文检索引擎同步 ──
-        # PG GIN 模式：向量库写入时已行级原子写入 tsv_content 并触发 GIN 增量倒排索引，无需全量重算。
-        # 传统 BM25 模式：仅在显式传入 bm25_store 时执行全量快照重建。
+        # 显式传入 bm25_store 时：执行传统 BM25 快照重建（向下兼容既有测试与旧调用方）。
+        # 未传入 bm25_store 且 FULLTEXT_ENGINE == "pg_gin" 时：向量库已在写入时行级生成 tsv_content 并自动触发 GIN 倒排索引，无需全量重算。
         from backend.config.rag import FULLTEXT_ENGINE
-        if FULLTEXT_ENGINE == "pg_gin":
-            if lineage_recorder is not None:
-                try:
-                    bm25_lineage = lineage_recorder.begin_stage(
-                        "bm25_write", role=None, engine_type="pg_gin",
-                        metadata={
-                            "collection": getattr(
-                                self.vectordb, "_collection", ""
-                            ),
-                        },
-                    )
-                    lineage_recorder.finish_stage(
-                        bm25_lineage[0], status="success",
-                        started_at=bm25_lineage[1], input_count=len(vector_chunks),
-                        output_count=len(vector_chunks),
-                    )
-                except Exception as _e:
-                    logger.debug(f"[PG-GIN] lineage 记录跳过: {_e}")
-            logger.info(
-                f"[PG-GIN] 行级增量全文索引已生效: {len(vector_chunks)} chunks, "
-                f"{os.path.basename(file_path)}"
-            )
-        elif self.bm25_store is not None and vector_chunks:
+        if self.bm25_store is not None and vector_chunks:
             bm25_lineage = None
             if lineage_recorder is not None:
                 bm25_lineage = lineage_recorder.begin_stage(
@@ -2915,6 +2893,28 @@ class IncrementalIndexer:
                     reindex_ctx=reindex_ctx, new_doc_db_id=doc_db_id,
                 )
                 raise
+        elif FULLTEXT_ENGINE == "pg_gin" and vector_chunks:
+            if lineage_recorder is not None:
+                try:
+                    bm25_lineage = lineage_recorder.begin_stage(
+                        "bm25_write", role=None, engine_type="pg_gin",
+                        metadata={
+                            "collection": getattr(
+                                self.vectordb, "_collection", ""
+                            ),
+                        },
+                    )
+                    lineage_recorder.finish_stage(
+                        bm25_lineage[0], status="success",
+                        started_at=bm25_lineage[1], input_count=len(vector_chunks),
+                        output_count=len(vector_chunks),
+                    )
+                except Exception as _e:
+                    logger.debug(f"[PG-GIN] lineage 记录跳过: {_e}")
+            logger.info(
+                f"[PG-GIN] 行级增量全文索引已生效: {len(vector_chunks)} chunks, "
+                f"{os.path.basename(file_path)}"
+            )
 
         # ── ⑨ registry（始终执行，含 metadata 用于操作日志追溯）──
         # P1-4：阻止 chunk_count=0 的"假成功"入库。
@@ -3457,8 +3457,7 @@ class IncrementalIndexer:
             self._cs().delete_by_doc_id(doc_id)
         except Exception as e:
             logger.warning(f"删除 chunk_store 失败 (doc_id={doc_id}): {e}")
-        from backend.config.rag import FULLTEXT_ENGINE
-        if FULLTEXT_ENGINE != "pg_gin" and self.bm25_store is not None:
+        if self.bm25_store is not None:
             try:
                 rebuild = getattr(
                     self.bm25_store, "rebuild_from_vectorstore", None
