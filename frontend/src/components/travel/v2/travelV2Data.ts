@@ -7,6 +7,8 @@ export const TRAVEL_PHOTOS = {
   garden: 'https://images.unsplash.com/photo-1516483638261-f4dbaf036963?auto=format&fit=crop&w=900&q=85',
   city: 'https://images.unsplash.com/photo-1519501025264-65ba15a82390?auto=format&fit=crop&w=1000&q=85',
   coast: 'https://images.unsplash.com/photo-1500375592092-40eb2168fd21?auto=format&fit=crop&w=1000&q=85',
+  beijing: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?auto=format&fit=crop&w=1000&q=85',
+  chengdu: 'https://images.unsplash.com/photo-1543852786-1cf6624b9987?auto=format&fit=crop&w=1000&q=85',
 }
 
 export interface TravelTemplate {
@@ -37,6 +39,16 @@ export const TRAVEL_TEMPLATES: TravelTemplate[] = [
     slug: 'xiamen-sea', city: '厦门', title: '厦门海风假日', duration: '3天2晚', style: '海边 · 美食',
     people: 2, budget: '约 ¥2,300/人', description: '沿海散步、逛老街，在海边留一段不赶时间的午后。',
     image: TRAVEL_PHOTOS.coast, tags: ['海岛假期', '美食路线'],
+  },
+  {
+    slug: 'beijing-heritage', city: '北京', title: '北京古都与红墙机位', duration: '2天1晚', style: '古都 · 摄影',
+    people: 2, budget: '约 ¥2,200/人', description: '景山万春亭俯瞰紫禁城全景、角楼落日机位、避坑珍宝馆、胡同漫步。',
+    image: TRAVEL_PHOTOS.beijing, tags: ['绝美机位', '避坑指南'],
+  },
+  {
+    slug: 'chengdu-chill', city: '成都', title: '成都慢调烟火漫步', duration: '2天1晚', style: '烟火 · 休闲',
+    people: 2, budget: '约 ¥1,600/人', description: '早起看熊猫花花、人民公园鹤鸣茶社盖碗茶、太古里与大慈寺古今同框。',
+    image: TRAVEL_PHOTOS.chengdu, tags: ['漫调慢游', '网红打卡'],
   },
 ]
 

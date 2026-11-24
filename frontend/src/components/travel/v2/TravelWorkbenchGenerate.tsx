@@ -22,7 +22,7 @@ import { useTypewriter } from '@/components/travel/useTypewriter'
 import { travelProcessStatusLabel } from '@/components/travel/travelRuntime'
 import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import { useTravelConversation } from '@/components/travel/useTravelConversation'
-import { TravelBottomNav, TravelTopBar } from './TravelV2Frame'
+import { TravelTopBar } from './TravelV2Frame'
 import { ToolCardBlock } from './ToolCardBlock'
 import TravelMessageMarkdown from './TravelMessageMarkdown'
 import TravelProcessInline, { travelStageLabel } from './TravelProcessInline'
@@ -182,6 +182,8 @@ export default function TravelWorkbenchGenerate({ initialPrompt = '', initialCon
 
   // 原型 ws-chatexp：放大/还原对话列宽度
   const [chatExpanded, setChatExpanded] = useState(false)
+  // 移动端视图选项卡（仅在移动端生效，桌面端三列并排）
+  const [mobileTab, setMobileTab] = useState<'chat' | 'process' | 'draft'>('chat')
   // 查询过程 · Tool 状态（原型 ws-toolev）：运行中跟随当前轮，空闲显示最近一轮
   const toolboxTools = process && process.tools.length > 0 ? process.tools : lastSettled?.tools ?? []
   const toolStatusLabel: Record<string, string> = {
@@ -206,7 +208,7 @@ export default function TravelWorkbenchGenerate({ initialPrompt = '', initialCon
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-[#f4f8fd] pb-[68px] text-[#17283f] lg:h-screen lg:min-h-0 lg:pb-0">
+    <main className="flex min-h-[100dvh] flex-col bg-[#f4f8fd] text-[#17283f] lg:h-screen lg:min-h-0">
       <div className="hidden lg:block"><TravelTopBar /></div>
       <header className="sticky top-0 z-20 flex h-[58px] shrink-0 items-center justify-between border-b border-[#e6edf5] bg-white px-4 lg:mx-3 lg:mt-3 lg:h-[64px] lg:rounded-2xl lg:border">
         <a href="/travel" aria-label="返回旅游首页" className="flex h-9 w-9 items-center justify-center rounded-full text-[#6b7f98] hover:bg-[#f3f7fc]"><ArrowLeft size={18} aria-hidden /></a>
@@ -218,9 +220,57 @@ export default function TravelWorkbenchGenerate({ initialPrompt = '', initialCon
           <span className="inline-flex items-center gap-1 rounded-full bg-[#f1f6fc] px-2.5 py-1 text-[11px] font-medium text-[#6380a0]">{loading ? '规划中' : draftPlan ? '保存中' : '描述需求'}</span>
         </div>
       </header>
+
+      {/* 移动端视图切换 Tabs（仅在 lg 以下屏幕显示，消除层叠空态遮挡输入框） */}
+      <div className="flex shrink-0 items-center justify-around border-b border-[#e6edf5] bg-white px-2 py-1.5 lg:hidden" role="tablist" aria-label="移动端工作台标签页">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileTab === 'chat'}
+          onClick={() => setMobileTab('chat')}
+          className={`flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition ${
+            mobileTab === 'chat'
+              ? 'bg-[#eff6ff] text-[#2878f5] shadow-sm'
+              : 'text-[#64748b] hover:text-[#1e293b]'
+          }`}
+        >
+          <Sparkles size={14} aria-hidden />
+          <span>AI 规划对话</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileTab === 'process'}
+          onClick={() => setMobileTab('process')}
+          className={`flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition ${
+            mobileTab === 'process'
+              ? 'bg-[#eff6ff] text-[#2878f5] shadow-sm'
+              : 'text-[#64748b] hover:text-[#1e293b]'
+          }`}
+        >
+          <span className={`h-2 w-2 rounded-full ${loading ? 'animate-ping bg-[#2878f5]' : 'bg-slate-300'}`} />
+          <span>规划过程</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileTab === 'draft'}
+          onClick={() => setMobileTab('draft')}
+          className={`flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition ${
+            mobileTab === 'draft'
+              ? 'bg-[#eff6ff] text-[#2878f5] shadow-sm'
+              : 'text-[#64748b] hover:text-[#1e293b]'
+          }`}
+        >
+          <MapPin size={14} aria-hidden />
+          <span>草稿与地图</span>
+          {draftPlan && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
+        </button>
+      </div>
+
       <div className={`grid min-h-0 flex-1 gap-3 p-3 ${chatExpanded ? 'lg:grid-cols-[minmax(260px,.6fr)_minmax(300px,.85fr)_minmax(480px,1.55fr)]' : 'lg:grid-cols-[minmax(300px,.9fr)_minmax(340px,1.15fr)_minmax(360px,1fr)]'}`}>
         {/* 左列：草稿概览 + 草稿地图 */}
-        <aside className="order-2 flex min-h-0 min-w-0 flex-col gap-3 rounded-[22px] border border-[#e4ebf4] bg-white p-3 shadow-[0_6px_24px_rgba(31,74,130,.05)] lg:order-1">
+        <aside className={`${mobileTab === 'draft' ? 'flex' : 'hidden'} lg:flex order-2 flex min-h-0 min-w-0 flex-col gap-3 rounded-[22px] border border-[#e4ebf4] bg-white p-3 shadow-[0_6px_24px_rgba(31,74,130,.05)] lg:order-1`}>
           <div className="flex items-center justify-between px-1"><div><h2 className="text-sm font-bold text-[#263b55]">行程草稿概览</h2><p className="mt-1 text-[11px] text-[#8a98aa]">生成后按天预览 · 保存后进入正式工作台</p></div><span className="rounded-full bg-[#fffbeb] px-2.5 py-1 text-[11px] font-medium text-[#b45309]">草稿</span></div>
           {brief ? (
             <>
@@ -235,15 +285,15 @@ export default function TravelWorkbenchGenerate({ initialPrompt = '', initialCon
               <div className="min-h-[220px] flex-1">{draftDocument && <TravelV2Map days={draftDocument.days} activeDayIndex={dayIndex} selectedItemId="" selectedLocation={null} onSelectItem={() => {}} />}</div>
             </>
           ) : (
-            <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[#cfdeef] bg-[#fbfdff] p-6 text-center"><div><MapPin size={22} className="mx-auto text-[#83a7d5]" aria-hidden /><p className="mt-2 text-xs font-semibold text-[#465e7a]">还没有草稿</p><p className="mt-1 text-[11px] leading-4 text-[#8a9bb0]">在右侧把目的地、天数和节奏告诉助手；<br />规划完成后这里会出现逐日草稿与地图。</p></div></div>
+            <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-[#cfdeef] bg-[#fbfdff] p-6 text-center"><div><MapPin size={22} className="mx-auto text-[#83a7d5]" aria-hidden /><p className="mt-2 text-xs font-semibold text-[#465e7a]">还没有草稿</p><p className="mt-1 text-[11px] leading-4 text-[#8a9bb0]">在对话框中告诉助手目的地、天数和节奏；<br />规划完成后这里会出现逐日草稿与地图。</p></div></div>
           )}
         </aside>
         {/* 中列：生成面板（过程行 + 逐日草稿卡 + 保存） */}
-        <section className="order-1 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)] lg:order-2">
+        <section className={`${mobileTab === 'process' ? 'flex' : 'hidden'} lg:flex order-1 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)] lg:order-2`}>
           <header className="shrink-0 border-b border-[#edf1f6] px-4 pb-3 pt-3.5"><h2 className="text-sm font-bold text-[#263b55]">正在生成新行程</h2><p className="mt-1 text-[11px] text-[#8a98aa]">边分析边生成 · 完成的阶段可折叠展开 · 生成完成自动保存</p></header>
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3" aria-live="polite">
             {loading && <div className="rounded-xl border border-[#e4ebf3] bg-[#fbfdff] px-3 py-2.5 text-xs text-[#526984]"><div className="flex items-center gap-2"><LoaderCircle size={14} className="animate-spin text-[#2878f5]" aria-hidden />{processLabel || '正在连接旅游 Agent…'}</div>{process && Object.keys(process.stages).length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(process.stages).map(([name, stage]) => <span key={name} className={`rounded-full px-2 py-1 text-[11px] ${stage.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : stage.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-white text-[#6e8097]'}`}>{travelStageLabel(name)}</span>)}</div>}{process && process.tools.length > 0 && <details open className="mt-2 rounded-xl border border-[#e4ebf3] bg-[#fbfdff] px-2.5 py-2 text-[11px] text-[#526984]"><summary className="cursor-pointer font-semibold">工具过程 · {process.tools.length} 项</summary><ul aria-label="Tool 与 Provider 状态" className="mt-1.5 space-y-1.5"><ToolProcessRows tools={process.tools.map((tool) => ({ ...tool, error: undefined }))} /></ul></details>}</div>}
-            {!loading && !draftPlan && <div className="rounded-xl border border-dashed border-[#cfdeef] bg-[#fbfdff] p-6 text-center text-xs text-[#8797aa]">把旅行想法发给右侧助手，规划过程与逐日草稿会显示在这里。</div>}
+            {!loading && !draftPlan && <div className="rounded-xl border border-dashed border-[#cfdeef] bg-[#fbfdff] p-6 text-center text-xs text-[#8797aa]">向助手描述旅行想法，规划过程与逐日草稿会显示在这里。</div>}
             {draftPlan && <section aria-label="行程草稿预览" className="rounded-2xl border border-[#cfe0f5] bg-[#f6faff] p-3">
               <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold text-[#263c57]">行程已生成 · 正在保存为正式行程，保存后可继续调整</p><span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-[#6380a0]">自动保存中</span></div>
               <section aria-label="草稿摘要" className="mt-2 rounded-xl border border-[#e2ecf7] bg-white p-3">
@@ -267,7 +317,7 @@ export default function TravelWorkbenchGenerate({ initialPrompt = '', initialCon
           </div>
         </section>
         {/* 右列：助手对话全程伴随 */}
-        <aside className="order-3 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]">
+        <aside className={`${mobileTab === 'chat' ? 'flex' : 'hidden'} lg:flex order-3 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]`}>
           <header className="shrink-0 border-b border-[#edf1f6] px-4 py-3"><div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={15} aria-hidden /></span><div><h2 className="text-sm font-bold text-[#263b55]">AI 旅行助手</h2><p className="mt-0.5 text-[11px] text-[#8a98aa]">全程伴随：澄清、调整和确认都在对话里</p></div><button type="button" onClick={() => setChatExpanded((current) => !current)} className="ml-auto shrink-0 rounded-lg bg-[#f4f7fb] px-2.5 py-1.5 text-[11px] font-medium text-[#73849a] transition hover:bg-[#eef3f9] hover:text-[#2878f5]">{chatExpanded ? '还原对话' : '放大对话'}</button></div></header>
           <div className="shrink-0 px-3 pt-3">
             {/* 原型 tp-toolbox：查询过程 · Tool 状态（运行中跟随当前轮，空闲显示最近一轮，最多 5 条） */}
@@ -321,7 +371,7 @@ export default function TravelWorkbenchGenerate({ initialPrompt = '', initialCon
             )}
             {loading && cardsForTurn(process?.runId ?? '').length > 0 && <div className="pl-11"><ToolCardBlock cards={cardsForTurn(process?.runId ?? '')} onAsk={(text) => void sendText(text)} /></div>}
           </div>
-          <form onSubmit={submit} className="shrink-0 border-t border-[#edf1f6] p-3"><label className="sr-only" htmlFor="workbench-generate-input">描述旅行需求</label><div className="flex items-end gap-2 rounded-2xl border border-[#dfe8f3] bg-[#fbfdff] p-2 focus-within:border-[#99bdfa] focus-within:ring-4 focus-within:ring-[#2878f5]/[.08]"><textarea id="workbench-generate-input" aria-label="描述旅行需求" rows={2} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {
+          <form onSubmit={submit} className="shrink-0 border-t border-[#edf1f6] bg-white p-3 pb-[calc(env(safe-area-inset-bottom,0px)+0.75rem)]"><label className="sr-only" htmlFor="workbench-generate-input">描述旅行需求</label><div className="flex items-end gap-2 rounded-2xl border border-[#dfe8f3] bg-[#fbfdff] p-2 focus-within:border-[#99bdfa] focus-within:ring-4 focus-within:ring-[#2878f5]/[.08]"><textarea id="workbench-generate-input" aria-label="描述旅行需求" rows={2} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {
             // 聊天惯例：Enter 即发送、Shift+Enter 换行；输入法组词中的回车是选词，不发送
             if (event.key !== 'Enter' || event.shiftKey) return
             if ((event.nativeEvent as KeyboardEvent).isComposing) return
@@ -330,7 +380,6 @@ export default function TravelWorkbenchGenerate({ initialPrompt = '', initialCon
           }} disabled={loading || writeFeedback?.status === 'UNKNOWN'} placeholder="描述目的地、天数、同行人和节奏…（Enter 发送，Shift+Enter 换行）" className="max-h-32 min-h-11 flex-1 resize-none bg-transparent px-2 py-2 text-xs leading-5 text-[#344b67] outline-none placeholder:text-[#9aa8b8] disabled:opacity-60" /><button type="submit" aria-label="发送消息" disabled={!draft.trim() || loading || writeFeedback?.status === 'UNKNOWN'} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2878f5] text-white transition hover:bg-[#1769e9] disabled:cursor-not-allowed disabled:bg-[#c7d7ed]"><Send size={16} aria-hidden /></button></div><p className="mt-2 px-1 text-[11px] text-[#9aa8b8]">消息提交至旅游 Agent · 新行程仅在服务端确认后创建</p></form>
         </aside>
       </div>
-      <TravelBottomNav active="home" />
     </main>
   )
 }
