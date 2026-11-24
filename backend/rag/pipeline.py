@@ -496,6 +496,26 @@ class RAGPipeline:
         self.chunk_retriever = CustomRetriever(self.vectordb)
         read_only = getattr(self, "mode", "index") in {"runtime", "evaluation"}
 
+        from backend.config.rag import FULLTEXT_ENGINE
+        if FULLTEXT_ENGINE == "pg_gin":
+            from backend.rag.retrieval.pg_fulltext_retriever import PGFullTextRetriever
+            col = str(
+                getattr(self.vectordb, "_collection", None)
+                or getattr(self.vectordb, "_collection_name", None)
+                or "chroma"
+            )
+            self.bm25 = PGFullTextRetriever(collection=col, k=BM25_CANDIDATE_K)
+            self.bm25_store = None
+            logger.info(f"[RAG] 启用 PostgreSQL GIN 毫秒级增量全文检索 (collection={col})")
+        else:
+            self._init_legacy_bm25_retriever(read_only=read_only)
+
+        # 人名索引只存 doc_id，不存正文；启动时构建一次可避免首次查询才付出
+        # doc_db 全量读取成本。命中后仍会经过 Stage 2 授权、过滤和 Evidence Gate。
+        self.person_index = self._build_person_index()
+
+    def _init_legacy_bm25_retriever(self, read_only: bool = False) -> None:
+        """旧版单机 rank_bm25 + pickle 持久化初始化逻辑。"""
         # BM25: 优先从磁盘加载持久化索引，避免每次启动重建
         bm25_store = BM25Store(getattr(self, "evaluation_bm25_dir", None))
         self.bm25_store = bm25_store  # 保留 store 引用，供删除/重索引时更新
@@ -637,10 +657,6 @@ class RAGPipeline:
                 f"[RAG] BM25 索引从磁盘加载成功 "
                 f"({bm25_store.doc_count()} 文档, hash={bm25_store.get_content_hash()})，跳过重建"
             )
-
-        # 人名索引只存 doc_id，不存正文；启动时构建一次可避免首次查询才付出
-        # doc_db 全量读取成本。命中后仍会经过 Stage 2 授权、过滤和 Evidence Gate。
-        self.person_index = self._build_person_index()
 
         if ENABLE_MEMORY:
             from backend.memory import memory_manager

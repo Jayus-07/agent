@@ -430,6 +430,24 @@ class PgVectorKnowledgeStore(KnowledgeStore):
                     f"CREATE INDEX IF NOT EXISTS idx_{t}_scope ON {t} (collection, doc_id)")
                 cur.execute(
                     f"CREATE INDEX IF NOT EXISTS idx_{t}_meta ON {t} USING gin (metadata)")
+                # 全文倒排索引支持（行级毫秒增量检索）
+                cur.execute(f"""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns 
+                            WHERE table_name = '{t}' AND column_name = 'tsv_content'
+                        ) THEN
+                            ALTER TABLE {t} ADD COLUMN tsv_content tsvector;
+                        END IF;
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_indexes 
+                            WHERE tablename = '{t}' AND indexname = 'idx_{t}_tsv'
+                        ) THEN
+                            CREATE INDEX idx_{t}_tsv ON {t} USING gin (tsv_content);
+                        END IF;
+                    END $$;
+                """)
                 # 索引级 embedding 元数据表（写入/查询两侧都要）
                 _ensure_meta_table(conn)
             _DDL_DONE.add(self._table)
@@ -497,15 +515,16 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             psycopg2.extras.execute_values(
                 conn.cursor(),
                 f"""INSERT INTO {self._table}
-                       (id, collection, doc_id, content, metadata, embedding)
+                       (id, collection, doc_id, content, metadata, embedding, tsv_content)
                    VALUES %s
                    ON CONFLICT (id) DO UPDATE SET
-                       doc_id     = EXCLUDED.doc_id,
-                       content    = EXCLUDED.content,
-                       metadata   = EXCLUDED.metadata,
-                       embedding  = EXCLUDED.embedding""",
+                       doc_id      = EXCLUDED.doc_id,
+                       content     = EXCLUDED.content,
+                       metadata    = EXCLUDED.metadata,
+                       embedding   = EXCLUDED.embedding,
+                       tsv_content = EXCLUDED.tsv_content""",
                 rows,
-                template="(%s, %s, %s, %s, %s::jsonb, %s)",
+                template="(%s, %s, %s, %s, %s::jsonb, %s, to_tsvector('simple', %s))",
                 page_size=500,
             )
         return len(rows)
@@ -776,6 +795,10 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             meta["embedding_model"] = identity["model"]
             meta["embedding_fingerprint"] = identity["revision"]
             rid = explicit_ids[i] if explicit_ids else self._static_id(meta, text, i)
+            # 生成结巴分词空格序列供 PostgreSQL simple tsvector 使用
+            import jieba
+            words = list(jieba.cut_for_search(str(text or "")[:10000]))
+            tsv_text = " ".join(w.strip() for w in words if w.strip())
             rows.append((
                 rid,
                 self._collection,
@@ -783,6 +806,7 @@ class PgVectorKnowledgeStore(KnowledgeStore):
                 text,
                 json.dumps(meta, ensure_ascii=False),
                 np.asarray(embeddings[i], dtype=np.float32),
+                tsv_text,
             ))
         return rows
 
