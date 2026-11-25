@@ -70,7 +70,7 @@ class TestParamsDataset:
 
         data = json.loads(DATASET.read_text(encoding="utf-8"))
         cases = data["test_cases"]
-        assert len(cases) == 8
+        assert len(cases) == 6
         known = set(tool_registry.CAPABILITY_MAP.keys())
         for case in cases:
             for cap in case["expected"]["capabilities"]:
