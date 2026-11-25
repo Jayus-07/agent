@@ -269,6 +269,19 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     expect(Array.from(c.querySelectorAll('button')).some((b) => b.textContent?.includes('确认退款'))).toBe(false)
   })
 
+  it('沙箱退款确认卡说明只更新审核记录，钱包余额不变', async () => {
+    cs2Api.fetchPendingSnapshot.mockResolvedValueOnce({
+      proposal_id: 'p-sandbox', version: 1, action_type: 'refund_request',
+      masked_target: '订单', summary: '提交退款申请', reason: '专用验收',
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      state: 'pending', confirmable: true, refund_review_mode: 'sandbox',
+    })
+    const c = await mount()
+    await openConversation(c, '退款咨询')
+    expect(c.textContent).toContain('审核只更新申请记录，钱包余额不变')
+    expect(c.textContent).not.toContain('货款自动退回账户余额')
+  })
+
   it('「发订单给客服」chip 打开订单抽屉，点发送带结构化文本走既有通道', async () => {
     const c = await mount()
     const chip = Array.from(c.querySelectorAll('[aria-label="快捷入口"] button')).find(
