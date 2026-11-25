@@ -15,6 +15,8 @@ from typing import Any
 from backend.observability.tracer import trace_collector
 from backend.shared.logger import logger
 
+DOC_LEVEL_TEXT_MAX_CHARS = 16000
+
 
 # ============================================================
 # 阶段产物 dataclass

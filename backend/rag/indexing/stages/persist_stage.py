@@ -19,7 +19,8 @@ from typing import Any
 
 from langchain_core.documents import Document
 
-from backend.config.rag import BM25_CANDIDATE_K, DOC_LEVEL_TEXT_MAX_CHARS
+from backend.config.rag import BM25_CANDIDATE_K
+from backend.rag.indexing.stages.contracts import DOC_LEVEL_TEXT_MAX_CHARS
 from backend.observability.tracer import trace_collector, SpanKind
 from backend.rag.indexing.processing_lineage import ModelIdentity
 from backend.rag.indexing.stages.enrich_stage import select_vector_chunks

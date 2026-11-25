@@ -18,7 +18,7 @@ from typing import Any, Mapping
 
 from langchain_core.documents import Document
 
-from backend.config.rag import DOC_LEVEL_TEXT_MAX_CHARS
+from backend.rag.indexing.stages.contracts import DOC_LEVEL_TEXT_MAX_CHARS
 from backend.observability.tracer import trace_collector, SpanKind
 from backend.rag.indexing.stages.embedding_stage import EmbeddingStage
 from backend.rag.indexing.stages.filter_stage import mask_index_text_for_pii
