@@ -183,11 +183,23 @@ def test_index_file_inner_uses_kb_id_param_not_self():
 
     缺陷 H 根因：doc_meta["kb_id"] 用了 self.kb_id（默认 "default"），
     覆盖了 _index_file 派生的 kb_id，导致所有文档 kb_id 变成 "default"。
+    重构为 Pipeline 模式后：
+    1. _index_file_inner 将 kb_id 参数透传给 pipeline.run(..., kb_id=kb_id)；
+    2. pipeline.run 中构建 doc_meta 严格使用 kb_id 参数而非 self.indexer.kb_id。
     """
-    source = inspect.getsource(IncrementalIndexer._index_file_inner)
-    assert '"kb_id": kb_id' in source, (
-        "_index_file_inner 的 doc_meta 未用 kb_id 参数，kb 隔离会失效"
+    inner_source = inspect.getsource(IncrementalIndexer._index_file_inner)
+    assert "kb_id=kb_id" in inner_source or '"kb_id": kb_id' in inner_source, (
+        "_index_file_inner 未将 kb_id 参数传给 pipeline，kb 隔离会失效"
     )
-    assert '"kb_id": self.kb_id' not in source, (
+    assert "kb_id=self.kb_id" not in inner_source and '"kb_id": self.kb_id' not in inner_source, (
         "_index_file_inner 仍用 self.kb_id，覆盖了派生值"
+    )
+
+    from backend.rag.indexing.stages.pipeline import IndexingPipeline
+    pipe_source = inspect.getsource(IndexingPipeline.run)
+    assert '"kb_id": kb_id' in pipe_source, (
+        "IndexingPipeline.run 的 doc_meta 未用 kb_id 参数"
+    )
+    assert '"kb_id": self.indexer.kb_id' not in pipe_source, (
+        "IndexingPipeline.run 误用 self.indexer.kb_id 覆盖了派生值"
     )
