@@ -101,11 +101,21 @@ export function useAgentSocket(
             seqRef.current = seq
             setLastSeq(seq)
           }
+          const envelopePayload = Object.fromEntries(
+            Object.entries(data).filter(
+              ([key]) => !['type', 'event_id', 'seq', 'ts', 'payload'].includes(key),
+            ),
+          )
+          const nestedPayload =
+            data.payload && typeof data.payload === 'object' && !Array.isArray(data.payload)
+              ? (data.payload as Record<string, unknown>)
+              : {}
           eventRef.current({
             type,
             seq,
             eventId: typeof data.event_id === 'string' ? data.event_id : undefined,
-            payload: (data.payload ?? {}) as Record<string, unknown>,
+            // AgentHub 将业务字段平铺在信封中；兼容已有嵌套 payload 帧。
+            payload: { ...envelopePayload, ...nestedPayload },
             ts: typeof data.ts === 'string' ? data.ts : undefined,
           })
         } catch {

@@ -69,8 +69,28 @@ def generate_sql(question: str, table_names: list, feedback: str | None = None) 
         "sql.generator", table_info=table_info, question=generation_question,
     )
 
+    invoke_kwargs: dict = {}
     try:
-        resp = llm.invoke(r.text)
+        from backend.infra.llm.models import supports_thinking_flag, thinking_disabled_extra_body
+        from backend.infra.llm.proxy import get_active_model_name
+
+        active_model = get_active_model_name()
+        if supports_thinking_flag(active_model):
+            extra_body = thinking_disabled_extra_body(active_model)
+            if extra_body is not None:
+                invoke_kwargs["extra_body"] = extra_body
+                invoke_kwargs["temperature"] = 0.0
+    except Exception as e:
+        logger.debug(f"[SQLGen] thinking 参数解析异常（降级常规调用）: {e}")
+
+    try:
+        if invoke_kwargs:
+            try:
+                resp = llm.invoke(r.text, **invoke_kwargs)
+            except TypeError:
+                resp = llm.invoke(r.text)
+        else:
+            resp = llm.invoke(r.text)
         sql = resp.content.strip()
 
         # 去除可能的 markdown 标记

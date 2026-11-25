@@ -373,6 +373,7 @@ async def list_tenant_agents(context: AgentContext = Depends(require_agent)):
                         CSAgent.skill,
                         CSAgent.status,
                         CSAgent.accepting,
+                        CSAgent.available,
                     )
                     .where(
                         CSAgent.tenant_id == context.tenant_id,
@@ -392,7 +393,10 @@ async def list_tenant_agents(context: AgentContext = Depends(require_agent)):
                 "skill": r.skill,
                 "status": r.status,
                 "accepting": bool(r.accepting),
-                "transferable": (r.status or "online") in ("online", "busy"),
+                "transferable": (
+                    bool(r.available and r.accepting)
+                    and r.status in ("online", "busy")
+                ),
             }
             for r in rows
         ],

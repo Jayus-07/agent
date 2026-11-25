@@ -376,14 +376,21 @@ async def reassign_handoff(
     # 目标坐席校验：同租户、启用、可接单（最后取锁，保持锁序约定）。
     target_agent = None
     if target is not None:
-        target_agent = await repository.lock_least_loaded_agent(
-            session,
-            tenant_id=tenant_id,
-            online_agent_ids=[target],
-            now=now,
+        target_agent = await repository.find_agent_for_update(
+            session, tenant_id=tenant_id, agent_id=target,
         )
-        if target_agent is None:
-            raise ReassignConflict("目标坐席不存在、未启用或不可接单")
+        if target_agent is None or not target_agent.enabled:
+            raise ReassignConflict("目标坐席不存在或未启用")
+        if (
+            not target_agent.available or not target_agent.accepting
+            or target_agent.status in ("away", "offline")
+        ):
+            raise ReassignConflict("目标坐席当前不可接单")
+        active_count = await repository.count_other_active_assignments(
+            session, tenant_id=tenant_id, agent_id=target, handoff_id=handoff_id,
+        )
+        if active_count >= target_agent.max_conversations:
+            raise ReassignConflict("目标坐席已达到同时接单上限")
 
     for assignment in await repository.lock_active_assignments_for_handoff(
         session, tenant_id=tenant_id, handoff_id=handoff_id

@@ -155,33 +155,24 @@ async def _build_timeout_ticket(
     tenant_id: str,
     handoff,
     now: datetime,
-) -> tuple[str | None, str]:
-    """超时关单时登记留言工单。返回 (ticket_id, 诉求摘要)；失败返回 (None, 降级摘要)。
-
-    与关单同事务提交：工单缺席时 closed_reason 退回「保留会话记录」旧话术，
-    保证两态一致（有单必有号，无号不承诺）。
-    """
+) -> tuple[str, str]:
+    """在关单事务中登记工单，数据库写入失败时由调用方回滚并重试。"""
     from backend.customer_service.models.message import CSMessage
     from backend.customer_service.models.ticket import CSTicket
 
-    user_texts: list[str] = []
-    try:
-        rows = (
-            await session.execute(
-                select(CSMessage)
-                .where(
-                    CSMessage.conversation_id == handoff.conversation_id,
-                    CSMessage.sender_type == "user",
-                    CSMessage.private.is_(False),
-                )
-                .order_by(CSMessage.created_at.desc())
-                .limit(8)
+    rows = (
+        await session.execute(
+            select(CSMessage)
+            .where(
+                CSMessage.conversation_id == handoff.conversation_id,
+                CSMessage.sender_type == "user",
+                CSMessage.private.is_(False),
             )
-        ).scalars().all()
-        user_texts = [r.content for r in reversed(rows) if r.content]
-    except Exception as e:
-        # 会话原文读不到（如测试假 session/读库抖动）不阻塞关单——降级摘要兜底
-        logger.warning(f"[Reaper] 超时工单读取会话原文失败: {e}")
+            .order_by(CSMessage.created_at.desc())
+            .limit(8)
+        )
+    ).scalars().all()
+    user_texts = [row.content for row in reversed(rows) if row.content]
     fallback = "；".join(t[:60] for t in user_texts[-3:]) or "用户请求人工服务（会话原文缺失）"
 
     # handoffs.priority 是宽松字符串域（"medium"/"P2"/历史 int），收敛到
@@ -193,44 +184,40 @@ async def _build_timeout_ticket(
     if ticket_priority not in ("low", "medium", "high", "critical"):
         ticket_priority = "medium"
 
+    ticket_id = f"GD-{now:%Y%m%d}-{secrets.token_hex(2).upper()}"
+    # 超时配置统一（2026-11-23 定案）：文案读 handoff 行的实际 deadline
+    # 差值（单一事实源），不再读本容器 env——deadline 由 app 写入，此前
+    # dispatcher env=120 与实际 30s 漂移，工单文案误导用户与坐席。
+    waited_seconds = CS_HANDOFF_TIMEOUT_SECONDS
     try:
-        ticket_id = f"GD-{now:%Y%m%d}-{secrets.token_hex(2).upper()}"
-        # 超时配置统一（2026-11-23 定案）：文案读 handoff 行的实际 deadline
-        # 差值（单一事实源），不再读本容器 env——deadline 由 app 写入，此前
-        # dispatcher env=120 与实际 30s 漂移，工单文案误导用户与坐席。
-        waited_seconds = CS_HANDOFF_TIMEOUT_SECONDS
-        try:
-            if handoff.total_deadline_at and handoff.created_at:
-                waited_seconds = max(1, round(
-                    (handoff.total_deadline_at - handoff.created_at).total_seconds(),
-                ))
-        except (TypeError, ValueError):
-            pass
-        title = f"人工超时留言：{fallback[:60]}"
-        footer = f"（会话 {handoff.conversation_id}，等待人工 {waited_seconds}s 无人接入）"
-        description = f"[超时降级] {fallback}\n{footer}"
-        session.add(CSTicket(
-            ticket_id=ticket_id,
-            tenant_id=tenant_id,
-            type="handoff",
-            status="open",
-            source="ai",
-            conversation_id=str(handoff.conversation_id),
-            user_id=str(handoff.user_id or ""),
-            handoff_id=str(handoff.handoff_id),
-            priority=ticket_priority,
-            title=title,
-            description=description,
-        ))
-        await session.flush()
-        if user_texts:
-            session.info.setdefault(_SUMMARY_JOBS, []).append(
-                TimeoutSummary(ticket_id, tenant_id, user_texts, title, description, footer)
-            )
-        return ticket_id, fallback
-    except Exception as e:
-        logger.warning(f"[Reaper] 超时留言工单创建失败（关单继续）: {e}")
-        return None, fallback
+        if handoff.total_deadline_at and handoff.created_at:
+            waited_seconds = max(1, round(
+                (handoff.total_deadline_at - handoff.created_at).total_seconds(),
+            ))
+    except (TypeError, ValueError):
+        pass
+    title = f"人工超时留言：{fallback[:60]}"
+    footer = f"（会话 {handoff.conversation_id}，等待人工 {waited_seconds}s 无人接入）"
+    description = f"[超时降级] {fallback}\n{footer}"
+    session.add(CSTicket(
+        ticket_id=ticket_id,
+        tenant_id=tenant_id,
+        type="handoff",
+        status="open",
+        source="ai",
+        conversation_id=str(handoff.conversation_id),
+        user_id=str(handoff.user_id or ""),
+        handoff_id=str(handoff.handoff_id),
+        priority=ticket_priority,
+        title=title,
+        description=description,
+    ))
+    await session.flush()
+    if user_texts:
+        session.info.setdefault(_SUMMARY_JOBS, []).append(
+            TimeoutSummary(ticket_id, tenant_id, user_texts, title, description, footer)
+        )
+    return ticket_id, fallback
 
 
 def _terminal_reason(handoff, now: datetime) -> str | None:
@@ -295,15 +282,10 @@ async def _close_handoff(
         ticket_id, request_summary = await _build_timeout_ticket(
             session, tenant_id=tenant_id, handoff=handoff, now=now,
         )
-        if ticket_id:
-            handoff.closed_reason = (
-                f"total_deadline:人工坐席繁忙，已登记留言工单 {ticket_id}，"
-                f"客服 24 小时内回访"
-            )
-        else:
-            handoff.closed_reason = (
-                "total_deadline:人工坐席繁忙，已为您保留会话记录，客服稍后会主动联系您"
-            )
+        handoff.closed_reason = (
+            f"total_deadline:人工坐席繁忙，已登记留言工单 {ticket_id}，"
+            f"客服 24 小时内回访"
+        )
     else:
         handoff.closed_reason = f"{reason}:超时未接单，已恢复 AI 服务"
     handoff.closed_at = now
@@ -317,58 +299,42 @@ async def _close_handoff(
         conversation.handling_mode = "ai"
         conversation.assigned_agent_id = None
         conversation.updated_at = now
-        if reason == REASON_TOTAL_DEADLINE and ticket_id:
-            # 用户可见的工单通知（此前 notify_user 只改状态无消息，用户
-            # 看不到任何话术——B 案补上真实消息落库）。通知写失败不阻塞
-            # 关单（状态变更已在 handoff 行上，用户端仍能看到终态）。
-            try:
-                from backend.customer_service.managers.message_manager import (
-                    MessageManager,
-                )
+        if ticket_id:
+            from sqlalchemy import text
 
-                # 回访联系方式（2026-10-08 拍板）：注册手机号打码带出供
-                # 用户确认；未登记则引导补号码。查询失败按未登记处理。
-                masked_phone = ""
-                try:
-                    from sqlalchemy import text as _text
+            from backend.customer_service.managers.message_manager import MessageManager
 
-                    row = (
-                        await session.execute(
-                            _text(
-                                "SELECT phone FROM auth.users "
-                                "WHERE id::text = :uid LIMIT 1"
-                            ),
-                            {"uid": str(handoff.user_id or "")},
-                        )
-                    ).first()
-                    raw_phone = str(row[0] or "") if row else ""
-                    if len(raw_phone) == 11:
-                        masked_phone = f"{raw_phone[:3]}****{raw_phone[7:]}"
-                except Exception:
-                    masked_phone = ""
-                if masked_phone:
-                    contact_line = (
-                        f"⏱ 客服将在 24 小时内回访。回访手机号是 {masked_phone} 吗？"
-                        f"（回复「可以」，或直接发我正确的号码）"
-                    )
-                else:
-                    contact_line = (
-                        "⏱ 客服将在 24 小时内回访。如需电话回访，"
-                        "请直接回复您的手机号。"
-                    )
-                notice = (
-                    f"很抱歉，人工坐席暂时都无法接入。已为您整理工单：\n"
-                    f"📋 工单号：{ticket_id}\n"
-                    f"💬 诉求：{request_summary}\n"
-                    f"{contact_line}\n"
-                    f"您也可以继续问我其他问题～"
+            row = (
+                await session.execute(
+                    text("SELECT phone FROM auth.users WHERE id::text = :uid LIMIT 1"),
+                    {"uid": str(handoff.user_id or "")},
                 )
-                await MessageManager(session).create(
-                    str(handoff.conversation_id), notice, sender_type="system",
-                    metadata={"kind": "handoff_timeout_ticket", "ticket_id": ticket_id},
+            ).first()
+            raw_phone = str(row[0] or "") if row else ""
+            masked_phone = (
+                f"{raw_phone[:3]}****{raw_phone[7:]}" if len(raw_phone) == 11 else ""
+            )
+            if masked_phone:
+                contact_line = (
+                    f"⏱ 客服将在 24 小时内回访。回访手机号是 {masked_phone} 吗？"
+                    f"（回复「可以」，或直接发我正确的号码）"
                 )
-            except Exception as e:  # noqa: BLE001 — 通知是增强，不是关单的前置
-                logger.warning(f"[Reaper] 超时工单通知消息写入失败: {e}")
+            else:
+                contact_line = (
+                    "⏱ 客服将在 24 小时内回访。如需电话回访，"
+                    "请直接回复您的手机号。"
+                )
+            notice = (
+                f"很抱歉，人工坐席暂时都无法接入。已为您整理工单：\n"
+                f"📋 工单号：{ticket_id}\n"
+                f"💬 诉求：{request_summary}\n"
+                f"{contact_line}\n"
+                f"您也可以继续问我其他问题～"
+            )
+            await MessageManager(session).create(
+                str(handoff.conversation_id), notice, sender_type="system",
+                metadata={"kind": "handoff_timeout_ticket", "ticket_id": ticket_id},
+            )
 
     outbox.append_event(
         session,
@@ -526,43 +492,66 @@ async def reap_expired_offers(
     )
 
 
+async def close_overdue_waiting_handoff(
+    session: AsyncSession,
+    *,
+    tenant_id: str,
+    handoff_id: str,
+    conversation_id: str,
+    now: datetime,
+):
+    """按统一锁序关单，锁内复核等待状态与期限。"""
+    conversation = await repository.lock_conversation(
+        session, tenant_id=tenant_id, conversation_id=conversation_id,
+    )
+    if conversation is None:
+        return None
+
+    handoff = await repository.lock_overdue_waiting_handoff(
+        session, tenant_id=tenant_id, handoff_id=handoff_id, now=now,
+    )
+    if handoff is None or handoff.conversation_id != conversation_id:
+        return None
+
+    await _close_handoff(
+        session, tenant_id=tenant_id, handoff=handoff, conversation=conversation,
+        reason=REASON_TOTAL_DEADLINE, now=now,
+    )
+    return handoff
+
+
 async def reap_overdue_waiting(
     session: AsyncSession,
     *,
     now: datetime,
     limit: int,
+    closed_items: list[dict] | None = None,
 ) -> ReapResult:
-    """关闭超过总等待期的排队工单（P6 只跳过、不关闭的 Q5 终态）。"""
+    """关闭超过总等待期的排队工单。"""
     candidates = await repository.list_overdue_waiting_candidates(
         session, now=now, limit=limit
     )
-    closed = contended = 0
+    closed = 0
 
     for tenant_id, handoff_id, conversation_id in candidates:
-        conversation = await repository.lock_conversation(
-            session, tenant_id=tenant_id, conversation_id=conversation_id
-        )
-        if conversation is None:
-            contended += 1
-            continue
-
-        handoff = await repository.lock_overdue_waiting_handoff(
-            session, tenant_id=tenant_id, handoff_id=handoff_id, now=now
+        handoff = await close_overdue_waiting_handoff(
+            session, tenant_id=tenant_id, handoff_id=handoff_id,
+            conversation_id=conversation_id, now=now,
         )
         if handoff is None:
-            contended += 1
             continue
-        await _close_handoff(
-            session,
-            tenant_id=tenant_id,
-            handoff=handoff,
-            conversation=conversation,
-            reason=REASON_TOTAL_DEADLINE,
-            now=now,
-        )
         closed += 1
+        if closed_items is not None:
+            closed_items.append({
+                "handoff_id": handoff_id,
+                "user_id": handoff.user_id,
+                "conversation_id": conversation_id,
+                "handoff_state": handoff.handoff_state,
+            })
 
-    return ReapResult(scanned=len(candidates), closed=closed, contended=contended)
+    return ReapResult(
+        scanned=len(candidates), closed=closed, contended=len(candidates) - closed,
+    )
 
 
 async def reap_stale_human_active(

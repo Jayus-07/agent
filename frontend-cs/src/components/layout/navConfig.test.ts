@@ -86,10 +86,10 @@ describe('visibleNav — 角色过滤（2026-09-21 csRole 接线）', () => {
     expect(visibleNav()).toEqual([])
   })
 
-  it('坐席（agent）→ 可见工作台/会话管理/工单管理/质检中心/知识助手，不可见退款审核与数据看板', () => {
+  it('普通坐席可见工作台、会话管理、质检中心和知识助手', () => {
     loginAs({ roles: ['viewer', 'agent'], platformRole: 'viewer', csRole: 'agent' })
     const labels = visibleNav().map((e) => e.label)
-    expect(labels).toEqual(['工作台', '会话管理', '工单管理', '质检中心', '知识助手'])
+    expect(labels).toEqual(['工作台', '会话管理', '质检中心', '知识助手'])
   })
 
   it('客服主管（supervisor）→ 七项全可见', () => {
