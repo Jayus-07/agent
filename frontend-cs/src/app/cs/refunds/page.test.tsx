@@ -62,6 +62,19 @@ async function mount() {
 }
 
 describe('Cs2RefundsPage（P5 退款审核）', () => {
+  it('沙箱只提示更新审核记录，使用通过审核按钮', async () => {
+    const queue = await api.listRefundQueue()
+    api.listRefundQueue.mockResolvedValueOnce({ ...queue, mode: 'sandbox' })
+    const c = await mount()
+    const row = Array.from(c.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('RA-P5A0001'),
+    )
+    await act(async () => { row?.click() })
+    expect(c.textContent).toContain('审核操作只更新申请记录，用户钱包余额不变')
+    expect(c.textContent).toContain('通过审核')
+    expect(c.textContent).not.toContain('通过并退款')
+  })
+
   it('渲染队列两行与状态徽章；终态行详情显示审核记录', async () => {
     const c = await mount()
     await act(async () => {})

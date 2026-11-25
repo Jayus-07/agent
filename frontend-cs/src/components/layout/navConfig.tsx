@@ -51,7 +51,7 @@ export interface NavEntry {
 export const NAV: NavEntry[] = [
   { icon: <LayoutDashboard size={18} />, label: '工作台', path: '/cs/workspace', minCsRole: 'agent' },
   { icon: <MessagesSquare size={18} />, label: '会话管理', path: '/cs/conversations', minCsRole: 'agent' },
-  { icon: <TicketCheck size={18} />, label: '工单管理', path: '/cs/tickets', minCsRole: 'agent' },
+  { icon: <TicketCheck size={18} />, label: '工单管理', path: '/cs/tickets', minCsRole: 'supervisor' },
   { icon: <CircleDollarSign size={18} />, label: '退款审核', path: '/cs/refunds', minCsRole: 'supervisor' },
   { icon: <ClipboardCheck size={18} />, label: '质检中心', path: '/cs/qa', minCsRole: 'agent' },
   { icon: <BarChart3 size={18} />, label: '数据看板', path: '/cs/dashboard', minCsRole: 'supervisor' },

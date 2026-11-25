@@ -18,7 +18,8 @@ from backend.config.rag import (
     EMBED_RETRY_BACKOFF_MAX,
 )
 from backend.infra.llm.budget import RequestBudgetExceeded
-from backend.observability.tracer import trace_collector, SpanKind
+from backend.observability.tracer import SpanKind
+from backend.rag.indexing.stages.contracts import trace_collector
 from backend.shared.logger import logger
 
 

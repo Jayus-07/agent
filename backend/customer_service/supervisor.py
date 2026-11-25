@@ -1021,26 +1021,34 @@ def _recover_handoff_timeout(state: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     user_id = state.get("user_id", "")
-    session_id = state.get("session_id", "default")
+    conversation_id = state.get("conversation_id")
+    if not conversation_id:
+        return None
     store = get_handoff_store()
-    active = store.get_active_handoff(user_id)
+    active = store.load(user_id, conversation_id)
     if not active:
         return None
 
+    now = datetime.now(timezone.utc)
     stamp = active.get("updated_at") or active.get("created_at")
     if not stamp:
         return None
     try:
-        age = datetime.now(timezone.utc) - datetime.fromisoformat(stamp)
+        age = now - datetime.fromisoformat(stamp)
+        deadline = active.get("total_deadline_at")
+        overdue = (
+            datetime.fromisoformat(deadline) <= now
+            if deadline else age.total_seconds() >= CS_HANDOFF_TIMEOUT_SECONDS
+        )
     except (ValueError, TypeError):
         return None
-    if age.total_seconds() < CS_HANDOFF_TIMEOUT_SECONDS:
+    if not overdue or not store.close_overdue_waiting(active, now=now):
         return None
 
-    store.clear(user_id, session_id)
+    store.invalidate(user_id, conversation_id)
     logger.warning(
-        "[CS Supervisor] 人工接入超时 (%.0fs >= %ds)，回退 AI 服务: user=%s",
-        age.total_seconds(), CS_HANDOFF_TIMEOUT_SECONDS, user_id,
+        "[CS Supervisor] 人工接入期限已到，回退 AI 服务: user=%s conv=%s",
+        user_id, conversation_id,
     )
     audit_entry = build_audit_entry(
         user_id=user_id or "anonymous",
@@ -1049,7 +1057,7 @@ def _recover_handoff_timeout(state: dict[str, Any]) -> dict[str, Any] | None:
         target_type="handoff",
         target_id=str(active.get("ticket_id", "")),
         detail=f"handoff timeout after {int(age.total_seconds())}s, recovered to ai_active",
-        conversation_id=state.get("conversation_id", ""),
+        conversation_id=conversation_id,
     )
     return {
         "handoff_state": "ai_active",

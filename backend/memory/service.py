@@ -415,11 +415,27 @@ class MemoryService:
                         embedding_span = trace_collector.start_span(
                             "memory.embedding_query", name="记忆检索向量化", type="embedding")
                         embedding_started = time.perf_counter()
+                        emb = None
                         try:
-                            emb = await _embed_query_off_loop(
-                                l3.embedding, l3_query,
-                                user_id=user_id, tenant_id=tenant_id,
+                            emb = await asyncio.wait_for(
+                                _embed_query_off_loop(
+                                    l3.embedding, l3_query,
+                                    user_id=user_id, tenant_id=tenant_id,
+                                ),
+                                timeout=float(os.getenv("MEMORY_L3_EMBED_TIMEOUT", "0.8")),
                             )
+                        except (asyncio.TimeoutError, TimeoutError):
+                            trace_collector.end_span(
+                                embedding_span,
+                                status="cancelled",
+                                metrics={
+                                    "elapsed_ms": round(
+                                        (time.perf_counter() - embedding_started) * 1000, 1,
+                                    ),
+                                    "error_type": "TimeoutError",
+                                },
+                            )
+                            logger.info("[MemoryService] L3 记忆向量化耗时超过 0.8s，快速降级跳过 L3")
                         except BaseException as exc:
                             trace_collector.end_span(
                                 embedding_span,
@@ -439,36 +455,39 @@ class MemoryService:
                                     (time.perf_counter() - embedding_started) * 1000, 1,
                                 )},
                             )
-                        candidates_span = trace_collector.start_span(
-                            "memory.retrieve_candidates", name="记忆候选检索", type="retrieval")
-                        candidates_started = time.perf_counter()
-                        try:
-                            retrieved = await retriever.retrieve(
-                                l3_query, emb, user_id, tenant_id=tenant_id,
-                                domain=domain, product=product,
-                            )
-                        except BaseException as exc:
-                            trace_collector.end_span(
-                                candidates_span,
-                                status="cancelled" if isinstance(exc, asyncio.CancelledError) else "error",
-                                metrics={
-                                    "elapsed_ms": round(
-                                        (time.perf_counter() - candidates_started) * 1000, 1,
-                                    ),
-                                    "error_type": type(exc).__name__,
-                                },
-                            )
-                            raise
-                        else:
-                            trace_collector.end_span(
-                                candidates_span,
-                                metrics={
-                                    "elapsed_ms": round(
-                                        (time.perf_counter() - candidates_started) * 1000, 1,
-                                    ),
-                                    **dict(retriever.last_stage_counts),
-                                },
-                            )
+
+                        retrieved = []
+                        if emb is not None:
+                            candidates_span = trace_collector.start_span(
+                                "memory.retrieve_candidates", name="记忆候选检索", type="retrieval")
+                            candidates_started = time.perf_counter()
+                            try:
+                                retrieved = await retriever.retrieve(
+                                    l3_query, emb, user_id, tenant_id=tenant_id,
+                                    domain=domain, product=product,
+                                )
+                            except BaseException as exc:
+                                trace_collector.end_span(
+                                    candidates_span,
+                                    status="cancelled" if isinstance(exc, asyncio.CancelledError) else "error",
+                                    metrics={
+                                        "elapsed_ms": round(
+                                            (time.perf_counter() - candidates_started) * 1000, 1,
+                                        ),
+                                        "error_type": type(exc).__name__,
+                                    },
+                                )
+                                raise
+                            else:
+                                trace_collector.end_span(
+                                    candidates_span,
+                                    metrics={
+                                        "elapsed_ms": round(
+                                            (time.perf_counter() - candidates_started) * 1000, 1,
+                                        ),
+                                        **dict(retriever.last_stage_counts),
+                                    },
+                                )
                     try:
                         trace_collector.end_span(
                             retrieve_span, metrics=dict(retriever.last_stage_counts))
