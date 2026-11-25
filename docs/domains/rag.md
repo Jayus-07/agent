@@ -2,9 +2,10 @@
 
 ## 入口与当前链路
 
-- 检索问答链位于 backend/rag/chain.py，Pipeline 与索引能力位于 backend/rag/。
+检索问答链位于 backend/rag/chain.py，Pipeline 与索引能力位于 backend/rag/（其中 `backend/rag/indexing/indexer.py` 已演进为 Facade，核心管线物理拆分为 `backend/rag/indexing/stages/` 下的 `IndexingPipeline` 编排器 + `contracts.py` + `parse_stage` / `filter_stage` / `quality_stage` / `metadata_stage` / `enrich_stage` / `embedding_stage` / `persist_stage` 7 个单一职责 Stage）。
 - 独立服务入口为 backend/services/rag_server.py；客户端、远程模式和服务挂载分别核对 backend/rag/client.py 与 API 路由。
-- 当前存储、解析器和检索策略以实现及配置为准，不在本文手工维护模型、集合或 Provider 数量。
+- 全文检索引擎默认由 `FULLTEXT_ENGINE="pg_gin"` 控制，使用 **PostgreSQL `tsvector` + GIN 倒排索引**（`156_rag_vectors_tsv_gin.sql`、`backend/rag/retrieval/pg_fulltext_retriever.py::PGFullTextRetriever`），写入 `rag_vectors` 时行级原子分词落库（`jieba.cut_for_search` + `to_tsvector('simple', ...)`），检索侧以 `ts_rank_cd` 打分对齐 `bm25_score` 协议并支持增量更新；旧单机 `BM25Store`（pickle 快照）仅在显式配置 `FULLTEXT_ENGINE="bm25"` 或测试传入时启用。
+- 主链路时延与缓存优化：`RAGChain._prepare` 调用记忆加载设置 `timeout=1.5s`（L3 `0.8s` 超时快速降级），防止记忆向量化阻塞主链路；`backend/rag/embedding_singleton.py` 对 `embed_query` 输入做 `.strip()` 规范化后再计算请求内缓存 key。
 
 ## 约束与错误边界
 
@@ -42,7 +43,7 @@ BM25 pickle 只可来自受信任服务目录：SHA256 缺失或不匹配均拒�
 
 检索结果作为生成依据；遵循当前 Evidence Gate、引用和拒答契约。索引不可用、证据不足、模型拒答与基础设施错误要按既有结果类型处理，不能将无证据回答伪装为有效检索结果。Doc 级嵌入 Provider/HTTP 故障或重排服务本轮超时，导致本轮无法可靠核验并最终拒答时，使用 `answer_status=rag_retrieval_degraded`，提示用户本轮未能核实且不代表知识库没有资料；真实无命中仍使用 `rag_no_evidence`。权限拒绝与事实校验拒绝继续保留原状态，不被检索降级覆盖。
 
-Evidence Gate 的行为实现位于 `backend/rag/evidence_gate/`，RAG 链路由 `backend/rag/chain.py` 调用；修改拒答、引用或降级行为时，检查 `backend/tests/rag/` 中对应契约测试。
+Evidence Gate 的行为实现位于 `backend/rag/evidence_gate/`，内部细化为 `EvidenceGateController`（Retrieval / Rerank / Faithfulness 门禁）、`SelfCorrectionStrategy`、`query_scope.py` 以及独立于 LLM Faithfulness Judge 的程序化 `claim_verifier.py`（对 `[En]` 引用原文逐条零容忍核验数字+单位/日期/金额/百分比，且不可被 LLM 自报覆盖）。RAG 链路由 `backend/rag/chain.py` 调用；修改拒答、引用或降级行为时，检查 `backend/tests/rag/` 中对应契约测试。
 
 ## 上传元数据与级联决策
 
@@ -104,7 +105,7 @@ flowchart TD
   PARSE --> META[UnifiedMetadata / DecisionEnvelope]
   META --> CHUNK[类型感知 ChunkStrategyRouter / Parent + Leaf]
   CHUNK --> EMB[EmbeddingStage / 去重缓存]
-  EMB --> CAND[Candidate Vector + Chunk Store + BM25]
+  EMB --> CAND[Candidate Vector + Chunk Store + PG GIN tsvector]
   CAND --> PUB[候选存储发布 CAS -> 已提交 generation]
   PUB --> AUDIT{内容审核状态}
   AUDIT -->|普通/免审| ACTIVE[registry active]

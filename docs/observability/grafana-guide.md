@@ -17,8 +17,11 @@
 
 当前目录内存在 `agent-01-platform-overview.json` 至 `agent-07-infra-async.json` 七类 Dashboard 资产；`gen_dashboards.py` 的历史头注释仍称“生成 4 个”，**不视作当前数量事实**。修改生成器或手动 JSON 前确认实际生成模式、导出 diff 和自动装配方式，禁止生成脚本覆盖另一批已维护的看板。
 
-### RAG 容器内存与重启
+### 进程内存容量告警、抓取拓扑与远程观测栈（#556 演进）
 
+- **进程物理内存水位告警（`agent-platform-memory-capacity`）**：针对 `agent-platform-app` 与 `task-workers`，新增 `AppProcessMemoryHigh` 与 `WorkerProcessMemoryHigh` 规则（进程 RSS > 640MB 即 768MB 容器上限的 83% 持续 5 分钟触发），由 `docker/prometheus-alert-rules.test.yml` 提供 `promtool` 单测；`CeleryWorkerDown` 在无 `celery-exporter` 时回退至 `up{job="task-workers"} == 0` 防止 `absent` 误报。
+- **抓取拓扑与鉴权（`docker/prometheus.yml`）**：`agent-platform-app` 抓取目标按 `["app:8000", "host.docker.internal:8000"]` 优先容器网络直连并保留宿主机回退；通过 `/tmp/metrics_api_key` 注入 Bearer 鉴权；覆盖 `task-workers` 5 个 worker 副本（9809 端口）、`agent-apisix:9091` 及 Prometheus/Alertmanager/Loki/Tempo 自监控。
+- **远程零负载观测栈**：`docker-compose.observability-remote.yml` + `docker/prometheus.remote.yml` 支持在本地运行 Prometheus + Grafana，经 SSH 隧道映射远端 4C8G 生产机（`host.docker.internal:18000`）进行观测；`docker-compose.observability.yml` 提供独立分析库 `obs-postgres:5433`。
 - `rag-service` 直接运行 Python 服务进程。排查异常退出时查看 Docker 的 `ExitCode`、`OOMKilled`、`RestartCount`，并用 `process_start_time_seconds` 确认 Prometheus 是否看到了重启。进程重启告警也会覆盖正常发版，原因需结合发布记录判断。
 - cgroup v2 的当前内存、累计峰值、内存上限和 OOM kill 次数由 RAG `/metrics` 暴露。容器重启会清空旧 cgroup 的计数，因此 OOM kill 计数能捕获采集期间发生的子进程被杀，主进程被杀仍可由进程重启与 Docker 事件追查。
 - 发布脚本更新应用镜像，Prometheus 规则使用宿主机目录挂载。生产部署后核对 Prometheus 实际挂载的规则版本，将规则切到本次发布并验证 `/api/v1/rules` 已加载。使用合成指标验证触发与恢复，再检查真实采集和告警接收配置。

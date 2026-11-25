@@ -53,3 +53,14 @@
 - 不复制客服知识库文档作为系统架构规范。
 - 评测集由 `backend/evaluation/datasets/cs/` 与其 validator 管理，类别和样本数以数据清单与校验器为准。
 - 决策层路由（2026-11-02 cs-evaluation-upgrade P3 词表扩圈）：ACCOUNT 域细分规则、物流细分词表及自然表达 patterns 已入 `vocab.py::_CS_DOMAIN_RULES` 与 `fine_router._RULE_INTENT_MAP`；B2 积分/等级、B3 优惠券、B4 支付流水、B5 催办、B6 价保、B7 在途改址、B8 发票查询/申请依序补齐，当前 VOCAB_VERSION 为 `2026-11-06.3`。政策问句仍由 KNOWLEDGE 回答。任何词表改动必须经 `test_cs_eval_gate` 与 `test_cs_decision_replay` 双门禁，零回归才可合并。
+
+## 派单回收、超时工单与上下文锚定（#558 / #559 / #563 演进）
+
+- **订单咨询与卡片即时协同（#508, #509, #535）**：支持电商风格订单咨询抽屉（M1）、服务端注入 `order_ref` 传递（M2）与 AI/坐席态发送订单卡在前端本地即时渲染（M3）；会话管理支持整页刷新保留已认领状态（#522），坐席工作台实现顶栏登出、多端互踢自动跳登录（#549）。
+- **时间驱动派单回收器（`backend/customer_service/handoff/dispatch/reaper.py`）**：
+  - `agent_offered` 超过 30 秒未认领自动释放，并将该坐席加入本单永久排除集；超过 `CS_MAX_DISPATCH_ATTEMPTS` 或到达 `total_deadline_at` 时终态关闭派单，并在**同一 PG 事务**内原子创建 `GD-YYYYMMDD-XXXX` 超时留言工单、写用户消息通知与 outbox 事件。
+  - 事务提交后通过有界并发异步任务（`_MAX_SUMMARY_TASKS=4`）执行 LLM 诉求压缩回填（`_enrich_timeout_ticket`），失败降级保留原文；`reap_stale_human_active` 负责 `human_active` 坐席离线自愈。
+  - 维护定时扫描（`maintenance.py::scan_handoff_timeouts`）与运行时兜底（`supervisor.py::_recover_handoff_timeout`）均统一收口至 `reaper.py` 关单事务；工单等待秒数以 `handoff.total_deadline_at - created_at` 为单一事实源。
+- **主管定向重派与锁序约束（`backend/customer_service/handoff/dispatch/offers.py`）**：
+  - `reassign_handoff` 校验目标坐席状态（`enabled && available && accepting && status in ("online", "busy")`），并通过 `count_other_active_assignments` 排除当前工单及已关闭工单的历史未终结 assignment，重置 `attempt_count=0`、顺延 `total_deadline_at`、递增 `assignment_version` CAS；严格遵守 `conversations -> handoffs -> (agent)` 锁序，结合 `SKIP LOCKED` 跳过争用。
+- **上下文锚定**：`graph_builder.py::_register_request_pins` 接入 Context Budget Hook C，保护确认实体与最近订单号不被长对话压缩裁剪。

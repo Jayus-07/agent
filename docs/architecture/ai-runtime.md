@@ -6,9 +6,9 @@
 
 主图构建于 backend/orchestration/graph/builder.py。内置节点承担 Router、Tool Selector、Skill Executor、Workflow Executor、Planner、Critique、Supervisor、Reporter 和 General Chat；Skill 节点和 Domain Graph 节点经各自注册表发现，不在 builder 中复制清单。
 
-主路由由 backend/orchestration/router/engine.py 及其类型/投影模块负责。Router 决定运行目标，执行节点负责调用对应 Runtime；direct、workflow、plan、clarify/general chat 与 Domain Graph 的分流以当前图边和路由实现为准。
+主路由由 backend/orchestration/router/engine.py 及其类型/投影模块负责。Router 决定运行目标，执行节点负责调用对应 Runtime；`route_selector` 返回 `"skill_executor"` 时映射到 `tool_selector → skill_executor → reporter` 两段执行，`clarify`、`handoff` 两条分支直连 `reporter`；其余 workflow、plan、general_chat 与 Domain Graph 的分流以当前图边和路由实现为准。
 
-能力 Fast Path 还须满足分数、top1/top2 分差、LOW 风险、清单白名单及请求权限门禁。其余候选交 Tool Selector 在域内注册候选中消歧；无法确认时转澄清。LLM 仅从动态合法候选中给出选择提示，模型自报分数不参与授权。Trace 保留候选、分数类型、分差、阻断原因、最终归宿和策略版本；缓存键包含会话状态、租户、权限及路由策略版本。
+能力 Fast Path 还须满足分数、top1/top2 分差、LOW 风险、清单白名单及请求权限门禁。其余候选交 Tool Selector 在域内注册候选中消歧；无法确认时转澄清。LLM 仅从动态合法候选中给出选择提示，模型自报分数不参与授权。Trace 保留候选、分数类型、分差、阻断原因、最终归宿和策略版本；缓存键包含会话状态、租户、权限、路由策略版本、`manifest` 指纹、模型角色（`main`/`embedding`）指纹及 `router.llm` Prompt 版本指纹，且明确不缓存降级/澄清结果。
 
 候选 `CapabilityScore` 同时传递服务端解析得到的 `risk`、`fast_path_enabled`、`permission_ready`，这些字段在引擎组装、JSON往返和V2投影后保留，供 Tool Selector 二次校验。缺失时默认为 UNKNOWN/false/false，不能把分数或候选名称当作权限；实际执行仍由 Tool Governance 复核产品与主体权限。
 
@@ -29,12 +29,12 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 - general_chat 直答节点挂整体执行时限 `GENERAL_CHAT_LLM_DEADLINE`（默认 30 秒，0=不限时，`backend/config/llm.py`）；超时按既有瞬时错误路径走重试/降级。LLM proxy 对流式调用做 per-attempt 观测；主模型在应用启动时预热（`backend/app/server.py`）。
 - SSE 事件结构与事件顺序以 backend/orchestration/graph/event_schema.py、具体事件生成器和 API 契约为准；新增事件须同步检查后端和消费端。
 - 上下文预算事件的缓冲作用域包含 Product、Tenant、User、命名空间 Session 和 Request。后台记忆裁剪事件只有在完整作用域与当前请求完全一致时才能进入该 SSE；作用域缺失、请求已超时或晚到事件不会转交给后续请求。事件只允许发送约定的结构元数据，不携带问题原文或摘要正文。
-- 主助手与客服分别使用 `/chat/agent/*`、`/chat/customer-service/*` 和 `/memory/agent/*`、`/memory/customer-service/*`。身份由注册路由固定，产品入口要求可信用户与租户；body `user_id`、`domain_hint` 不授予身份或能力。Agent Memory 保持存量 raw user/session key，由 `/memory/agent/*` 独占访问；客服历史读写既有 `customer_service.conversations/messages`，并用可信 user/tenant 校验归属。旧共享 `/chat/*` 仅提供公共对话，旧共享 `/memory/*` 不开放持久记忆。
+- 主助手与客服分别使用 `/chat/agent/*`、`/chat/customer-service/*` 和 `/memory/agent/*`、`/memory/customer-service/*`。身份由注册路由固定，产品入口要求可信用户与租户；body `user_id`、`domain_hint` 不授予身份或能力。Agent Memory 保持存量 raw user/session key，由 `/memory/agent/*` 独占访问；客服历史读写既有 `customer_service.conversations/messages`，并用可信 user/tenant 校验归属。旧共享 `/chat/*`（`PUBLIC_PRODUCT`）在 `router_node.py` 中直接强制路由至 `general_chat`（`product_scope="public_only"`），旧共享 `/memory/*` 不开放持久记忆。
 - L2 会话所有权由 `chat_sessions.tenant_id/user_id/session_id` 共同界定；会话列表、单会话读写和删除均校验服务端身份的租户与用户。旧会话仅按 `auth.users` 权威映射租户，无法映射的记录保留在不可由运行时身份产生的 `quarantine` 范围。schema 由 `092_chat_session_tenant_scope.sql` 管理。旅游旧消息适配器把租户摘要并入内部 user key，兼容其专用调用路径。
 - 产品专属 `/chat/{product}/stream` 的成功轮次持久化以 `Idempotency-Key` 为幂等键；未提供时使用服务端 `request_id`。Memory 在同一事务中提交 L2 问答、幂等收据与 L3 outbox；收据按 tenant/user/session 隔离，只保留键和问题的 SHA-256。相同键与问题复用原轮次；相同键绑定不同问题时拒绝再次写入。表结构由 `090_memory_turn_idempotency.sql` 管理，随会话/消息删除级联清除。
 - L2 `chat_messages` 兼容保留普通 user/assistant 文本行；成功轮次的 `end_turn → save_turn` 以受控 LangChain 写入记录 `message_type`（human/ai）及 JSON `message_metadata`。通用写入也支持 tool，可恢复 `AIMessage.tool_calls` 和 `ToolMessage.tool_call_id` 等协议字段；恢复时始终以数据库消息 ID 生成 LangChain ID，旧行的空类型列继续按 user/assistant 还原。字段由 `091_chat_message_langchain_metadata.sql` 管理。当前主 Graph Runner 只暴露最终问答和结构化 step results，尚无可信 LangChain ToolMessage 流可接入。
 - HTTP 请求完成、Tool 执行结果、Domain Graph 业务结果是不同状态；错误和部分成功须保留可解释结果。
-- 产品专属流式对话的浏览器断连由 SSE 恢复层继续消费 producer；若 Runner 生成器本身被关闭，则设置取消信号停止后台图，避免无人消费时继续执行节点副作用。用户主动取消和图执行失败均不得写入成功轮次记忆。
+- 产品专属流式对话遵循 F2 断线恢复协议（`backend/app/api/stream_resume.py`）：`StreamRecord.append()` 为事件注入单调 `seq` 并写入有界缓冲；客户端断连时 `event_generator` 仅脱离订阅而不置 `stop_event`，producer 继续运行至自然终态；重连端点 `/chat/*/stream/resume` 在追加锁内原子拷贝重放尾并注册 live `_Waiter`（缓冲溢出置 `_truncated` 返回 404 `STREAM_NOT_RESUMABLE`）。仅当显式取消或 Runner 生成器本身被关闭时停止后台图，避免无人消费时继续执行节点副作用。用户主动取消和图执行失败均不得写入成功轮次记忆。
 - Trace 与日志应记录必要的运行归因、耗时和错误类别，不写入敏感参数。
 
 ## Checkpoint 启用与恢复边界
@@ -52,7 +52,7 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 
 ## Node Runtime
 
-专家和域内节点的通用执行生命周期由 `backend/core/node_runtime/` 提供：执行上下文 → start hook → 节点调用 → 错误/超时策略 → `NodeResult` →完成/错误 hook。它只处理节点级错误策略与超时，不承担 Tool 的重试、熔断、并发隔离或副作用治理。
+专家和域内节点的通用执行生命周期由 `backend/core/node_runtime/` 提供：执行上下文 → start hook → 节点调用 → 错误/超时策略（含 `THREAD_ISOLATED` 独立单 worker 隔离池与 `contextvars.copy_context()` 上下文显式拷贝）→ `NodeResult` → 完成/错误 hook。它只处理节点级错误策略与超时，不承担 Tool 的重试、熔断、并发隔离或副作用治理。
 
 `ExecutionContext` 与 `NodeResult` 是冻结的通用契约；`NodeResult` 只包含 `status`、`error`、`duration_ms`、`data`，领域结果类型由各域自己定义。观测 hook 负责域级 Trace/指标适配，改动时核对 `backend/tests/node_runtime/`。
 
@@ -62,7 +62,7 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 
 ## 上下文预算与跨请求状态
 
-L1 短期历史由 `SHORT_TERM_MAX_MESSAGES` 和 `SHORT_TERM_MAX_TURNS` 分别限制消息数和用户轮数；裁剪以用户消息为轮次边界，轮内 AI/Tool 消息一并保留。L1 按稳定数据库消息 ID 去重；相同正文但不同 ID 的消息仍保留为独立历史。消息数上限用于淘汰旧的完整轮次；最新单轮即使超过该数也不拆分，实际模型输入仍由后续 Token Budget 硬门禁约束。模型调用前由 `backend/context_budget/` 统一估算输入 token、预留模型输出和安全空间，并对历史、RAG 证据及工具结果做有界裁剪或压缩。原始会话历史不因预检而改写；裁剪后仍超预算时，由模型代理按稳定错误契约拒绝发送。预算策略和 L4/L5 实现以该模块、配置及测试为准。
+L1 短期历史由 `SHORT_TERM_MAX_MESSAGES` 和 `SHORT_TERM_MAX_TURNS` 分别限制消息数和用户轮数；裁剪以用户消息为轮次边界，轮内 AI/Tool 消息一并保留。L1 按稳定数据库消息 ID 去重；相同正文但不同 ID 的消息仍保留为独立历史。消息数上限用于淘汰旧的完整轮次；最新单轮即使超过该数也不拆分，实际模型输入仍由后续 Token Budget 硬门禁约束。模型调用前由 `backend/context_budget/` 统一执行 L2–L5 多级预算串联：L2 语义裁剪（`PinnedContext` 锚定豁免）→ L3 `compact_previous_outputs` → L4 `fold_messages`（可逆折叠与滞回）→ `RAGBudgeter`（价值+多样性裁剪）→ L5 `SummaryFlight`（单飞增量摘要）。原始会话历史不因预检而改写；全量裁剪后仍超预算时置 `overflow=True`，由模型代理按稳定错误契约抛出 `ContextBudgetExceededError` 拒绝发送。预算策略和 L4/L5 实现以该模块、配置及测试为准。
 
 跨请求的轻量业务上下文通过 `ConversationContextRepository` 读写：Memory 后端用于测试/本地场景，Redis 后端承载共享热状态。调用方提交表达业务意图的 mutation；并发更新使用版本、run id 或 question id 做 CAS，不能用无条件整对象覆盖。Redis 上下文是有 TTL 的热状态，不替代持久业务记录或图 checkpoint；键按 tenant、user、conversation 隔离。后端不可用、过期或被驱逐时的恢复/降级路径以仓库实现和对应测试为准。
 

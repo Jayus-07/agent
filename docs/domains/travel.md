@@ -35,3 +35,11 @@ V1 行程版本服务的 Active/Draft 生命周期接口已退役。V2 正式行
 - Provider 与凭据入口见 backend/providers/travel/、backend/providers/ 和配置模块；地图路线和铁路仍受对应配置、凭据或上游服务状态约束，酒店商户搜索不代表已获得实时房态/价格；不得在文档中复制动态 Provider 或密钥清单。
 - 业务安全与服务依赖索引见 [Domain Service Map](../architecture/domain-service-map.md)。
 - 定向测试入口：backend/tests/travel/、backend/tests/travel_v2/ 和 backend/tests/api/ 中对应旅游用例。
+
+## Travel V2 落地架构与端点边界
+
+- **V1 退役与 V2 主流**：`backend/app/api/routes/travel.py` 中原 V1 端点已全部挂在 `_retired_v1_router` 且不再注册到 FastAPI 应用；现行对话规划流为 `POST /api/travel/v2/plan/stream`，正式行程读写全部由 `backend/travel_v2/api/` 承接。
+- **Trip + Revision 并发契约**：正式行程采用 Trip + Revision 模型，修改操作要求服务端 `require_identity` 校验 `tenant_id` + `owner_id`，写操作强制 `Idempotency-Key` 与 `expected_revision` 乐观锁 CAS（版本冲突返回 409）。
+- **已落地 V2 API 能力（`backend/travel_v2/api/`）**：`trips.py`（含 `ai-edits` 与 `selections/{meals,lodgings,intercity-trains}`）、`templates.py`（迁移 `155_travel_v2_featured_templates.sql` 精选模板库与管理员发布/用户复制）、`auto_optimize.py`（自动优选）、`bookings.py`（原预订子域收编为 REST 确认门，受 `TRAVEL_BOOKING_PROVIDER` 控制）、`shares.py`、`exports.py`、`search.py`；前端 `/travel/itineraries/new` 已针对移动端生成态体验完成优化（#560）。
+- **动态工作台与外部增强集成（#546, #550, #553, #554, #557）**：工作台接入真实高德地图周边美食商家推荐、POI 体验小贴士徽章、交通换乘卡片、天气预警横幅、静态地图打点缩略图以及真实小红书攻略指引；外部能力统一通过自研自托管 MCP 及 Provider 接入（管理端支持实时连通性探针与热重载控制台），严禁伪造外部链接或模拟未核验数据。
+- **人工决策中断（Interrupt）**：`TRAVEL_USER_DECISION_INTERRUPT` 仅在 Checkpointer 健康时生效，通过绑定 checkpoint/thread/待决内容的 `decision_token` + PG advisory lock 串行化恢复，不绕过 Trip API。

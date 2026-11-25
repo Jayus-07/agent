@@ -23,6 +23,9 @@
 
 - **调用状态**：请求被允许/拒绝，调用真正发起、失败/成功、取消、fallback；调用重试不等于新用户任务。
 - **预算状态**：额度核验、预占、结算、释放、滞留及 `needs_review`；跨进程同一个幂等消费不得重复扣账。
+- **预占仲裁与不可变审计（迁移 144–146）**：`budget_reservation_resolutions` 记录预占仲裁流水（`resolution_status` / `settlement_kind`）。迁移 146 新增物理级触发器 `trg_budget_resolution_audit_append_only`，**在 DB 层严禁对核销审计行执行任何 UPDATE 或 DELETE**，确保账本与仲裁轨迹绝对不可篡改。
+- **预算域额度轴（迁移 149）**：`budget_policies`、`budget_ledger` 与 `budget_reservations` 统一增加 `domain` 列，支持业务域级独立额度（`main` / `travel` / `customer_service`），主图与域图并行独立记账并由租户域池统一兜底。
+- **模型推理控制与成本优化**：LLM Proxy 统一适配智谱/火山等云端模型的思考通道（`extra_body={"thinking": {"type": "disabled"}}`），在 NL2SQL 选表/生成等高确定性场景显式关闭隐式思维链，大幅降低冗余 Token 消耗与端到端延迟。
 - **用量事实等级**：Provider 返回 usage 的实测值、明确标为 `estimated` 的估算值、无法估算/待对账；使用估算的依据和覆盖率应可查询。
 - **定价状态**：模型及供应商标识、价格版本、计价输入/缓存输入/输出拆分、币种/汇率、折算后的记账金额。
 - **展示状态**：用户/租户可见余额与费用，管理员可见异常和审计；不得因模型成功就假称成本已成功入账。
