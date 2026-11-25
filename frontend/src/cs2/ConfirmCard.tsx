@@ -81,6 +81,9 @@ export default function ConfirmCard({
 
   const secondsLeft = leftSeconds(snapshot.expires_at, now)
   const isRefund = snapshot.action_type === 'refund_request'
+  const refundNotice = snapshot.refund_review_mode === 'sandbox'
+    ? '确认后进入沙箱人工审核，审核只更新申请记录，钱包余额不变。'
+    : '确认后进入人工审核，退款结果以审核通知为准。'
   const label = ACTION_LABELS[snapshot.action_type] ?? '业务操作'
   // 后端权威判定：need_info（缺槽位）提案 confirmable=false；字段缺省视为可确认。
   const confirmable = snapshot.confirmable
@@ -214,7 +217,7 @@ export default function ConfirmCard({
       )}
       <p className="mt-2 border-t border-dashed border-slate-100 pt-1.5 text-[11px] leading-relaxed text-slate-400">
         {isRefund
-          ? '确认后进入人工审核，不代表资金已退；审核通过后货款自动退回账户余额。重复确认受幂等键保护。'
+          ? `${refundNotice}重复确认受幂等键保护。`
           : '确认后订单立即取消，已支付货款将全额退回账户余额；重复确认受幂等键保护。'}
       </p>
     </div>

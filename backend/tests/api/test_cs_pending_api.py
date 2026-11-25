@@ -158,6 +158,28 @@ def test_pending_is_marked_paused_while_handoff_is_active(
     assert response.json()["pending_action"]["state"] == "paused_handoff"
 
 
+@pytest.mark.parametrize(
+    ("gateway_mode", "refund_mode", "expected"),
+    [("sandbox", "sandbox", "sandbox"), ("http", "http", "http"),
+     ("http", "sandbox", None)],
+)
+def test_refund_snapshot_exposes_only_the_effective_review_mode(
+    client, fake_identity, fake_owner_check, fake_store, fake_handoff,
+    monkeypatch, gateway_mode, refund_mode, expected,
+):
+    from backend.config import customer_service as config
+
+    monkeypatch.setattr(config, "CS_BUSINESS_GATEWAY_MODE", gateway_mode)
+    monkeypatch.setattr(config, "CS_REFUND_REQUEST_MODE", refund_mode)
+    fake_store.result = {"proposal_id": "refund-candidate", "action_type": "refund_request"}
+
+    response = client.get("/cs/conversations/my/conversation-1/pending")
+    assert response.status_code == 200
+    snapshot = response.json()["pending_action"]
+    assert snapshot.get("refund_review_mode") == expected
+    assert snapshot["confirmable"] is (expected is not None)
+
+
 def test_guest_is_rejected_before_confirmation_store_read(
     client, monkeypatch, fake_owner_check, fake_store,
 ):

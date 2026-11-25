@@ -1280,6 +1280,7 @@ async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
     )
 
     action_type = str(pending.get("action_type") or "unknown")
+    refund_review_mode = None
     if action_type == "refund_request":
         from backend.config import customer_service as cfg
 
@@ -1287,7 +1288,9 @@ async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
         gateway_mode = str(getattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "")).lower()
         http_mode = gateway_mode == "http" and refund_mode == "http"
         sandbox_mode = gateway_mode == "sandbox" and refund_mode == "sandbox"
-        if not (http_mode or sandbox_mode):
+        if http_mode or sandbox_mode:
+            refund_review_mode = refund_mode
+        else:
             confirmable = False
 
     return {
@@ -1303,6 +1306,7 @@ async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
             "expires_at": expires_at,
             "state": state,
             "confirmable": confirmable,
+            **({"refund_review_mode": refund_review_mode} if refund_review_mode else {}),
         },
     }
 
