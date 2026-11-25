@@ -206,7 +206,9 @@ class TestPresetBreakers:
         assert chroma_circuit_breaker.name == "chromadb"
         assert chroma_circuit_breaker.state == State.CLOSED
 
-    def test_get_all_breakers(self):
+    def test_get_all_breakers(self, monkeypatch):
+        monkeypatch.setattr("backend.infra.circuit_breaker._llm_model_breakers", {})
+        monkeypatch.setattr("backend.infra.circuit_breaker._specialized_breakers", {})
         all_cb = get_all_breakers()
         assert len(all_cb) == 3
         assert set(all_cb.keys()) == {"deepseek", "postgresql", "chromadb"}
