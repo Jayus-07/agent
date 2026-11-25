@@ -21,6 +21,35 @@ def _state(msg="帮我看下订单"):
     return {"user_message": msg}
 
 
+def _order_expert_result():
+    return {"data": {"service_facts": {
+        "source": "sandbox_order_service",
+        "orders": [
+            {
+                "order_no": "MO-001",
+                "status": "paid",
+                "total_amount": "199.00",
+                "currency": "CNY",
+                "product_names": "银戒指",
+            },
+            {
+                "order_no": "MO-002",
+                "status": "shipped",
+                "total_amount": "99.00",
+                "currency": "CNY",
+                "product_names": "珍珠项链",
+            },
+            {
+                "order_no": "MO-003",
+                "status": "pending",
+                "total_amount": "39.00",
+                "currency": "CNY",
+                "product_names": "礼盒",
+            },
+        ],
+    }}}
+
+
 class TestPolicyTable:
     def test_action_and_handoff_template(self):
         """P0-19：Action/Handoff 高风险回复模板优先（策略表硬编码）。"""
@@ -132,6 +161,149 @@ class TestComposeReply:
         )
         assert source == "llm_fallback"
         assert text == draft
+
+    def test_query_timeout_preserves_requested_order_table(self, monkeypatch):
+        monkeypatch.setattr(
+            "backend.customer_service.response.composer._compose_with_llm",
+            lambda *_a, **_k: None,
+        )
+        draft = "## 您的订单\n**1.** 订单号: MO-001 | 状态: paid"
+
+        text, source = composer.compose_reply(
+            "query",
+            draft,
+            _order_expert_result(),
+            _cs_route("t_order_status"),
+            _state("请将订单列表整理成 Markdown 表格，列出订单号、商品、金额和状态"),
+        )
+
+        assert source == "llm_fallback"
+        assert "| 序号 | 订单号 | 商品 | 金额 | 状态 |" in text
+        assert "| --- | --- | --- | --- | --- |" in text
+        assert all(order_no in text for order_no in ("MO-001", "MO-002", "MO-003"))
+        assert "¥199.00" in text
+        assert "待发货" in text and "已发货" in text and "待付款" in text
+
+    def test_query_timeout_preserves_requested_order_bullets(self, monkeypatch):
+        monkeypatch.setattr(
+            "backend.customer_service.response.composer._compose_with_llm",
+            lambda *_a, **_k: None,
+        )
+
+        text, source = composer.compose_reply(
+            "query",
+            "## 您的订单",
+            _order_expert_result(),
+            _cs_route("t_order_status"),
+            _state("请用三条项目符号总结订单号、商品、金额和状态"),
+        )
+
+        assert source == "llm_fallback"
+        assert text.count("- 订单号：") == 3
+        assert all(order_no in text for order_no in ("MO-001", "MO-002", "MO-003"))
+
+    def test_query_timeout_preserves_requested_next_steps(self, monkeypatch):
+        monkeypatch.setattr(
+            "backend.customer_service.response.composer._compose_with_llm",
+            lambda *_a, **_k: None,
+        )
+
+        text, source = composer.compose_reply(
+            "query",
+            "## 您的订单",
+            _order_expert_result(),
+            _cs_route("t_order_status"),
+            _state("请给我现在和后续的下一步建议"),
+        )
+
+        assert source == "llm_fallback"
+        assert "- 现在：" in text
+        assert "- 后续：" in text
+        assert "MO-001" in text
+
+    def test_noncompliant_llm_format_uses_fact_based_fallback(self, monkeypatch):
+        from backend.customer_service.response.contracts import CSRenderedResponse
+
+        monkeypatch.setattr(
+            "backend.customer_service.response.composer._compose_with_llm",
+            lambda *_a, **_k: (
+                CSRenderedResponse(answer="您当前有三笔订单。"), 3,
+            ),
+        )
+
+        text, source = composer.compose_reply(
+            "query",
+            "## 您的订单",
+            _order_expert_result(),
+            _cs_route("t_order_status"),
+            _state("请将订单整理成表格"),
+        )
+
+        assert source == "llm_fallback"
+        assert "| --- | --- | --- | --- | --- |" in text
+        assert all(order_no in text for order_no in ("MO-001", "MO-002", "MO-003"))
+
+    def test_disabled_composer_still_honors_explicit_order_format(self, monkeypatch):
+        from backend.config import customer_service as cs_config
+
+        monkeypatch.setattr(cs_config, "CS_RESPONSE_COMPOSER_ENABLED", False)
+        monkeypatch.setattr(
+            "backend.customer_service.response.composer._compose_with_llm",
+            lambda *_a, **_k: (_ for _ in ()).throw(
+                AssertionError("disabled composer must not call LLM")
+            ),
+        )
+
+        text, source = composer.compose_reply(
+            "query",
+            "## 您的订单",
+            _order_expert_result(),
+            _cs_route("t_order_status"),
+            _state("请将订单整理成表格"),
+        )
+
+        assert source == "template"
+        assert "| --- | --- | --- | --- | --- |" in text
+
+    def test_query_timeout_does_not_override_negated_order_format(self, monkeypatch):
+        monkeypatch.setattr(
+            "backend.customer_service.response.composer._compose_with_llm",
+            lambda *_a, **_k: None,
+        )
+        draft = "订单 MO-001 当前状态为 paid。"
+
+        text, source = composer.compose_reply(
+            "query",
+            draft,
+            _order_expert_result(),
+            _cs_route("t_order_status"),
+            _state("不用表格，直接告诉我订单状态"),
+        )
+
+        assert source == "llm_fallback"
+        assert text == draft
+
+    def test_order_format_fallback_does_not_assume_missing_currency(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "backend.customer_service.response.composer._compose_with_llm",
+            lambda *_a, **_k: None,
+        )
+        expert_result = _order_expert_result()
+        expert_result["data"]["service_facts"]["orders"][0].pop("currency")
+
+        text, source = composer.compose_reply(
+            "query",
+            "## 您的订单",
+            expert_result,
+            _cs_route("t_order_status"),
+            _state("请把订单整理成表格"),
+        )
+
+        assert source == "llm_fallback"
+        assert "199.00（币种未提供）" in text
+        assert "¥199.00" not in text
 
     def test_balance_llm_rewrite_passes_fact_guard(self, monkeypatch):
         """W1（2026-11-03）：余额事实进入 FactSet 后，转写回复可过守卫。"""
