@@ -1,0 +1,97 @@
+name: SQL & Planner Smoke Gate
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "backend/agents/planner/**"
+      - "backend/agents/sql/**"
+      - "backend/sql/**"
+      - "backend/evaluation/runners/planner.py"
+      - "backend/evaluation/runners/sql.py"
+      - "backend/evaluation/datasets/planner/**"
+      - "backend/evaluation/datasets/sql/**"
+      - "backend/tests/agents/test_planner_output_contract.py"
+      - "backend/tests/evaluation/test_planner_contract.py"
+      - "backend/tests/evaluation/test_planner_live_runner.py"
+      - "backend/tests/evaluation/test_planner_params.py"
+      - "backend/tests/evaluation/test_sql_eval.py"
+      - "backend/tests/evaluation/test_sql_runner_budget.py"
+      - "backend/tests/sql/**"
+      - ".github/workflows/sql_planner_smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/agents/planner/**"
+      - "backend/agents/sql/**"
+      - "backend/sql/**"
+      - "backend/evaluation/runners/planner.py"
+      - "backend/evaluation/runners/sql.py"
+      - "backend/evaluation/datasets/planner/**"
+      - "backend/evaluation/datasets/sql/**"
+      - "backend/tests/agents/test_planner_output_contract.py"
+      - "backend/tests/evaluation/test_planner_contract.py"
+      - "backend/tests/evaluation/test_planner_live_runner.py"
+      - "backend/tests/evaluation/test_planner_params.py"
+      - "backend/tests/evaluation/test_sql_eval.py"
+      - "backend/tests/evaluation/test_sql_runner_budget.py"
+      - "backend/tests/sql/**"
+      - ".github/workflows/sql_planner_smoke.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: sql-planner-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-check:
+    name: SQL & Planner Smoke Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+      - name: E0 Dataset Preflight & Integrity (Planner + SQL)
+        run: |
+          python -c "
+          from backend.evaluation.dataset.loader import load_dataset
+          from backend.evaluation.dataset.validator import validate_dataset
+
+          planner_cases = load_dataset('planner')
+          errs_p = validate_dataset(planner_cases, expected_module='planner')
+          assert not errs_p, f'Planner E0 validation failed: {errs_p}'
+          print(f'Planner E0 OK: {len(planner_cases)} cases verified')
+
+          sql_cases = load_dataset('sql')
+          errs_s = validate_dataset(sql_cases, expected_module='sql')
+          assert not errs_s, f'SQL E0 validation failed: {errs_s}'
+          print(f'SQL E0 OK: {len(sql_cases)} cases verified')
+          "
+
+      - name: Planner Contract & DAG Regression Tests
+        run: |
+          python -m pytest \
+            backend/tests/agents/test_planner_output_contract.py \
+            backend/tests/evaluation/test_planner_contract.py \
+            backend/tests/evaluation/test_planner_live_runner.py \
+            backend/tests/evaluation/test_planner_params.py -v
+
+      - name: SQL Policy, Injection & Evaluation Regression Tests
+        run: |
+          python -m pytest \
+            backend/tests/evaluation/test_sql_eval.py \
+            backend/tests/evaluation/test_sql_runner_budget.py \
+            backend/tests/sql/test_nl2sql_injection_regress.py -v

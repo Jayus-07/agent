@@ -157,7 +157,10 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
   // 统一执行记录：三来源合并、时间倒序混排（业界单 Run 形态，来源徽标区分）
   const unifiedRows = useMemo<UnifiedRunRow[]>(() => {
     const rows: UnifiedRunRow[] = []
+    const seenRunIds = new Set<string>()
+
     for (const record of releases) {
+      if (record.eval_run_id) seenRunIds.add(record.eval_run_id)
       rows.push({
         key: `release:${record.release_id}`,
         source: 'release',
@@ -183,7 +186,30 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
         record,
       })
     }
+    for (const run of runs) {
+      if (seenRunIds.has(run.run_id)) continue
+      seenRunIds.add(run.run_id)
+      const firstPrompt = Object.keys(run.prompt_versions || {})[0]
+      const isLedgerSource = run.source === 'ledger' || run.source === 'cli' || !run.suite_version_id
+      const source: HistorySource = isLedgerSource ? 'ledger' : 'v2'
+      rows.push({
+        key: `${source}:${run.run_id}`,
+        source,
+        time: run.finished_at || run.created_at || null,
+        domain: domainLabel(moduleToDomain(run.module)),
+        target: firstPrompt || run.suite_name || run.suite_key || '默认配置',
+        targetSub: `v${run.suite_version || '—'} · ${run.evaluation_mode ? modeShort(run.evaluation_mode) : ''}`,
+        suite: run.suite_name || run.suite_key || '—',
+        status: null,
+        result: <span className="text-xs">{run.completed_cases}/{run.total_cases} · 通过 {run.passed_cases}</span>,
+        gate: run.gate_verdict ? <Badge text={run.gate_verdict} tone={run.gate_verdict === 'PASS' ? 'good' : run.gate_verdict === 'FAIL' ? 'bad' : 'warn'} /> : <span className="text-text-muted">—</span>,
+        actor: run.created_by || '—',
+        v2Run: run,
+      })
+    }
     for (const run of ledgerRuns) {
+      if (seenRunIds.has(run.run_id)) continue
+      seenRunIds.add(run.run_id)
       rows.push({
         key: `ledger:${run.run_id}`,
         source: 'ledger',
@@ -196,23 +222,6 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
         result: <span className="text-xs">{(run.pass_rate * 100).toFixed(1)}% · {run.case_count ?? '—'} 题</span>,
         gate: <span className="text-text-muted">—</span>,
         actor: run.triggered_by || run.trigger || '—',
-      })
-    }
-    for (const run of runs) {
-      const firstPrompt = Object.keys(run.prompt_versions || {})[0]
-      rows.push({
-        key: `v2:${run.run_id}`,
-        source: 'v2',
-        time: run.finished_at || run.created_at || null,
-        domain: domainLabel(moduleToDomain(run.module)),
-        target: firstPrompt || run.suite_name || run.suite_key || '默认配置',
-        targetSub: `v${run.suite_version || '—'} · ${run.evaluation_mode ? modeShort(run.evaluation_mode) : ''}`,
-        suite: run.suite_name || run.suite_key || '—',
-        status: null,
-        result: <span className="text-xs">{run.completed_cases}/{run.total_cases} · 通过 {run.passed_cases}</span>,
-        gate: run.gate_verdict ? <Badge text={run.gate_verdict} tone={run.gate_verdict === 'PASS' ? 'good' : run.gate_verdict === 'FAIL' ? 'bad' : 'warn'} /> : <span className="text-text-muted">—</span>,
-        actor: run.created_by || '—',
-        v2Run: run,
       })
     }
     rows.sort((a, b) => {

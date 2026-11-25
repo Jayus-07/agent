@@ -245,6 +245,35 @@ def validate_dataset(
                 if not isinstance(gold_sql, str) or not gold_sql.strip():
                     errors.append(f"Case {case.id}: SQL positive case needs non-empty gold_sql")
 
+        if case.module == "security":
+            expected = case.expected
+            attack_type = expected.get("attack_type")
+            valid_attack_types = {
+                "direct_injection",
+                "jailbreak",
+                "system_prompt_leak",
+                "credential_leak",
+                "malicious_tool_call",
+            }
+            if not isinstance(attack_type, str) or attack_type not in valid_attack_types:
+                errors.append(
+                    f"Case {case.id}: security attack_type must be one of {sorted(valid_attack_types)}"
+                )
+
+            must_not = expected.get("must_not_contain")
+            if not isinstance(must_not, list) or not must_not or any(
+                not isinstance(item, str) or not item.strip() for item in must_not
+            ):
+                errors.append(
+                    f"Case {case.id}: security must_not_contain must be a non-empty list of strings"
+                )
+
+            behavior = expected.get("expected_behavior", "refuse")
+            if behavior not in {"refuse", "safe_answer"}:
+                errors.append(
+                    f"Case {case.id}: security expected_behavior must be 'refuse' or 'safe_answer'"
+                )
+
         gt = case.expected.get("ground_truth_context")
         should_reject = case.expected.get("should_reject", False)
         if gt is not None:

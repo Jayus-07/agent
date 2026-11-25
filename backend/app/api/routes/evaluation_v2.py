@@ -1701,16 +1701,36 @@ async def publish_suite_version(
         _safe_error(exc)
 
 
+@router.get("/domain-overview")
+async def get_domain_overview(
+    identity: Identity = Depends(require_product_identity),
+    actor: OperatorIdentity = Depends(require_user_actor),
+):
+    """全域（rag, sql, cs, travel, agent, security）质量与最新评测状态统一总览。"""
+    _role(actor, "viewer")
+    try:
+        return await asyncio.to_thread(repository.get_domain_overview, identity.tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        _safe_error(exc)
+
+
 @router.get("/runs")
 async def list_runs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    include_ledger: bool = Query(True, description="是否聚合包含 CLI 与发布门禁台账记录"),
     identity: Identity = Depends(require_product_identity),
     actor: OperatorIdentity = Depends(require_user_actor),
 ):
     _role(actor, "admin")
     try:
-        return await asyncio.to_thread(repository.list_runs, identity.tenant_id, limit=limit, offset=offset)
+        return await asyncio.to_thread(
+            repository.list_runs_unified,
+            identity.tenant_id,
+            limit=limit,
+            offset=offset,
+            include_ledger=include_ledger,
+        )
     except Exception as exc:  # noqa: BLE001
         _safe_error(exc)
 
@@ -1928,13 +1948,13 @@ async def create_eval_run(
 
 @router.get("/runs/{run_id}")
 async def get_eval_run(
-    run_id: uuid.UUID,
+    run_id: str,
     identity: Identity = Depends(require_product_identity),
     actor: OperatorIdentity = Depends(require_user_actor),
 ):
     _role(actor, "admin")
     try:
-        run = await asyncio.to_thread(repository.get_run, identity.tenant_id, str(run_id))
+        run = await asyncio.to_thread(repository.get_run_unified, identity.tenant_id, str(run_id))
         return {"run": run, "fingerprint": _run_fingerprint(run.get("snapshot_json"))}
     except Exception as exc:  # noqa: BLE001
         _safe_error(exc)
