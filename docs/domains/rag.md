@@ -7,6 +7,63 @@
 - 全文检索引擎默认由 `FULLTEXT_ENGINE="pg_gin"` 控制，使用 **PostgreSQL `tsvector` + GIN 倒排索引**（`156_rag_vectors_tsv_gin.sql`、`backend/rag/retrieval/pg_fulltext_retriever.py::PGFullTextRetriever`），写入 `rag_vectors` 时行级原子分词落库（`jieba.cut_for_search` + `to_tsvector('simple', ...)`），检索侧以 `ts_rank_cd` 打分对齐 `bm25_score` 协议并支持增量更新；旧单机 `BM25Store`（pickle 快照）仅在显式配置 `FULLTEXT_ENGINE="bm25"` 或测试传入时启用。
 - 主链路时延与缓存优化：`RAGChain._prepare` 调用记忆加载设置 `timeout=1.5s`（L3 `0.8s` 超时快速降级），防止记忆向量化阻塞主链路；`backend/rag/embedding_singleton.py` 对 `embed_query` 输入做 `.strip()` 规范化后再计算请求内缓存 key。
 
+## 工业级 Parent-Child 层级切分与回溯增强
+
+为彻底解决传统固定切块（Fixed-size Chunking）在“切片太小缺少上下文导致模型答非所问”与“切片太大幅度稀释向量相似度导致召回不准”之间的两难困境，系统在切分与检索两端深度实现了工业级 **Parent-Child 两级分块与回溯扩展机制**：
+
+1. **切分端两级解耦（`backend/rag/preprocessing/chunking.py`）**：
+   - **Child / Leaf Chunk（小块）**：`LEAF_CHUNK_TOKENS = 200`，严格按语义句子边界切割，负责高密度语义嵌入并在 PGVector / GIN 中建立索引；每个 Leaf Chunk 元数据中挂载所属父块的唯一标识 `parent_chunk_id`。
+   - **Parent Chunk（大块）**：`PARENT_CHUNK_TOKENS = 800`，覆盖完整业务章节（Section）或多段上下文；当单章节超长时，按 800 tokens 预算自动做跨叶子滑动分组；对于无结构的培训/SOP 文档，自动生成文档级虚拟 Parent（Virtual Parent），杜绝孤儿块。
+2. **检索端精准命中与上下文回溯（`backend/rag/retrieval/retrievers.py::attach_parent_context`）**：
+   - 检索召回仅对 Leaf Chunk 进行余弦距离与倒排打分（Parent Chunk 标记 `granularity="parent"`，默认不直接占用 RRF 候选池名额）；
+   - 当 Leaf Chunk 命中后，`attach_parent_context` 提取命中结果中的 `parent_chunk_id`，向 `chunk_store` 批量发起回溯查询拉取完整 Parent Chunk 并追加至上下文列表；
+   - **截断保护机制（`_truncate_leaves_keep_parents`）**：传统实现往往在取 Top-K 时直接数组切片把后置的 Parent 截掉，导致回溯白费；系统单独区分 Leaf 与 Parent，Top-K 截断仅约束 Leaf 数量，Parent 块作为上下文载体不计入 $k$，确保送入 LLM 的 prompt 具备完整的章节级语义。
+   - **关联表格协同加载（`attach_referenced_context`）**：当 Leaf Chunk 包含 Markdown 文本引用了同文档中的表格时（`references=[{"table_id": "...", "relation": "refers_to"}]`），自动通过关系对象同事务拉取对应表格 Leaf，防止模型在解读条款中的收费标准/参数矩阵时丢失对应数据表。
+
+---
+
+## Agentic RAG：动态反思与自纠错闭环（Self-Correction）
+
+系统打破了传统 RAG “单向线性流水线（检索 -> 拼接 -> 报错即死）”的局限，在问答链中构建了动态闭环的 **Agentic RAG 自反思与自纠错回路（`SelfCorrectionStrategy`）**：
+
+```
+用户提问 ──> 混合检索 ──> Evidence Gate 1&2 ──> LLM 生成
+                                                     │
+                             ┌───────────────────────┴────────────────────────┐
+                             │ LLM 自报评估: <!--META{"can_answer":...}-->   │
+                             └───────────────────────┬────────────────────────┘
+                                                     │
+                                       ┌─────────────┴─────────────┐
+                                  [can_answer: true]          [can_answer: false]
+                                       │                      (no_evidence / low_relevance)
+                                       ▼                                   │
+                              程序化 Claim 事实核验                         ▼
+                                       │                        是否允许重试?
+                                 ┌─────┴─────┐                  (corrector.can_retry())
+                             [通过]        [篡改]                      │
+                               │             │             ┌───────────┴───────────┐
+                               ▼             ▼            [是]                    [否]
+                           输出答案       一票否决         │                       │
+                                                      动态改写 Query            优雅拒答
+                                                  (corrector.try_rewrite)    (_reject)
+                                                           │
+                                                           ▼
+                                                    触发二次自救检索
+```
+
+1. **反思触发时机（Gate 3 与 LLM 自报协议）**：
+   - 系统在 Prompt 中约束 LLM 在回答头部以隐藏注释附带元数据 `<!--META{"can_answer": bool, "citations": [...], "confidence": float, "reason": "..."}-->`；
+   - 若 LLM 自报 `can_answer: false`（原因通常为 `no_evidence` 证据不足或 `low_relevance` 相关性低），系统调用 `_handle_llm_reject` 并不立刻向用户吐出失败，而是区分**“知识库真没有”**与**“检索没找对”**。
+2. **动态自救闭环（`backend/rag/chain.py::_try_self_correct`）**：
+   - 调用 `SelfCorrectionStrategy.try_rewrite`，结合原始提问与拒答根因生成精炼改写词（Rewrite Query）；
+   - 以改写后的 Query 重新触发全套准备与执行流水线（`_prepare` + `_execute`）；
+   - **二次生成双重安全门禁**：改写救活生成的答案依然强制通过 `_verify_claims`（程序化逐条核验数字/日期/金额，绝不允许自纠错成为绕过安全防护的侧门）；
+3. **步数熔断与防死循环管控**：
+   - `SelfCorrectionStrategy` 严格受 `max_retries`（默认 1~2 次）硬上限限制；
+   - 每次重试均在 OpenTelemetry Trace 中独立记录 `SelfCorrection` Span；一旦用尽重试次数或改写后仍无法满足事实核验，系统立即收敛至统一拒答路径 `_reject`，杜绝死循环、Token 溢出与延迟不可控。
+
+---
+
 ## 约束与错误边界
 
 MultiQuery 改写使用 `multi_query` 角色、temperature=0、3 条查询和至少 1024

@@ -55,6 +55,7 @@
 | --- | --- |
 | 网关、部署、异步运行 | docs/architecture/system-overview.md |
 | Router、LangGraph、Runtime、SSE、Checkpoint | docs/architecture/ai-runtime.md |
+| HNSW/RRF底层数学、AST防护与横向选型矩阵 | docs/architecture/theory-and-tradeoffs.md |
 | /agent 对话优先目标架构与跨产品隔离 | docs/architecture/adr/0002-main-agent-conversation-first.md（待施工） |
 | Provider、凭据和跨域服务关系 | docs/architecture/domain-service-map.md |
 | Celery/队列/Lease/重试与幂等 | docs/architecture/async-task-governance.md |
