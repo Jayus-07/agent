@@ -14,7 +14,8 @@ from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any
 
-from backend.observability.tracer import trace_collector, SpanKind
+from backend.observability.tracer import SpanKind
+from backend.rag.indexing.stages.contracts import trace_collector
 from backend.shared.logger import logger
 
 

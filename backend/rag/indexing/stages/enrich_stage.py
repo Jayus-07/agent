@@ -18,14 +18,17 @@ from typing import Any, Mapping
 
 from langchain_core.documents import Document
 
-from backend.rag.indexing.stages.contracts import DOC_LEVEL_TEXT_MAX_CHARS
-from backend.observability.tracer import trace_collector, SpanKind
+from backend.rag.indexing.stages.contracts import (
+    DOC_LEVEL_TEXT_MAX_CHARS,
+    trace_collector,
+)
+from backend.observability.tracer import SpanKind
 from backend.rag.indexing.stages.embedding_stage import EmbeddingStage
 from backend.rag.indexing.stages.filter_stage import mask_index_text_for_pii
 from backend.rag.indexing.stages.metadata_stage import MetadataStage
 from backend.shared.logger import logger
 
-_DOC_LEVEL_BODY_MIN_CHARS = 200
+_DOC_LEVEL_BODY_MIN_CHARS = 2000
 
 
 def select_vector_chunks(chunks: list[Document]) -> list[Document]:
@@ -152,17 +155,26 @@ def preflight_index_embedding_budget(
             span,
             status="error",
             metrics={
-                "estimated_tokens": estimated_tokens,
-                "error": str(exc),
+                "estimated_embedding_tokens": estimated_tokens,
+                "cached_chunk_count": sum(
+                    cached is not None for cached in cached_vectors
+                ),
+                "vector_chunk_count": len(vector_chunks),
+                "error": str(exc)[:240],
             },
         )
         raise
-    else:
-        trace_collector.end_span(
-            span,
-            status="success",
-            metrics={"estimated_tokens": estimated_tokens},
-        )
+    trace_collector.end_span(
+        span,
+        status="success",
+        metrics={
+            "estimated_embedding_tokens": estimated_tokens,
+            "cached_chunk_count": sum(
+                cached is not None for cached in cached_vectors
+            ),
+            "vector_chunk_count": len(vector_chunks),
+        },
+    )
 
 
 class EnrichStage:

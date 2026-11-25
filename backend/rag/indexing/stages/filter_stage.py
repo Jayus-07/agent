@@ -14,7 +14,8 @@ import os
 from typing import Any
 
 from backend.config import CHUNK_OVERLAP, LEAF_CHUNK_TOKENS
-from backend.observability.tracer import trace_collector, SpanKind
+from backend.observability.tracer import SpanKind
+from backend.rag.indexing.stages.contracts import trace_collector
 from backend.shared.logger import logger
 
 

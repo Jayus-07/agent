@@ -11,7 +11,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from backend.observability.tracer import trace_collector, SpanKind
+from backend.observability.tracer import SpanKind
+from backend.rag.indexing.stages.contracts import trace_collector
 from backend.rag.indexing.stages.filter_stage import append_quality_issue
 from backend.shared.logger import logger
 

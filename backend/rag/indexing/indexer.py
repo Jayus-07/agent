@@ -751,6 +751,7 @@ class IncrementalIndexer:
             identity_path=identity_path,
         )
 
+    @property
     def _embed_stage(self) -> EmbeddingStage:
         """embedding Stage（实例级缓存，跨文件复用 embed cache）。"""
         st = getattr(self, "_embed_stage_inst", None)

@@ -19,9 +19,9 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.observability.tracer import trace_collector, SpanKind
+from backend.observability.tracer import SpanKind
 from backend.rag.indexing.processing_lineage_recorder import ProcessingRunRecorder
-from backend.rag.indexing.stages.contracts import _EVAL_FIXTURE_SETS
+from backend.rag.indexing.stages.contracts import _EVAL_FIXTURE_SETS, trace_collector
 from backend.rag.indexing.stages.embedding_stage import EmbeddingStage
 from backend.rag.indexing.stages.enrich_stage import (
     EnrichStage,

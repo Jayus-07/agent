@@ -19,8 +19,8 @@ import time
 from concurrent.futures import Future
 from contextlib import nullcontext
 
-from backend.observability.tracer import trace_collector, SpanKind
-from backend.rag.indexing.stages.contracts import stage_span
+from backend.observability.tracer import SpanKind
+from backend.rag.indexing.stages.contracts import stage_span, trace_collector
 from backend.shared.logger import logger
 from backend.rag.indexing.processing_lineage import ModelIdentity
 

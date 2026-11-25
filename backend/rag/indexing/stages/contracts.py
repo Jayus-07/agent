@@ -12,7 +12,21 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.observability.tracer import trace_collector
+class _TraceCollectorProxy:
+    """代理 trace_collector，优先使用 indexer 模块上被 monkeypatch 的 trace_collector，
+    否则回退到全局 tracer.trace_collector。"""
+
+    def __getattr__(self, name):
+        import sys
+        idx_mod = sys.modules.get("backend.rag.indexing.indexer")
+        if idx_mod is not None:
+            c = getattr(idx_mod, "trace_collector", None)
+            if c is not None and not isinstance(c, _TraceCollectorProxy):
+                return getattr(c, name)
+        from backend.observability.tracer import trace_collector as global_collector
+        return getattr(global_collector, name)
+
+trace_collector = _TraceCollectorProxy()
 from backend.shared.logger import logger
 
 DOC_LEVEL_TEXT_MAX_CHARS = 16000
