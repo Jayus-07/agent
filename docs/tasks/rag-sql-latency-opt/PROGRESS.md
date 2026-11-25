@@ -46,6 +46,24 @@
 | **RAG**: 记忆加载阶段 | **5005.0ms** (超时卡死) | **1.0ms** (快速降级/缓存) | **彻底消除 5 秒卡顿** |
 | **RAG 向量复用**: 相同 Query 向量化出站 | 2~3 次真实调用 | **真实调用 1 次 (复用率 50%)** | **节省出站 RTT 300~700ms** |
 
-## 阶段四：扩展任务登记（技术债务）
+## 阶段四：扩展任务登记（技术债务彻底根治）
 
-- [ ] **技术债务跟踪**：针对 `backend/rag/indexing/indexer.py`（3513 行巨型文件）进行阶段性架构拆分（单一职责原则 SRP + 管道设计模式 Pipeline），后续将建立独立专项重构任务。
+- [x] **技术债务重构完成**：针对 `backend/rag/indexing/indexer.py`（原 3513 行巨型文件）完成企业级 Pipeline 管道模式与单一职责原则（SRP）物理拆分：
+  - 核心文件 `indexer.py` 净减少 2353 行代码（削减 67%），瘦身为门面类（Facade）；
+  - 抽离出 6 个单一职责的专职 Stage 模块与 1 个管道编排器：
+    - `stages/pipeline.py`（管道编排调度器，~320 行）
+    - `stages/parse_stage.py`（加载与统一解析阶段，~220 行）
+    - `stages/filter_stage.py`（查重与分块过滤阶段，~230 行）
+    - `stages/quality_stage.py`（质量审计与付费前拦截，~370 行）
+    - `stages/enrich_stage.py`（Chunk 语义增强与预算预检，~330 行）
+    - `stages/persist_stage.py`（持久化与原子提交回滚，~300 行）
+  - 单元测试与守卫断言完全通过（`test_indexer_pipeline_unified.py` 12/12 PASSED）。
+
+## 提交台账与分支记录
+
+1. **Commit 1 (提速优化)**: `4f2ddde`
+   - `feat(rag,sql): optimize latency by disabling thinking and adding embedding cache reuse`
+2. **Commit 2 (架构重构)**: `12992fb`
+   - `refactor(rag): modularize indexer into pipeline stages following SRP`
+- **任务分支**: `refactor/rag-indexer-pipeline`（基于 `origin/main` 派生）
+
