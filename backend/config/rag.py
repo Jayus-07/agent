@@ -529,6 +529,10 @@ BM25_SEARCH_K = max(1, int(os.getenv("BM25_SEARCH_K", "10")))
 BM25_CANDIDATE_K = max(
     BM25_SEARCH_K, int(os.getenv("BM25_CANDIDATE_K", "100"))
 )
+# 全文倒排检索引擎选择：
+# "pg_gin" (推荐): 基于 PostgreSQL 内置 GIN 索引与 ts_rank_cd，支持行级原子增量写入，零新增内存开销
+# "bm25": 旧版单机 rank_bm25 + pickle 序列化方案（每次全量重算）
+FULLTEXT_ENGINE = os.getenv("FULLTEXT_ENGINE", "pg_gin").strip().lower()
 HYBRID_SEARCH_K = int(os.getenv("HYBRID_SEARCH_K", "8"))
 RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
 

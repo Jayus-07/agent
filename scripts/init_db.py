@@ -391,6 +391,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "154_sys_config_ddl_and_price_seed.sql": "memory",
     # 旅游 V2 官方精选特色模板扩充（北京古都红墙与成都慢调漫步）
     "155_travel_v2_featured_templates.sql": "memory",
+    # RAG 向量表增加 tsvector 与 GIN 倒排索引
+    "156_rag_vectors_tsv_gin.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

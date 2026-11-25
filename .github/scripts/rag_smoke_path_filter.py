@@ -173,6 +173,8 @@ PAID_RELEVANT_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/149_budget_domain_axis.sql",
     # 154 sys_config 启动建表治理 + 模型价格补齐（影响模型计费与价格审批）
     "backend/sql/migrations/154_sys_config_ddl_and_price_seed.sql",
+    # 156 RAG 向量表增加 tsvector 与 GIN 倒排索引（影响 RAG 全文检索与向量写入）
+    "backend/sql/migrations/156_rag_vectors_tsv_gin.sql",
 })
 
 # 与模型调用 / 检索 / 计费无关的迁移：显式列出，禁止靠模糊关键词推断。
