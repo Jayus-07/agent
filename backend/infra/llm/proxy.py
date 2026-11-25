@@ -1,28 +1,26 @@
 """
-proxy.py — _LLMProxy 代理对象 + 模块级 llm 单例
+proxy.py — _LLMProxy 代理对象 + 模块级 llm 单例（Facade 门面）
 
 核心设计:
   - 懒加载：首次调用时才初始化 LLM，根据 LLM_MODEL 自动选择 Provider
   - `llm` 是 _LLMProxy 代理；每次 .invoke()/.stream() 都委派给当前活跃模型
-  - LLMFactory.set_current("doubao-seed-2.0-mini") 后，所有 `llm.invoke(...)` 自动走新模型
-  - 所有调用方 `from backend.infra.llm import llm` 无需修改
-  - 每次调用记录 token + finish_reason + cost_usd 到模块级 _last_call_meta（供 tracer 读取）
-  - P1-7: 韧性链 — 瞬时错误显式重试（指数退避）→ 熔断开路/重试耗尽时
-    切备用模型（LLM_FALLBACK_MODEL）→ 最终降级为固定话术
+  - 架构重构：核心子系统物理拆解至 `backend/infra/llm/gateway/` 子包
+    - context.py: 用户与请求上下文、诊断回调与取消监听
+    - streaming.py: 流式 Sink 管理、增量分片提取与观测
+    - accounting.py: Token 计费、用量累加与财务审计落账
+    - resilience.py: 容灾韧性、重试退避与熔断降级
+    - budget_guard.py: 速率限制、价格档位与上下文预算预检
+    - bound_proxy.py: 参数绑定与模型工具绑定代理
+  - 本模块作为门面（Facade），100% 保持向后兼容导出所有公共及内部契约符号。
 """
 from __future__ import annotations
 
-import asyncio
-import contextvars as _contextvars
 import inspect
+import sys
 import threading
 import time
-import uuid
-from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any
 
-# BaseChatModel 仅作类型标注（TYPE_CHECKING 化）—— langchain_core 1.4.x 的
-# chat_models 在装了 transformers 的环境下连带导入 torch（实测 ~8s）。
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -40,10 +38,6 @@ from backend.core.tool_runtime.deadline import (
     provider_deadline_kwargs,
 )
 from backend.infra.llm.factory import get_llm_factory
-from backend.observability.llm_call_span import (
-    note_prompt_snapshot,
-    note_response_chunk,
-)
 from backend.infra.llm.models import (
     canonical_model_id,
     compute_cost_usd,
@@ -60,323 +54,115 @@ from backend.infra.llm.resolved_model import (
     get_current_resolved_model,
     set_current_resolved_model,
 )
+from backend.observability.llm_call_span import (
+    note_prompt_snapshot,
+    note_response_chunk,
+)
 from backend.shared.logger import logger
 
+# ── 从 gateway 专职子包完整 re-export 符号（保证存量 100% 兼容）───────
+from backend.infra.llm.gateway import (
+    RateLimitError,
+    _BoundLLMProxy,
+    _DEGRADED_ANSWER,
+    _RoleCallCancelled,
+    _TRANSIENT_MARKERS,
+    _acall_with_resilience,
+    _accumulate_turn_usage,
+    _ahandle_terminal_failure,
+    _apreflight_context,
+    _await_role_retry,
+    _bind_role_fallback_generation_kwargs,
+    _breaker_for_resolved_model,
+    _call_diagnostic_observer,
+    _call_with_resilience,
+    _context_length_error,
+    _degraded_answer,
+    _enforce_model_input_price_tier,
+    _enforce_rate_limit,
+    _failed_attempt_http_status,
+    _gate_fixed_shape,
+    _get_override_llm,
+    _handle_terminal_failure,
+    _is_context_length_provider_error,
+    _is_transient,
+    _l5_trigger_ratio,
+    _last_call_meta_var,
+    _last_tokens_var,
+    _notify_call_diagnostic,
+    _notify_degradation,
+    _notify_stream_usage_missing,
+    _override_llm_cache,
+    _override_llm_lock,
+    _preflight_context,
+    _prepare_context_budget,
+    _prepare_context_budget_async,
+    _raise_if_role_call_cancelled,
+    _record_failed_attempt,
+    _record_preflight_failure,
+    _record_stream_attempt,
+    _record_tokens,
+    _reject_overbudget,
+    _request_model_var,
+    _resilience_call_identity,
+    _role_call_cancelled,
+    _role_cancellation_event,
+    _role_fallback_generation_kwargs,
+    _role_max_retries,
+    _role_runtime_policy,
+    _role_skips_fallback,
+    _settle_estimated_stream_usage,
+    _soft_overflow_enabled,
+    _stream_sink_var,
+    _strip_think,
+    _thread_local_user_id,
+    _truncate_messages_to_budget,
+    _try_distributed_rate_limit,
+    _turn_usage_var,
+    _usage_component,
+    _user_id_var,
+    _wait_for_role_retry,
+    _wrap_result,
+    bind_llm_for_role,
+    bind_tools_for_model,
+    emit_stream_delta,
+    enforce_model_input_price_tier,
+    extract_chunk_reasoning,
+    extract_chunk_text,
+    get_request_model_name,
+    get_turn_usage,
+    invalidate_runtime_caches,
+    is_degraded_response,
+    record_llm_result,
+    reset_stream_sink,
+    reset_turn_usage,
+    run_with_role_cancellation,
+    scoped_call_diagnostics,
+    scoped_current_user_id,
+    set_current_user_id,
+    set_request_model,
+    set_stream_sink,
+)
+
 # =====================================================
-# 懒加载默认 LLM
+# 默认主模型与备用模型实例管理（单例/懒加载）
 # =====================================================
 
 _default_llm = None
 _default_llm_model: str | None = None
 _default_lock = threading.Lock()
 
-# PR-0.4: 当前请求的 user_id（限流用）— 调用方可通过 set_current_user_id() 设置。
-# 用 ContextVar 而非全局变量：全局变量在并发请求下互相覆盖，
-# 会把限流扣减算到错误的用户头上
-_user_id_var: _contextvars.ContextVar[str | None] = _contextvars.ContextVar(
-    "llm_current_user_id", default=None,
-)
-
-
-def set_current_user_id(user_id: str | None) -> None:
-    """设置当前请求上下文的 user_id（限流用）。FastAPI 路由层在每次请求开始时调用。"""
-    _user_id_var.set(user_id)
-
-
-@contextmanager
-def scoped_current_user_id(user_id: str | None) -> Iterator[None]:
-    """在短期后台作用域绑定限流用户，并在退出时恢复原值。"""
-    token = _user_id_var.set(user_id or None)
-    try:
-        yield
-    finally:
-        _user_id_var.reset(token)
-
-
-def _thread_local_user_id() -> str | None:
-    """读取当前请求的 user_id（限流用）。"""
-    return _user_id_var.get()
-
-
-_role_cancellation_event: _contextvars.ContextVar[Any] = _contextvars.ContextVar(
-    "llm_role_cancellation_event", default=None,
-)
-_call_diagnostic_observer: _contextvars.ContextVar[Callable | None] = (
-    _contextvars.ContextVar("llm_call_diagnostic_observer", default=None)
-)
-_role_fallback_generation_kwargs: _contextvars.ContextVar[dict[str, Any] | None] = (
-    _contextvars.ContextVar("llm_role_fallback_generation_kwargs", default=None)
-)
-
-
-def run_with_role_cancellation(
-    event: Any,
-    function: Callable[..., Any],
-    *args: Any,
-    **kwargs: Any,
-) -> Any:
-    """在调用上下文中绑定可由等待方触发的角色取消信号。"""
-    token = _role_cancellation_event.set(event)
-    try:
-        return function(*args, **kwargs)
-    finally:
-        _role_cancellation_event.reset(token)
-
-
-@contextmanager
-def scoped_call_diagnostics(observer: Callable[[str, dict[str, Any]], None]):
-    """为单次调用绑定轻量诊断回调，不改变 Proxy 的治理与结算路径。"""
-    token = _call_diagnostic_observer.set(observer)
-    try:
-        yield
-    finally:
-        _call_diagnostic_observer.reset(token)
-
-
-def _notify_call_diagnostic(stage: str, **values: Any) -> None:
-    observer = _call_diagnostic_observer.get()
-    if observer is None:
-        return
-    try:
-        observer(stage, values)
-    except Exception:  # noqa: BLE001 — 诊断回调不得影响模型调用
-        logger.debug("[LLM:proxy] 调用诊断回调失败", exc_info=True)
-
-
-def _role_call_cancelled(role: str) -> bool:
-    if role != "multi_query":
-        return False
-    event = _role_cancellation_event.get()
-    return bool(event is not None and event.is_set())
-
-
-class _RoleCallCancelled(TimeoutError):
-    """区分 Provider 超时和 Provider 尚未启动前的逻辑取消。"""
-
-
-def _raise_if_role_call_cancelled(role: str) -> None:
-    if _role_call_cancelled(role):
-        raise _RoleCallCancelled("multi_query role deadline expired")
-
-
-def _bind_role_fallback_generation_kwargs(fallback):
-    """让 fallback 继承角色入口设置的生成约束。"""
-    generation_kwargs = _role_fallback_generation_kwargs.get()
-    if generation_kwargs:
-        return fallback.bind(**generation_kwargs)
-    return fallback
-
-
-def _wait_for_role_retry(role: str, delay: float) -> None:
-    event = _role_cancellation_event.get() if role == "multi_query" else None
-    if event is not None:
-        if event.wait(delay):
-            _raise_if_role_call_cancelled(role)
-        return
-    time.sleep(delay)
-
-
-async def _await_role_retry(role: str, delay: float) -> None:
-    event = _role_cancellation_event.get() if role == "multi_query" else None
-    if event is None:
-        await asyncio.sleep(delay)
-        return
-    deadline = time.monotonic() + delay
-    while not event.is_set():
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        await asyncio.sleep(min(remaining, 0.05))
-    _raise_if_role_call_cancelled(role)
-
-
-# 按请求模型覆盖：RequestContext.model → bind() 时设置（空 = 用全局模型）。
-# ContextVar 隔离并发请求，与 user_id 限流变量同一模式。
-_request_model_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
-    "llm_request_model", default="",
-)
-
-
-def set_request_model(model: str) -> None:
-    """设置当前请求的模型覆盖。空串清除；非法模型名忽略（回退全局 LLM_MODEL）。
-
-    校验规则收敛到 models.validate_override_model（单一事实来源，2026-09-19）——
-    与 API 边界的 fail-fast 共用同一份判断（见 model-config-admin-ui-design.md §13.1）。
-
-    本层**保持宽容**：非法输入只 warning + 清空，不抛错。原因有二——
-      ① 本层职责是「上下文绑定」而非输入校验：非 HTTP 调用方（评测生成、脚本）
-         拿不到请求上下文来报错；
-      ② tests/test_llm_bind_tools.py 有 4 例锁定该静默语义。
-    """
-    model = (model or "").strip()
-    if not model:
-        _request_model_var.set("")
-        return
-    from backend.infra.llm.models import validate_override_model
-
-    ok, reason = validate_override_model(model, ollama_enabled=OLLAMA_ENABLED)
-    if not ok:
-        if not is_registered_model(model):
-            reason = f"{reason} (可用: {[m['name'] for m in get_available_models()]})"
-        logger.warning(f"[LLM:proxy] 忽略模型覆盖 {model}: {reason} "
-                       f"(回退全局 {get_active_model_name()})")
-        _request_model_var.set("")
-        return
-    _request_model_var.set(model)
-
-
-def get_request_model_name() -> str:
-    """读取当前请求的模型覆盖（空串 = 无覆盖，走全局模型）。
-
-    供 token_counter / ContextBudgetManager 解析「这次调用目标模型」，
-    与 set_request_model 同一 ContextVar，无副作用、无 DB 访问。
-    """
-    return _request_model_var.get()
-
-
-# 覆盖模型的实例缓存（独立于全局默认模型，按需构建）
-_override_llm_cache: dict[str, BaseChatModel] = {}
-_override_llm_lock = threading.Lock()
-
-
-def _get_override_llm(model_name: str) -> BaseChatModel:
-    """获取按请求覆盖模型的实例（懒构建 + 缓存）。"""
-    with _override_llm_lock:
-        inst = _override_llm_cache.get(model_name)
-        if inst is None:
-            logger.info(f"[LLM:proxy] 按请求模型覆盖生效: {model_name}")
-            inst = _build_llm_for(model_name)
-            _override_llm_cache[model_name] = inst
-        return inst
-
-
-def invalidate_runtime_caches() -> None:
-    """清空 proxy/factory 的模型实例缓存，使配置变更立即进入新实例。
-
-    供应商 URL、API Key、请求头和角色绑定都可能在 DB 刷新时变化；只刷新
-    ``credentials`` 字典而保留已构建的 LangChain 客户端，会让客户端继续持有
-    旧凭据。该函数由注册表刷新层调用，避免管理端写入与后台刷新走两套失效逻辑。
-    """
-    global _default_llm, _default_llm_model, _fallback_llm
-    with _default_lock:
-        _default_llm = None
-        _default_llm_model = None
-    with _fallback_lock:
-        _fallback_llm = None
-    with _override_llm_lock:
-        _override_llm_cache.clear()
-    try:
-        # 不因后台刷新而首次创建 factory；只清理已经存在的单例。
-        from backend.infra.llm import factory as factory_module
-
-        factory = factory_module._factory
-        if factory is not None:
-            factory.invalidate()
-    except Exception:
-        logger.warning("[LLM:proxy] 清理工厂实例缓存失败", exc_info=True)
-
-
-# =====================================================
-# P1 真 token 级流式：per-turn 增量 sink
-# =====================================================
-# 生成节点（RAG 链 / Reporter）切到 llm.stream 后，由调用方在每个内容
-# chunk 到达时显式调用 emit_stream_delta，把增量文本推给 SSE 层。
-# proxy 不自动转发：RAG 链的增量要经 MetaStreamFilter 过滤机读尾部，
-# 自动转发会双发并泄漏 META（2026-09-14 修复打字机失效时统一约定）。
-# ContextVar 按上下文隔离：并发请求各推各的，不会串味；
-# LangGraph/LCEL 在同线程执行节点（含 asyncio.run 包装），上下文可达。
-# 限制：LangGraph 并行 Send 的分支任务在内部线程池执行，上下文不可达 →
-# 该分支不产生 delta（最终答案仍由节点输出兜底，仅少流式体验）。
-
-_stream_sink_var: _contextvars.ContextVar = _contextvars.ContextVar(
-    "llm_stream_sink", default=None,
-)
-
-
-def set_stream_sink(sink) -> None:
-    """设置当前上下文的流式增量回调 sink(text: str) -> None。"""
-    _stream_sink_var.set(sink)
-
-
-def reset_stream_sink() -> None:
-    """清除当前上下文的流式 sink（请求结束时调用，防线程复用串味）。"""
-    _stream_sink_var.set(None)
-
-
-def emit_stream_delta(text: str, kind: str = "answer") -> bool:
-    """把生成增量转发给当前 sink。无 sink / 空 text / sink 失败均静默跳过。
-
-    Args:
-        text: 增量文本
-        kind: "answer"（默认，正文 delta）或 "thinking"（推理模型思考链增量）
-    Returns:
-        是否真正转发了（供调用方判断本轮是否发生过流式输出）。
-    """
-    if not text:
-        return False
-    sink = _stream_sink_var.get()
-    if sink is None:
-        return False
-    try:
-        try:
-            sink(text, kind)
-        except TypeError:
-            # 兼容旧式单参 sink(text)（测试桩/未升级的调用方）
-            sink(text)
-        return True
-    except Exception:
-        return False
-
-
-def extract_chunk_text(chunk) -> str:
-    """从流式 chunk 提取文本（兼容 str / AIMessageChunk / 多模态 content list）。"""
-    if isinstance(chunk, str):
-        return chunk
-    c = getattr(chunk, "content", "")
-    if isinstance(c, str):
-        return c
-    if isinstance(c, list):
-        return "".join(
-            p.get("text", "") for p in c if isinstance(p, dict)
-        )
-    return str(c) if c else ""
-
-
-def extract_chunk_reasoning(chunk) -> str:
-    """从流式 chunk 提取思考链增量（推理模型 reasoning_content）。
-
-    LangChain 不解析 reasoning_content，思考型模型（deepseek-reasoner /
-    qwen3 thinking）流式期间它挂在 additional_kwargs 上且 content 为空。
-    非思考模型/str chunk 返回空串，调用方零成本跳过。
-    """
-    if isinstance(chunk, str):
-        return ""
-    kw = getattr(chunk, "additional_kwargs", None) or {}
-    reasoning = kw.get("reasoning_content", "")
-    return reasoning if isinstance(reasoning, str) else ""
+_fallback_llm = None
+_fallback_lock = threading.Lock()
 
 
 def _get_provider_for(model_name: str) -> str:
-    """根据模型名查找所属 provider。
-
-    委托 `models.resolve_provider`（与 `LLMFactory._get_provider` **同源**）。
-
-    此前这里只遍历代码层 `AVAILABLE_MODELS`，与 factory 的判定分叉，带来两个后果：
-      ① 自建 / DB 覆盖层登记的模型判不出 provider → 误判成 ollama，构建出错的实例；
-      ② 本函数同时供 `_last_call_meta["provider"]` 使用（计价链读取），
-         误判会让**费用归属**记到错误的 provider 上。
-    2026-09-19 统一（与 `_build_llm_for` 的凭据链路修复同批）。
-    """
+    """根据模型名查找所属 provider。"""
     return resolve_provider(model_name)
 
 
 def _upstream_model_name(model_name: str) -> str:
-    """登记名 → 上游真实模型名（2026-09-22 登记名/上游名拆分）。
-
-    登记名（llm_models.name）全局唯一，是价格/角色/账目的锚点；发给厂商
-    API 的 ``model`` 参数必须用 upstream_model_name（未设置时与登记名相同）。
-    查不到登记条目（单测 / registry 未加载）时原样返回登记名。
-    """
+    """登记名 → 上游真实模型名。"""
     try:
         entry = get_model_entry(model_name)
     except Exception:
@@ -387,15 +173,7 @@ def _upstream_model_name(model_name: str) -> str:
 
 
 def _resolve_credentials_or_none(provider: str, model_name: str):
-    """解析某 provider 当前生效的数据库凭据。
-
-    返回 None 时，调用方仍会得到清晰的未配置错误；绝不能把它解释为旧 env
-    或 config 常量的回退信号。
-
-    未知 provider 在此**不抛错**：本函数处在聊天热路径上，沿用它原有的兜底语义
-    （落到末尾的 ollama 分支）比新增崩溃点更安全；真正的修法是让自建 provider
-    显式登记（DB 覆盖层）。异常只记 warning，不静默吞掉信息。
-    """
+    """解析某 provider 当前生效的数据库凭据。"""
     from backend.infra.llm.credentials import resolve_credentials
     try:
         return resolve_credentials(provider, model_name=model_name)
@@ -408,22 +186,11 @@ def _resolve_credentials_or_none(provider: str, model_name: str):
 
 
 def _build_llm_for(model_name: str) -> BaseChatModel:
-    """按模型名构建 Provider 实例（不缓存 — 缓存由调用方管理）。
-
-    **凭据在调用时解析并显式传入**（P1a-2 收口，2026-09-19）。这是本函数的关键
-    契约：DB 覆盖层（管理端配置的自建供应商 + 托管密钥）只有沿这条路径才会生效。
-
-    此前本函数调 `build_xxx(model_name)` **不传凭据**，而 `factory._build_instance`
-    已在调用时解析并传入 —— 两条构建路径分叉的后果是：管理端配好的供应商与密钥
-    在真实问答中被**绕开**（`infra/llm/__init__.py` 的 `get_llm` 来自本模块，
-    故线上聊天走的正是这条无凭据路径）。即 P1a-1 + P1b 交付的能力此前处于
-    「能配、能测、不能用」状态（见 model-config-admin-ui-design.md §14.2）。
-    """
+    """按模型名构建 Provider 实例（不缓存 — 缓存由调用方管理）。"""
     provider = _get_provider_for(model_name)
     credentials = _resolve_credentials_or_none(provider, model_name)
-    # 登记名/上游名拆分（2026-09-22）：凭据与账目归属按登记名解析，
-    # 发给厂商 API 的 model 参数用上游名。
     upstream = _upstream_model_name(model_name)
+
     if provider == "deepseek":
         from backend.infra.llm.providers.deepseek import build_deepseek
         return build_deepseek(upstream, credentials)
@@ -434,58 +201,31 @@ def _build_llm_for(model_name: str) -> BaseChatModel:
         from backend.infra.llm.providers.qwen import build_qwen
         return build_qwen(upstream, credentials)
     if provider == "qwen_tp":
-        # Token Plan 模型包端点（@tp 后缀）。此前 proxy 缺此分支，
-        # @tp 模型落到 ollama 兜底被 cloud 模式拒绝（models.py/factory.py
-        # 均已注册 qwen_tp，proxy 构建口径 2026-09-17 对齐）
         from backend.infra.llm.providers.qwen_tp import build_qwen_tp
         return build_qwen_tp(upstream, credentials)
     if provider == "vllm":
-        # 自建 vLLM（OpenAI 兼容协议）。此前 proxy **缺此分支**，而 models.py
-        # 注册了 Qwen/Qwen3-32B-AWQ(provider=vllm) 供选择 → 选它会落到末尾的
-        # ollama 兜底、报一个与真因无关的 Ollama 连接错误。
-        # 与 2026-09-17 修过的 qwen_tp 属同型缺陷（手写分发表与 factory 双维护）。
         from backend.infra.llm.providers.vllm import build_vllm
         return build_vllm(upstream, credentials)
     if provider == "siliconflow":
         from backend.infra.llm.providers.siliconflow import build_siliconflow
         return build_siliconflow(upstream, credentials)
-    # ── DB 自建供应商：按登记协议分发，不再无脑落 ollama 兜底 ──────────
-    # custom-* 此前落到 ollama：拿 OpenAI 兼容地址去打 /api/chat → 上游 404
-    # → 健康页归因「模型不存在」（2026-09-22 实测）。这是 qwen_tp / vllm
-    # 两例同型缺陷的整类收口；与供应商页测试（provider_probe.build_probe_client）
-    # 同一 driver 分发口径。详见 providers/driver_compat.py 模块头。
+
     driver = (get_provider_driver(provider) or "").strip().lower()
     if driver in ("openai", "anthropic"):
         from backend.infra.llm.providers.driver_compat import build_by_driver
-
-        # 输出上限与窗口解耦（STOP B B8）：登记了 max_output_tokens 的模型
-        # 用登记值，否则维持历史行为（窗口值兼任输出上限）。
         _entry = get_model_entry(model_name) or {}
         return build_by_driver(
             driver, upstream, credentials,
             max_tokens=resolve_output_token_cap(_entry, LLM_CONTEXT_LENGTH),
         )
     if driver and driver != "ollama":
-        # driver 已登记但不受支持（如 specialized 专项供应商的 chat 误绑）：
-        # 保留历史兜底语义（聊天热路径上宁可给明确失败也不新增崩溃点），
-        # 但把真因写进日志。
         logger.warning(
             "[LLM:proxy] provider=%s 的协议驱动 %s 不受支持，落 ollama 兜底",
             provider, driver,
         )
-    # ollama / 兜底 — 模型选择完全由 env 配置驱动（LLM_MODEL / 请求覆盖），
-    # 构建层不再按 ENV_MODE 拒建（2026-09-17 拍板：不做 cloud/local 区分）。
-    # 用户配了本地模型但 Ollama 未运行时，invoke 阶段自然报连接错误。
-    # 复用 providers/ollama.build_ollama（与 factory 同源）：它是这里的严格超集 ——
-    # 多出 base_url（credentials > OLLAMA_BASE_URL > 默认，当前三者同为
-    # localhost:11434）与 keep_alive（OLLAMA_KEEP_ALIVE=30m，config 既有意图）。
+
     from backend.infra.llm.providers.ollama import build_ollama
     return build_ollama(upstream, credentials)  # type: ignore[return-value]
-
-
-# P1-7: 备用模型实例缓存（独立于主模型，失败不相互污染）
-_fallback_llm = None
-_fallback_lock = threading.Lock()
 
 
 def _get_fallback_llm() -> BaseChatModel | None:
@@ -508,574 +248,6 @@ def _get_fallback_llm() -> BaseChatModel | None:
                 )
                 return None
     return _fallback_llm
-
-
-# =====================================================
-# P1-7: 韧性链（重试 + 熔断 fallback + 降级话术）
-# =====================================================
-
-# 瞬时错误特征（异常类型名子串匹配 — LangChain 各 Provider 包装后的
-# 异常类名不统一，子串匹配是务实做法）
-_TRANSIENT_MARKERS = (
-    "timeout", "timedout", "connection", "connect", "ratelimit",
-    "serviceunavailable", "overloaded", "temporary", "badgateway",
-    "apitimeout", "network",
-)
-
-_DEGRADED_ANSWER = (
-    "抱歉，AI 服务当前暂时不可用（上游模型故障），请稍后重试。"
-    "你稍后也可以在「模型管理」页切换到其他可用模型。"
-)
-
-
-def _is_transient(err: BaseException) -> bool:
-    name = type(err).__name__.lower()
-    return any(m in name for m in _TRANSIENT_MARKERS)
-
-
-def _is_context_length_provider_error(err: BaseException) -> bool:
-    """provider 异常是否为输入超长（判定逻辑收口在 error_taxonomy）。"""
-    from backend.infra.llm.error_taxonomy import is_context_length_error
-    return is_context_length_error(err)
-
-
-def _context_length_error() -> Exception:
-    """构造统一的超长输入错误（稳定错误码，SSE/API 层据此映射）。"""
-    from backend.context_budget.errors import ContextBudgetExceededError
-    return ContextBudgetExceededError(stage="provider")
-
-
-def _degraded_answer(reason: str = "", error_type: str = "",
-                     provider: str = "", model: str = ""):
-    """构造降级 AIMessage（结构与正常 LLM 返回一致）。
-
-    2026-09-15：**必须带可识别标记**。此消息会流向下游结构化消费者
-    （JSON 解析 / SQL 解析 / 校验器），若不标记就会被当成真实模型内容
-    解析，产出"检测到 Alias"这类与真实原因（LLM 401/超时）毫无关系的
-    报错。消费者可用 is_degraded_response() 判定后 fail-fast。
-    路由专项 Step 3：附统一错误分类（llm_error_type）与 provider/model
-    归属，下游 trace 能看到「这是模型侧问题」而非业务失败。
-    """
-    from langchain_core.messages import AIMessage
-    degraded_meta = {
-        "llm_degraded": True,
-        "llm_degrade_reason": reason[:200],
-        "llm_error_type": error_type,
-        "llm_provider": provider,
-        "llm_model": model,
-    }
-    return AIMessage(
-        content=_DEGRADED_ANSWER,
-        additional_kwargs=dict(degraded_meta),
-        response_metadata=dict(degraded_meta),
-    )
-
-
-def is_degraded_response(msg) -> bool:
-    """判断 LLM 返回是否为降级话术（结构化消费者应据此 fail-fast）。
-
-    双通道判定：additional_kwargs/response_metadata 标记为主（LLM_ALLOW_DEGRADED_ANSWER
-    开启时由 _degraded_answer 打上）；正文前缀匹配为辅——兼容标记丢失
-    （部分 provider 重打包消息）以及跨进程/持久化后仅剩文本的场景。
-    """
-    if msg is None:
-        return False
-    for attr in ("additional_kwargs", "response_metadata"):
-        meta = getattr(msg, attr, None)
-        if isinstance(meta, dict) and meta.get("llm_degraded"):
-            return True
-    content = getattr(msg, "content", None)
-    if isinstance(content, str):
-        return content.strip().startswith(_DEGRADED_ANSWER[:24])
-    return False
-
-
-def _notify_degradation(code: str, detail: dict) -> None:
-    """降级事件告警（best-effort，失败不影响主流程）。"""
-    try:
-        from backend.observability.alerts import log_degradation, make_alert
-        log_degradation(make_alert(code, detail))
-    except Exception:
-        logger.debug("降级告警发送失败", exc_info=True)
-
-
-def _handle_terminal_failure(
-    err: BaseException,
-    args,
-    kwargs,
-    *,
-    model_name: str | None = None,
-    role: str = "main",
-):
-    """重试耗尽/熔断开路后的统一兜底：备用模型 → 降级话术 → 模型错误。
-
-    路由专项 Step 3：错误在 proxy 层统一归类（quota_exhausted/auth_failed/
-    rate_limited/timeout/provider_error），随告警/降级话术/异常透传——
-    模型错误不得被下游包装成 RAG / SQL / Travel 等业务失败。
-    """
-    reason = (
-        type(err).__name__ if role == "multi_query"
-        else f"{type(err).__name__}: {str(err)[:120]}"
-    )
-    from backend.infra.llm.error_taxonomy import ModelProviderError, classify_model_error
-
-    error_type = classify_model_error(err)
-    active_model = canonical_model_id(model_name or "") or (
-        model_name or get_active_model_name()
-    )
-    provider = _get_provider_for(active_model)
-    error_detail = {
-        "reason": reason, "error_type": error_type,
-        "provider": provider, "model": active_model,
-    }
-    # MultiQuery 默认 failure_policy=skip：检索调用方会退回原始 query，不能
-    # 再发起备用模型请求或把拒答话术误当成改写结果。
-    skip_fallback = _role_skips_fallback(role)
-
-    # 1) 备用模型
-    fallback_model, fb = ("", None) if skip_fallback else _get_role_fallback_llm(role)
-    if not skip_fallback:
-        _raise_if_role_call_cancelled(role)
-    if fb is not None:
-        from backend.infra.circuit_breaker import CircuitBreakerOpenError
-        from backend.infra.llm.budget import (
-            RequestBudgetExceeded,
-            release_model_reservation,
-            reserve_model_call,
-            settle_or_review_model_reservation,
-        )
-        from backend.infra.llm.quota import QuotaConfigurationError, QuotaExceeded
-
-        _enforce_model_input_price_tier(
-            args, kwargs, model_name=fallback_model,
-        )
-        # 预算预占必须发生在 fallback 真正执行前；超限不能被下面的
-        # “备用模型失败”兜底逻辑吞掉，否则会绕过硬阻断。
-        try:
-            reserve_model_call("fallback", model_name=fallback_model)
-        except (
-            RequestBudgetExceeded, QuotaConfigurationError, QuotaExceeded,
-        ) as exc:
-            if not isinstance(err, CircuitBreakerOpenError):
-                exc.provider_attempted = True
-            raise
-        try:
-            _raise_if_role_call_cancelled(role)
-            # P1 模型归属：fallback 接管期间上下文改挂备用模型，
-            # 其产出的用量按真实接管者结算（外层 _record_tokens 消费）
-            _prev_ctx = get_current_resolved_model()
-            set_current_resolved_model(ResolvedModelContext(
-                model_id=fallback_model, provider=_get_provider_for(fallback_model),
-                role=role, binding_source="fallback",
-                request_id=(_prev_ctx.request_id if _prev_ctx else ""),
-                trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
-                **model_identity_extras(fallback_model),
-            ))
-            _raise_if_role_call_cancelled(role)
-            # 备用模型同样受执行时限约束：过期抛错走统一失败路径，不再出站。
-            kwargs = provider_deadline_kwargs(fb, kwargs)
-            result = _bind_role_fallback_generation_kwargs(fb).invoke(
-                *args, **kwargs)
-            logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
-            try:
-                from backend.observability.metrics import llm_fallback_total
-                llm_fallback_total.labels(
-                    primary_model=active_model, fallback_model=fallback_model,
-                ).inc()
-            except Exception:
-                pass
-            _notify_degradation("LLM_FALLBACK_USED",
-                                {**error_detail, "fallback_model": fallback_model})
-            return result
-        except _RoleCallCancelled:
-            release_model_reservation()
-            raise
-        except Exception as e:
-            if _is_transient(e):
-                settle_or_review_model_reservation("fallback_failed_possibly_billed")
-            else:
-                release_model_reservation()
-            fallback_error = type(e).__name__ if role == "multi_query" else e
-            logger.warning("[LLM:resilience] 备用模型也失败: %s", fallback_error)
-            _record_failed_attempt(fallback_model, e, decision="fallback")
-    # 2) 降级话术（可关 — 某些调用方需要真实异常驱动自己的降级逻辑）
-    if (
-        LLM_ALLOW_DEGRADED_ANSWER
-        and not skip_fallback
-        and role != "multi_query"
-    ):
-        logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
-        _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
-        return _degraded_answer(reason, error_type=error_type,
-                                provider=provider, model=active_model)
-    # 3) 明确模型错误（默认路径 — fail-fast；统一分类包装，原始异常保留为
-    #    __cause__，调用方按模型错误处置而非业务失败）
-    raise ModelProviderError(
-        f"模型调用失败 [{error_type}] provider={provider} model={active_model}: {reason}",
-        error_type=error_type, provider=provider, model=active_model,
-        origin=err,
-    ) from err
-
-
-async def _ahandle_terminal_failure(
-    err: BaseException,
-    args,
-    kwargs,
-    *,
-    model_name: str | None = None,
-    role: str = "main",
-):
-    """async 版兜底：备用模型 → 降级话术 → 模型错误（分类同同步版）。"""
-    reason = (
-        type(err).__name__ if role == "multi_query"
-        else f"{type(err).__name__}: {str(err)[:120]}"
-    )
-    from backend.infra.llm.error_taxonomy import ModelProviderError, classify_model_error
-
-    error_type = classify_model_error(err)
-    active_model = canonical_model_id(model_name or "") or (
-        model_name or get_active_model_name()
-    )
-    provider = _get_provider_for(active_model)
-    error_detail = {
-        "reason": reason, "error_type": error_type,
-        "provider": provider, "model": active_model,
-    }
-    skip_fallback = _role_skips_fallback(role)
-    fallback_model, fb = ("", None) if skip_fallback else _get_role_fallback_llm(role)
-    if not skip_fallback:
-        _raise_if_role_call_cancelled(role)
-    if fb is not None:
-        from backend.infra.llm.budget import (
-            release_model_reservation,
-            reserve_model_call,
-            settle_or_review_model_reservation,
-        )
-
-        _enforce_model_input_price_tier(
-            args, kwargs, model_name=fallback_model,
-        )
-        reserve_model_call("fallback", model_name=fallback_model)
-        try:
-            _raise_if_role_call_cancelled(role)
-            # P1 模型归属：fallback 接管期间上下文改挂备用模型（async 对称）
-            _prev_ctx = get_current_resolved_model()
-            set_current_resolved_model(ResolvedModelContext(
-                model_id=fallback_model, provider=_get_provider_for(fallback_model),
-                role=role, binding_source="fallback",
-                request_id=(_prev_ctx.request_id if _prev_ctx else ""),
-                trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
-                **model_identity_extras(fallback_model),
-            ))
-            fallback = _bind_role_fallback_generation_kwargs(fb)
-            _raise_if_role_call_cancelled(role)
-            # 与同步路径一致：备用模型调用前按剩余时限收窄，过期不再出站。
-            kwargs = provider_deadline_kwargs(fb, kwargs)
-            result = await fallback.ainvoke(*args, **kwargs)
-            logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
-            try:
-                from backend.observability.metrics import llm_fallback_total
-                llm_fallback_total.labels(
-                    primary_model=active_model, fallback_model=fallback_model,
-                ).inc()
-            except Exception:
-                pass
-            _notify_degradation("LLM_FALLBACK_USED",
-                                {**error_detail, "fallback_model": fallback_model})
-            return result
-        except _RoleCallCancelled:
-            release_model_reservation()
-            raise
-        except asyncio.CancelledError:
-            settle_or_review_model_reservation("fallback_cancelled_possibly_billed")
-            raise
-        except Exception as e:
-            if _is_transient(e):
-                settle_or_review_model_reservation("fallback_failed_possibly_billed")
-            else:
-                release_model_reservation()
-            fallback_error = type(e).__name__ if role == "multi_query" else e
-            logger.warning("[LLM:resilience] 备用模型也失败: %s", fallback_error)
-            _record_failed_attempt(fallback_model, e, decision="fallback")
-    if (
-        LLM_ALLOW_DEGRADED_ANSWER
-        and not skip_fallback
-        and role != "multi_query"
-    ):
-        logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
-        _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
-        return _degraded_answer(reason, error_type=error_type,
-                                provider=provider, model=active_model)
-    raise ModelProviderError(
-        f"模型调用失败 [{error_type}] provider={provider} model={active_model}: {reason}",
-        error_type=error_type, provider=provider, model=active_model,
-        origin=err,
-    ) from err
-
-
-def _resilience_call_identity() -> tuple[str, str, str]:
-    """取本次韧性调用已解析的模型/角色/Provider。"""
-    context = get_current_resolved_model()
-    if context is not None and context.model_id:
-        model_name = canonical_model_id(context.model_id) or context.model_id
-        provider = context.provider or _get_provider_for(model_name)
-        return model_name, context.role or "main", provider
-    model_name = get_active_model_name()
-    return model_name, "main", _get_provider_for(model_name)
-
-
-def _role_runtime_policy(role: str):
-    """读取由 Proxy 消费的角色运行策略。"""
-    if role not in {"multi_query", "chunking"}:
-        return None
-    from backend.config import model_roles
-
-    try:
-        policy = model_roles.resolve_runtime_policy(role)
-    except Exception:
-        # 策略解析不可用时使用代码默认，保证轻量兜底角色仍按自身策略运行。
-        return model_roles.runtime_defaults(role)
-    if role in {"multi_query", "chunking"} and policy.failure_policy not in {"skip", "fallback"}:
-        logger.warning(
-            "[LLM:proxy] 忽略轻量兜底角色的非支持 failure_policy，"
-            "回落到代码默认策略"
-        )
-        defaults = model_roles.runtime_defaults(role)
-        return model_roles.RoleRuntimeDefaults(
-            fallback_model=policy.fallback_model,
-            timeout_seconds=policy.timeout_seconds,
-            max_retries=policy.max_retries,
-            failure_policy=defaults.failure_policy,
-        )
-    return policy
-
-
-def _role_max_retries(role: str) -> int:
-    policy = _role_runtime_policy(role)
-    if policy is None:
-        return LLM_MAX_RETRIES
-    return max(0, int(policy.max_retries))
-
-
-def _role_skips_fallback(role: str) -> bool:
-    policy = _role_runtime_policy(role)
-    return bool(policy and policy.failure_policy != "fallback")
-
-
-def _breaker_for_resolved_model(model_name: str, role: str, provider: str):
-    """main 保持既有熔断器；其他角色按实际模型与 Provider 隔离。"""
-    from backend.infra.circuit_breaker import (
-        get_llm_model_circuit_breaker,
-        llm_circuit_breaker,
-    )
-
-    if role == "main":
-        return llm_circuit_breaker
-    return get_llm_model_circuit_breaker(provider, model_name)
-
-
-def _call_with_resilience(attr, *args, **kwargs):
-    """同步韧性调用：按绑定模型预占/记录，重试与熔断按角色隔离。"""
-    from backend.infra.circuit_breaker import CircuitBreakerOpenError
-    from backend.infra.llm.budget import (
-        RequestBudgetExceeded,
-        release_model_reservation,
-        reserve_model_call,
-        settle_or_review_model_reservation,
-    )
-    from backend.infra.llm.quota import QuotaConfigurationError, QuotaExceeded
-
-    last_err: BaseException | None = None
-    note_prompt_snapshot(args)
-    model_name, role, provider = _resilience_call_identity()
-    _notify_call_diagnostic(
-        "call_identity", model=model_name, role=role, provider=provider,
-    )
-    breaker = _breaker_for_resolved_model(model_name, role, provider)
-    max_retries = _role_max_retries(role)
-    for attempt in range(max_retries + 1):
-        _raise_if_role_call_cancelled(role)
-        # 工具执行时限内：每次尝试前收窄 SDK 读取超时到剩余时限；
-        # 已过期直接抛 TimeoutError，不再发起出站请求（无时限作用域时是 no-op）。
-        kwargs = provider_deadline_kwargs(attr, kwargs)
-        call_id = uuid.uuid4().hex
-        reserve_started = time.monotonic()
-        try:
-            reserve_model_call(
-                "primary" if attempt == 0 else "retry",
-                model_name=model_name,
-            )
-        except (
-            RequestBudgetExceeded, QuotaConfigurationError, QuotaExceeded,
-        ) as exc:
-            if attempt > 0:
-                exc.provider_attempted = True
-            raise
-        finally:
-            from backend.infra.llm.budget import current_reservation_id
-
-            _notify_call_diagnostic(
-                "budget_reserve_ms",
-                duration_ms=(time.monotonic() - reserve_started) * 1000,
-                reservation_id=current_reservation_id(),
-                attempt=attempt,
-            )
-        if _role_call_cancelled(role):
-            release_model_reservation()
-            _raise_if_role_call_cancelled(role)
-        provider_started = time.monotonic()
-        from backend.infra.llm.budget import current_reservation_id
-
-        _notify_call_diagnostic(
-            "provider_call_started",
-            call_id=call_id,
-            reservation_id=current_reservation_id(),
-            attempt=attempt,
-        )
-        try:
-            result = breaker.call(attr, *args, **kwargs)
-            _notify_call_diagnostic(
-                "provider_completed",
-                duration_ms=(time.monotonic() - provider_started) * 1000,
-                call_id=call_id,
-                reservation_id=current_reservation_id(),
-                attempt=attempt,
-            )
-            return result
-        except CircuitBreakerOpenError as e:
-            _notify_call_diagnostic(
-                "provider_not_sent",
-                call_id=call_id,
-                error_type=type(e).__name__,
-                reservation_id=current_reservation_id(),
-                attempt=attempt,
-            )
-            release_model_reservation()
-            logger.warning(f"[LLM:resilience] 熔断开路: {e}")
-            if _role_call_cancelled(role):
-                _raise_if_role_call_cancelled(role)
-            _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
-            return _handle_terminal_failure(
-                e, args, kwargs, model_name=model_name, role=role,
-            )
-        except Exception as e:
-            from backend.infra.llm.budget import current_reservation_id
-
-            reservation_id = current_reservation_id()
-            _notify_call_diagnostic(
-                "provider_error",
-                duration_ms=(time.monotonic() - provider_started) * 1000,
-                call_id=call_id,
-                error_type=type(e).__name__,
-                timeout=isinstance(e, TimeoutError)
-                or "timeout" in type(e).__name__.lower(),
-                reservation_id=current_reservation_id(),
-                attempt=attempt,
-            )
-            # 瞬时类失败可能已计费，进入待对账；确定未计费的失败释放预占。
-            if _is_transient(e):
-                settle_or_review_model_reservation("call_failed_possibly_billed")
-                settlement_status = "needs_review"
-            else:
-                release_model_reservation()
-                settlement_status = "released"
-            _record_failed_attempt(
-                model_name, e,
-                decision="primary" if attempt == 0 else "retry",
-            )
-            _notify_call_diagnostic(
-                "usage_unavailable",
-                reservation_id=reservation_id,
-                settlement_status=settlement_status,
-            )
-            last_err = e
-            if _is_context_length_provider_error(e):
-                raise _context_length_error() from e
-            if _role_call_cancelled(role):
-                _raise_if_role_call_cancelled(role)
-            if not _is_transient(e):
-                break
-            if attempt >= max_retries:
-                break
-            delay = LLM_RETRY_BACKOFF_BASE ** (attempt + 1)
-            logger.warning(
-                f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{max_retries} "
-                f"({type(e).__name__}, {delay:.1f}s 后重试)"
-            )
-            _wait_for_role_retry(role, delay)
-    _raise_if_role_call_cancelled(role)
-    return _handle_terminal_failure(
-        last_err, args, kwargs, model_name=model_name, role=role,
-    )
-
-
-async def _acall_with_resilience(attr, *args, **kwargs):
-    """异步韧性调用：与同步路径使用同一模型角色隔离和用量归属。"""
-    from backend.infra.circuit_breaker import CircuitBreakerOpenError
-    from backend.infra.llm.budget import (
-        release_model_reservation,
-        reserve_model_call,
-        settle_or_review_model_reservation,
-    )
-
-    last_err: BaseException | None = None
-    note_prompt_snapshot(args)
-    model_name, role, provider = _resilience_call_identity()
-    breaker = _breaker_for_resolved_model(model_name, role, provider)
-    max_retries = _role_max_retries(role)
-    for attempt in range(max_retries + 1):
-        _raise_if_role_call_cancelled(role)
-        # 与同步路径一致：每次尝试前按剩余执行时限收窄，过期不再出站。
-        kwargs = provider_deadline_kwargs(attr, kwargs)
-        reserve_model_call(
-            "primary" if attempt == 0 else "retry",
-            model_name=model_name,
-        )
-        if _role_call_cancelled(role):
-            release_model_reservation()
-            _raise_if_role_call_cancelled(role)
-        try:
-            return await breaker.acall(attr, *args, **kwargs)
-        except asyncio.CancelledError:
-            settle_or_review_model_reservation("call_cancelled_possibly_billed")
-            raise
-        except CircuitBreakerOpenError as e:
-            release_model_reservation()
-            logger.warning(f"[LLM:resilience] 熔断开路: {e}")
-            if _role_call_cancelled(role):
-                _raise_if_role_call_cancelled(role)
-            _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
-            return await _ahandle_terminal_failure(
-                e, args, kwargs, model_name=model_name, role=role,
-            )
-        except Exception as e:
-            if _is_transient(e):
-                settle_or_review_model_reservation("call_failed_possibly_billed")
-            else:
-                release_model_reservation()
-            _record_failed_attempt(
-                model_name, e,
-                decision="primary" if attempt == 0 else "retry",
-            )
-            last_err = e
-            if _is_context_length_provider_error(e):
-                raise _context_length_error() from e
-            if _role_call_cancelled(role):
-                _raise_if_role_call_cancelled(role)
-            if not _is_transient(e):
-                break
-            if attempt >= max_retries:
-                break
-            delay = LLM_RETRY_BACKOFF_BASE ** (attempt + 1)
-            logger.warning(
-                f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{max_retries} "
-                f"({type(e).__name__}, {delay:.1f}s 后重试)"
-            )
-            await _await_role_retry(role, delay)
-    _raise_if_role_call_cancelled(role)
-    return await _ahandle_terminal_failure(
-        last_err, args, kwargs, model_name=model_name, role=role,
-    )
 
 
 def _build_default_llm():
@@ -1111,21 +283,7 @@ def _configured_main_model() -> str:
 
 
 def get_llm_for_role(role: str) -> BaseChatModel:
-    """按模型角色获取带缓存的 LLM 实例。
-
-    入库链路的不同阶段不能隐式共用 ``main`` 角色。角色解析仍复用现有
-    DB → env → code-default/inherit 规则和模型实例缓存；调用包装由调用方
-    继续通过 ``_BoundLLMProxy`` 或普通实例完成。
-
-    STOP C（C5 旁路归属修复）：本函数返回的是**裸 LangChain 实例**，不经
-    `_LLMProxy` 包装 → 调用后由 `record_llm_result` 补计量时拿不到调用
-    上下文，usage 被上游回传名带偏（实机：metadata_extract/question_gen
-    链 1174 行 provider=ollama 错位）。这里在返回前登记调用上下文，
-    补计量链即可按登记身份归属。ContextVar 生命周期说明：旁路调用模式
-    都是「get 实例 → invoke → 立即补计量」的同步序列，不会跨请求串味；
-    主链 wrapper 每次调用都会重新 set 覆盖。
-    """
-
+    """按模型角色获取带缓存的 LLM 实例。"""
     from backend.config import model_roles
 
     effective = model_roles.resolve_effective(role)
@@ -1155,26 +313,28 @@ def _configured_fallback_model() -> str:
 
 def _get_role_fallback_llm(role: str) -> tuple[str, Any | None]:
     """优先使用角色策略指定的备用模型，否则继承全局 fallback 角色。"""
-    policy = _role_runtime_policy(role)
+    mod = sys.modules.get("backend.infra.llm.proxy")
+    policy_fn = getattr(mod, "_role_runtime_policy", _role_runtime_policy) if mod else _role_runtime_policy
+    policy = policy_fn(role)
     role_model = str(getattr(policy, "fallback_model", "") or "").strip()
     if role_model:
         try:
-            return role_model, _get_override_llm(role_model)
+            override_fn = getattr(mod, "_get_override_llm", _get_override_llm) if mod else _get_override_llm
+            return role_model, override_fn(role_model)
         except Exception as exc:
             logger.warning(
                 "[LLM:resilience] 角色备用模型初始化失败 (%s)",
                 type(exc).__name__,
             )
             return role_model, None
-    model_name = _configured_fallback_model()
-    return model_name, _get_fallback_llm()
+    fallback_model_fn = getattr(mod, "_configured_fallback_model", _configured_fallback_model) if mod else _configured_fallback_model
+    model_name = fallback_model_fn()
+    fallback_llm_fn = getattr(mod, "_get_fallback_llm", _get_fallback_llm) if mod else _get_fallback_llm
+    return model_name, fallback_llm_fn()
 
 
 def _resolve_active_llm() -> BaseChatModel:
-    """返回当前生效的 LLM 实例：请求覆盖 > factory 缓存 > 懒加载默认。
-
-    每次调用都实时获取工厂实例，确保模型切换后立即生效。
-    """
+    """返回当前生效的 LLM 实例：请求覆盖 > factory 缓存 > 懒加载默认。"""
     override = _request_model_var.get()
     if override:
         factory = get_llm_factory()
@@ -1183,8 +343,6 @@ def _resolve_active_llm() -> BaseChatModel:
             if cached is not None:
                 return cached
         return _get_override_llm(override)
-    # 管理端的 main 角色是持久化控制面，优先于仅存在于进程内的旧 factory
-    # 切换；这样保存配置后下一次请求即可生效，不必重启或再点一次旧切换器。
     try:
         from backend.config import model_roles
 
@@ -1201,11 +359,7 @@ def _resolve_active_llm() -> BaseChatModel:
 
 
 def get_active_model_name() -> str:
-    """返回当前生效模型名（解析顺序与 _resolve_active_llm 一致）。
-
-    供日志/trace 标注"这次 LLM 调用用的哪个模型"
-    （请求覆盖 > factory 当前 > 全局默认 LLM_MODEL）。
-    """
+    """返回当前生效模型名（解析顺序与 _resolve_active_llm 一致）。"""
     override = _request_model_var.get()
     if override:
         return override
@@ -1237,13 +391,7 @@ def _request_attribution_ids() -> tuple[str, str]:
 def _resolve_call_context(
     role: str = "main", model_name: str | None = None,
 ) -> ResolvedModelContext | None:
-    """生成本次调用的 ResolvedModelContext（P1 模型归属修复）。
-
-    每次调用实时解析（请求覆盖 > DB 绑定 > env/代码默认），解析结果存入
-    ContextVar 供 usage 结算消费 —— 流式 chunk 无 model metadata 时从
-    上下文取真实模型，不再回退 import 期常量。软失败返回 None（保持
-    旧回退链语义）。
-    """
+    """生成本次调用的 ResolvedModelContext（P1 模型归属修复）。"""
     try:
         request_id, trace_id = _request_attribution_ids()
 
@@ -1258,7 +406,7 @@ def _resolve_call_context(
                     **model_identity_extras(override),
                 )
 
-        # 2. 显式指定模型（专用角色，如 tool_selector 的角色绑定模型）
+        # 2. 显式指定模型
         resolved_name = str(model_name or "").strip()
         source = "code_default"
         if resolved_name:
@@ -1273,7 +421,7 @@ def _resolve_call_context(
             except Exception:
                 pass
         else:
-            # 3. main 默认解析（与 get_active_model_name 同链）
+            # 3. main 默认解析
             resolved_name = get_active_model_name()
             try:
                 from backend.config import model_roles
@@ -1302,1717 +450,14 @@ def _resolve_call_context(
 
 
 # =====================================================
-# <think> 剥离（防御性，正规方案是 Provider 传 reasoning_split）
+# 核心门面代理对象 _LLMProxy
 # =====================================================
-
-def _strip_think(text: str, *, strip: bool = True) -> str:
-    """剥离模型输出的 <think>...</think> 推理块"""
-    import re
-    text = re.sub(r'<think>[\s\S]*?</think>\s*', '', text)
-    text = re.sub(r'<think>[\s\S]*', '', text)
-    return text.strip() if strip else text
-
-
-# =====================================================
-# 最近一次 LLM 调用元数据（token / finish_reason / cost）
-# =====================================================
-# P1 并发隔离：模块级 dict 会被并发请求互相覆盖（A 的 token 被 B 覆盖，
-# tracer 读到 B 的）。改用 ContextVar 按调用上下文隔离；
-# 读写必须整体 set()/get()（不可变替换），禁止对 .get() 返回的 dict
-# 做 clear()/update()（会改到共享对象）。
-
-_last_tokens_var: _contextvars.ContextVar = _contextvars.ContextVar(
-    "llm_last_tokens", default={},
-)
-_last_call_meta_var: _contextvars.ContextVar = _contextvars.ContextVar(
-    "llm_last_call_meta", default={},
-)
-
-# P0 Token 看板：per-turn 用量累加器（按调用上下文隔离）。
-# 一轮对话会产生多次 LLM 调用（planner/worker/reporter...），单次
-# _last_tokens_var 会被覆盖，这里按模型累加整轮用量，trace finish 时兜底读取。
-_turn_usage_var: _contextvars.ContextVar = _contextvars.ContextVar(
-    "llm_turn_usage", default=None,
-)
-
-
-def _accumulate_turn_usage(model: str, p: int, c: int, t: int,
-                           cached: int, reasoning: int, cost: float,
-                           provider: str | None = None) -> None:
-    """把单次 LLM 调用用量累加到当前上下文的 per-turn 汇总。
-
-    provider 由调用方显式传入（STOP C）：此前这里恒按字符串推断，
-    注册表 miss 时把豆包记成 ollama（STOP A 实机 R2）。
-    """
-    if not model:
-        model = LLM_MODEL
-    resolved_provider = provider or _get_provider_for(model)
-    acc = dict(_turn_usage_var.get() or {})
-    entry = dict(acc.get(model) or {
-        "provider": resolved_provider,
-        "calls": 0,
-        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-        "cached_tokens": 0, "reasoning_tokens": 0, "cost_cny": 0.0,
-    })
-    # 模型已在累计中但 provider 此前推断错误时，以本次权威值纠正
-    entry.setdefault("provider", resolved_provider)
-    if provider:
-        entry["provider"] = provider
-    entry["calls"] = int(entry["calls"]) + 1
-    entry["prompt_tokens"] = int(entry["prompt_tokens"]) + int(p or 0)
-    entry["completion_tokens"] = int(entry["completion_tokens"]) + int(c or 0)
-    entry["total_tokens"] = int(entry["total_tokens"]) + int(t or 0)
-    entry["cached_tokens"] = int(entry["cached_tokens"]) + int(cached or 0)
-    entry["reasoning_tokens"] = int(entry["reasoning_tokens"]) + int(reasoning or 0)
-    # cost 入参 = BillingResult.billed_cost_cny（恒 CNY，2026-10-07 收口）
-    entry["cost_cny"] = float(entry["cost_cny"]) + float(cost or 0.0)
-    acc[model] = entry
-    _turn_usage_var.set(acc)
-
-
-def get_turn_usage() -> dict:
-    """读取当前上下文本轮 LLM 用量汇总：{model: {calls, tokens..., cost_cny}}。
-
-    cost_cny = BillingResult.billed_cost_cny 累加（记账本位币唯一口径）。
-    """
-    return dict(_turn_usage_var.get() or {})
-
-
-def reset_turn_usage() -> None:
-    """清空本轮用量（trace start/finish 时调用，防线程池复用线程串味）。"""
-    _turn_usage_var.set(None)
-
-
-def _usage_component() -> str:
-    """usage 明细行的 component 归因（2026-09-18 窗口级 token 核算）。
-
-    客服域轮次（cs_prefilter 命中时已在 trace.tags 打 cs_target）→
-    "customer_service"；其余主问答/工具链路沿用 PG 列默认 "llm"。
-    token 看板 list_calls/dashboard 已支持按 component 过滤，无需改 store。
-    软失败：trace 不可达时回退默认值，不影响主链路。
-    """
-    try:
-        from backend.observability.tracer import trace_collector
-        t = trace_collector.current()
-        if t is not None and t.tags.get("cs_target"):
-            return "customer_service"
-    except Exception:
-        pass
-    return "llm"
-
-
-def _failed_attempt_http_status(err: BaseException) -> int | None:
-    """提取失败 attempt 的 HTTP 状态码（requests/httpx/openai 兼容），无则 None。
-
-    openai.APIStatusError / httpx.HTTPStatusError 带 status_code 属性；
-    requests.HTTPError 经 .response.status_code 暴露。仅接受 int，
-    避免把字符串/非状态码属性误拼进 finish_reason。
-    """
-    status = getattr(err, "status_code", None)
-    if not isinstance(status, int):
-        status = getattr(getattr(err, "response", None), "status_code", None)
-    return status if isinstance(status, int) else None
-
-
-def _record_failed_attempt(
-    model_name: str, err: BaseException,
-    decision: str = "primary", duration_ms: float = 0.0,
-) -> None:
-    """失败 attempt 也落一行 usage（STOP C / C11）。
-
-    重试/终态失败的 attempt 在 provider 侧可能已产生真实计费（tokens 未知，
-    记 0），此前完全不留痕 —— fallback 分析与成本对账都缺第一跳。行语义：
-    tokens/cost 全 0、finish_reason 带异常类型、cost_status=unpriced、
-    decision 由韧性链标注（primary/retry/fallback）。
-    绝不抛错（usage 软失败原则，与 _record_tokens 一致）。
-    """
-    ledger_written = False
-    try:
-        canonical = canonical_model_id(model_name) or model_name
-        provider = _get_provider_for(canonical)
-        from backend.infra.llm.error_taxonomy import classify_model_error
-        from backend.infra.llm.pricing import COST_STATUS_UNPRICED
-
-        error_type = classify_model_error(err)
-        # HTTP 状态拼入 finish_reason（如 error:APIConnectionError:429）：
-        # 失败 attempt 无 span，这是 HTTP 响应口径唯一可归因的落点。
-        http_status = _failed_attempt_http_status(err)
-        finish_reason = f"error:{type(err).__name__}"
-        if http_status is not None:
-            finish_reason = f"{finish_reason}:{http_status}"
-        try:
-            from backend.observability.llm_usage_store import (
-                current_usage_attribution,
-                get_llm_usage_store,
-            )
-            attribution = current_usage_attribution()
-            ledger_written = bool(get_llm_usage_store().record({
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
-                             + f".{int(time.time() % 1 * 1000):03d}Z",
-                "trace_id": attribution["trace_id"],
-                "request_id": attribution["request_id"],
-                "session_id": attribution["session_id"],
-                "user_id": attribution["user_id"],
-                "tenant_id": attribution["tenant_id"],
-                "component": _usage_component(),
-                "model": canonical,
-                "provider": provider,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-                # ── Billing V2 失败留痕行：调用可能已计费但用量不可知 ──
-                "billing_schema_version": 2,
-                "native_cost": 0.0,
-                "native_currency": "",
-                "billed_cost_cny": 0.0,
-                "price_version": "",
-                "pricing_source": "unpriced",
-                "usage_source": "unavailable",
-                "cost_usd": 0.0,
-                "total_cost": 0.0,
-                "cost_status": COST_STATUS_UNPRICED,
-                "currency": "",
-                "requested_model": "",
-                "upstream_model_id": "",
-                "binding_source": "failed_attempt",
-                "finish_reason": finish_reason,
-                "decision": decision,
-                "duration_ms": round(duration_ms, 1),
-                "run_id": attribution["run_id"],
-                "step_id": attribution["step_id"],
-                "role": attribution["role"],
-                "stage": attribution["stage"],
-            }))
-        except Exception:
-            pass
-        _notify_call_diagnostic(
-            "usage_ledger_write_finished", written=ledger_written,
-        )
-        try:
-            from backend.observability.metrics import (
-                llm_failures_total,
-                llm_requests_total,
-            )
-            llm_failures_total.labels(model=canonical, error_type=error_type).inc()
-            llm_requests_total.labels(
-                model=canonical, provider=provider, status="error",
-            ).inc()
-        except Exception:
-            pass
-    except Exception:
-        logger.debug("[LLM:proxy] 失败 attempt 用量记录异常（忽略）", exc_info=True)
-
-
-def _notify_stream_usage_missing(mode: str) -> None:
-    """流式调用未取得 usage chunk 的显式观测（C13）：计数 + 一次性日志。
-
-    覆盖 provider 不回 stream usage（ChatAnthropic/ChatOllama 无
-    stream_options.include_usage）与客户端提前中断两类场景 —— 禁止沉默。
-    """
-    try:
-        from backend.observability.metrics import llm_usage_missing_total
-        llm_usage_missing_total.inc()
-    except Exception:
-        pass
-    try:
-        model = get_current_resolved_model().model_id \
-            if get_current_resolved_model() is not None else ""
-        logger.warning(
-            "[LLM:proxy] %s 流式结束但未取得 usage chunk（provider 未回传或客户端提前中断），"
-            "本次 token 用量缺失 model=%s", mode, model or "unknown",
-        )
-    except Exception:
-        pass
-
-
-def _record_stream_attempt(
-    attempt: int,
-    duration_ms: float,
-    first_chunk_ms: float | None,
-    *,
-    error_type: str = "",
-):
-    """流式单次尝试的观测留痕（2026-10-29 供应商冷启动排障）。
-
-    122s 尖峰（trace fa64e192291a）时 general_chat span 只有总耗时、
-    无法回答「几次尝试、每次多久、首 token 等了多久」。此处把每次尝试
-    写成 trace 事件 + 结构化日志；trace 不可达时仅留日志（软失败）。
-    """
-    model = ""
-    try:
-        resolved = get_current_resolved_model()
-        model = resolved.model_id if resolved is not None else ""
-    except Exception:
-        pass
-    logger.info(
-        "[LLM:stream] attempt=%d model=%s duration_ms=%.0f first_chunk_ms=%s error=%s",
-        attempt, model or "unknown", duration_ms,
-        "n/a" if first_chunk_ms is None else f"{first_chunk_ms:.0f}",
-        error_type or "none",
-    )
-    try:
-        from backend.observability.tracer import trace_collector
-
-        t = trace_collector.current()
-        span = t.spans[-1] if t is not None and getattr(t, "spans", None) else None
-        if span is not None:
-            trace_collector.add_event(
-                span, "llm_stream_attempt", "info",
-                f"流式尝试 {attempt} 结束（{error_type or '成功'}）",
-                data={
-                    "attempt": attempt,
-                    "model": model,
-                    "duration_ms": round(duration_ms, 1),
-                    "first_chunk_ms": (
-                        None if first_chunk_ms is None else round(first_chunk_ms, 1)
-                    ),
-                    "error_type": error_type,
-                },
-            )
-    except Exception:
-        pass
-
-
-def _record_tokens(
-    result,
-    duration_ms: float | None = None,
-    model_name: str | None = None,
-):
-    """从 LLM 返回值提取 token + finish_reason + cost，存为 dict 供 tracer 读取。
-
-    无 token_usage 时清空 _last_tokens_var 和 _last_call_meta_var。
-    duration_ms: 调用方（wrapper）计得的本次 LLM 调用耗时（含重试/熔断等待）。
-    """
-    try:
-        # C4 统一解析层：usage 数量提取只此一份实现（tracer.parse_tokens 同源委托）
-        from backend.observability.usage_parse import extract_usage_payload
-
-        tu = extract_usage_payload(result)
-        # ChatAnthropic 用 input_tokens/output_tokens，ChatOpenAI 用 prompt_tokens/completion_tokens
-        p = tu.get("prompt_tokens", tu.get("input_tokens", 0))
-        c = tu.get("completion_tokens", tu.get("output_tokens", 0))
-        t = tu.get("total_tokens", p + c)
-        if not t:
-            _last_tokens_var.set({})
-            _last_call_meta_var.set({})
-            from backend.infra.llm.budget import current_reservation_id
-
-            reservation_id = current_reservation_id()
-            try:
-                from backend.infra.llm.budget import record_model_usage
-
-                settlement_status = record_model_usage(
-                    total_tokens=0,
-                    review_reason="provider_usage_missing",
-                )
-            except Exception:
-                settlement_status = "accounting_error"
-            _notify_call_diagnostic(
-                "usage_unavailable",
-                reservation_id=reservation_id,
-                settlement_status=settlement_status,
-            )
-            return
-
-        # 细粒度用量：缓存命中 / 推理 token。
-        # LangChain 统一在 usage_metadata.input_token_details（cache_read/cache_creation）
-        # 与 output_token_details（reasoning）透传；上游未返回时为 0。
-        # ⚠️ 计费口径（2026-09-22 成本计量第一阶段）：LangChain 三家 Provider
-        # （OpenAI/Anthropic/DashScope）的 input_token_details.cache_read 均为
-        # prompt/input tokens 的**子集** —— 按 input 价计费的部分必须是
-        # billable = input - cached，否则缓存部分会被 input 与 cache_read 双算。
-        in_details = tu.get("input_token_details") or {}
-        out_details = tu.get("output_token_details") or {}
-        cached = int(in_details.get("cache_read", 0) or 0)
-        reasoning = int(out_details.get("reasoning", 0) or 0)
-        billable_input = max(int(p) - cached, 0)
-        _last_tokens_var.set({
-            "prompt_tokens": p, "completion_tokens": c, "total_tokens": t,
-            "cached_tokens": cached, "reasoning_tokens": reasoning,
-        })
-
-        # 模型身份归属（STOP C 重排 / C2：调用方显式声明最权威）：
-        # 显式 model_name 参数（补计量链声明的登记名）> ResolvedModelContext
-        #（调用时解析）> response 回传名（纯观测值，只落 upstream_model_id）。
-        # 此前 response 最优先，旁路补计量链被上游回传名（如豆包
-        # doubao-seed-2-0-mini-260428）带偏：归一 miss → provider 误判
-        # ollama → cost=0（实机 1174 行错位）。
-        # 显式名双匹配归一失败（是残缺 upstream 别名而非登记名）时才信 ctx。
-        ctx = get_current_resolved_model()
-        observed_model = ""
-        if hasattr(result, "response_metadata") and result.response_metadata:
-            observed_model = (result.response_metadata.get("model_name", "")
-                              or result.response_metadata.get("model", ""))
-        explicit_name = str(model_name or "").strip()
-        if explicit_name:
-            canonical = canonical_model_id(explicit_name)
-            if canonical == explicit_name and ctx is not None and ctx.model_id \
-                    and ctx.model_id != explicit_name:
-                canonical = ctx.model_id
-        elif ctx is not None:
-            canonical = canonical_model_id(ctx.model_id)
-        else:
-            canonical = canonical_model_id(observed_model)
-        model = canonical or LLM_MODEL
-        upstream_model = observed_model or explicit_name or (
-            ctx.model_id if ctx is not None else "")
-        # provider 归属：ctx 在场且与最终归属一致时用 ctx.provider（调用时
-        # 解析的权威值）；否则按 canonical 双匹配直查（内部不再有 ollama 盲猜
-        # 优先——已登记别名可正确归一）。
-        if ctx is not None and ctx.model_id == model:
-            provider_resolved = ctx.provider
-        else:
-            provider_resolved = _get_provider_for(model)
-        requested_override = ""
-        try:
-            requested_override = str(_request_model_var.get() or "")
-        except Exception:
-            requested_override = ""
-
-        # Prometheus 指标：LLM token 用量
-        try:
-            from backend.observability.metrics import llm_tokens_total
-            if model and p:
-                llm_tokens_total.labels(model=model, direction="prompt").inc(p)
-            if model and c:
-                llm_tokens_total.labels(model=model, direction="completion").inc(c)
-        except Exception:
-            pass  # 指标记录失败不影响核心链路
-
-        finish_reason = "unknown"
-        if hasattr(result, "response_metadata") and result.response_metadata:
-            finish_reason = result.response_metadata.get(
-                "finish_reason",
-                result.response_metadata.get("stop_reason", "unknown"),
-            )
-        from backend.infra.llm.budget import current_request_budget
-        from backend.infra.llm.pricing import (
-            PRICING_SOURCE_UNPRICED,
-            USAGE_SOURCE_PROVIDER,
-            NormalizedUsage,
-            price_usage,
-        )
-
-        budget_state = current_request_budget()
-        enforce = bool(
-            budget_state
-            and budget_state.mode == "enforce"
-            and budget_state.quota_store is not None
-        )
-        # 唯一计费入口（2026-10-07 收口）：observe/enforce 同算法同金额，
-        # 差异只在 cost_status（缺价时 price_unknown vs estimated）与门禁行为。
-        # BillingResult.billed_cost_cny 恒为 CNY——预算结算、llm_usage、
-        # trace、看板全部消费同一结果，任何一层不得重新算钱或二次换汇。
-        billing = price_usage(
-            model, "llm",
-            NormalizedUsage(
-                input_tokens=int(p),
-                cached_input_tokens=cached,
-                cache_write_tokens=int(in_details.get("cache_creation", 0) or 0),
-                output_tokens=int(c),
-                reasoning_tokens=reasoning,
-                tool_calls=int(tu.get("tool_calls", 0) or 0),
-            ),
-            enforce=enforce,
-            usage_source=USAGE_SOURCE_PROVIDER,
-        )
-        cost_decimal = billing.billed_cost_cny
-        cost_status = billing.cost_status
-        # currency 列语义（V2）= 供应商原生报价币种；记账金额看 billed_cost_cny
-        currency = billing.native_currency
-        cost_breakdown = {
-            "input_cost": float(billing.input_cost_cny),
-            "cached_input_cost": float(billing.cached_input_cost_cny),
-            "output_cost": float(billing.output_cost_cny),
-            # 单价快照 = 原生币种；无价（fallback/unpriced）为 None → 落库 NULL
-            "input_unit_price": (
-                float(billing.input_unit_price)
-                if billing.input_unit_price is not None else None
-            ),
-            "output_unit_price": (
-                float(billing.output_unit_price)
-                if billing.output_unit_price is not None else None
-            ),
-            "cache_input_unit_price": (
-                float(billing.cache_input_unit_price)
-                if billing.cache_input_unit_price is not None else None
-            ),
-        }
-        cost = float(cost_decimal)
-        native_cost = float(billing.native_cost)
-        try:
-            from backend.infra.llm.budget import record_model_usage
-
-            settlement_status = record_model_usage(
-                prompt_tokens=p,
-                completion_tokens=c,
-                total_tokens=t,
-                cost=(
-                    None if billing.pricing_source == PRICING_SOURCE_UNPRICED
-                    else cost_decimal
-                ),
-                review_reason=(
-                    "billing_price_unavailable"
-                    if billing.pricing_source == PRICING_SOURCE_UNPRICED
-                    else ""
-                ),
-            )
-        except Exception:
-            # 预算记录是观测/门禁辅助，不能反向破坏模型主链路。
-            settlement_status = "accounting_error"
-        _last_call_meta_var.set({
-            "prompt_tokens": p,
-            "completion_tokens": c,
-            "total_tokens": t,
-            "billable_input_tokens": billable_input,
-            "cached_tokens": cached,
-            "reasoning_tokens": reasoning,
-            "finish_reason": finish_reason,
-            # 币种契约（V2）：cost_usd 只在原生币种确为 USD 时有值；
-            # 记账金额一律看 cost_cny / billed_cost_cny。
-            "cost_usd": native_cost if billing.native_currency == "USD" else 0.0,
-            "cost_cny": cost,
-            "native_cost": native_cost,
-            "native_currency": billing.native_currency,
-            "fx_rate": float(billing.fx_rate) if billing.fx_rate is not None else None,
-            "price_version": billing.price_version or "",
-            "pricing_source": billing.pricing_source,
-            "usage_source": billing.usage_source,
-            "input_cost": cost_breakdown["input_cost"],
-            "cached_input_cost": cost_breakdown["cached_input_cost"],
-            "output_cost": cost_breakdown["output_cost"],
-            "input_unit_price": cost_breakdown["input_unit_price"],
-            "output_unit_price": cost_breakdown["output_unit_price"],
-            "cache_input_unit_price": cost_breakdown["cache_input_unit_price"],
-            "cost_status": cost_status,
-            "settlement_status": settlement_status,
-            "currency": currency,
-            "model": model,
-            "canonical_model_id": model,
-            "upstream_model_id": upstream_model or "",
-            "requested_model": requested_override,
-            "provider": provider_resolved,
-            "configured_model_id": ctx.model_id if ctx is not None else "",
-            "model_role": ctx.role if ctx is not None else "",
-            "binding_source": ctx.binding_source if ctx is not None else "",
-            "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
-        })
-        _accumulate_turn_usage(model, p, c, t, cached, reasoning, cost,
-                               provider=provider_resolved)
-
-        # 统一 llm_call span 出口（2026-10-30）：与上面 llm_usage 行同源同值，
-        # 一个成功调用 = 恰一行 usage + 恰一个 span，不双计（口径见模块注释）。
-        from backend.observability.llm_call_span import record_llm_call_span
-
-        record_llm_call_span(
-            metrics=dict(_last_call_meta_var.get() or {}),
-            result=result,
-            duration_ms=duration_ms or 0.0,
-        )
-
-        # Token 看板明细落库（每调用一行，软失败不影响主链路）
-        usage_ledger_written = False
-        try:
-            from backend.observability.llm_usage_store import (
-                current_usage_attribution,
-                get_llm_usage_store,
-            )
-            from backend.infra.llm.budget import current_call_decision
-            attribution = current_usage_attribution()
-            usage_ledger_written = bool(get_llm_usage_store().record({
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
-                             + f".{int(time.time() % 1 * 1000):03d}Z",
-                "trace_id": attribution["trace_id"],
-                "request_id": attribution["request_id"],
-                "session_id": attribution["session_id"],
-                "user_id": attribution["user_id"],
-                "tenant_id": attribution["tenant_id"],
-                "component": _usage_component(),
-                "model": model,
-                # ctx 在场 = 调用时解析的权威 provider；缺失才按 canonical 直查
-                "provider": provider_resolved,
-                "prompt_tokens": p,
-                "completion_tokens": c,
-                "total_tokens": t,
-                "billable_input_tokens": billable_input,
-                "cached_tokens": cached,
-                "reasoning_tokens": reasoning,
-                # ── Billing V2（2026-10-07 冻结契约）：唯一权威字段 ──
-                "billing_schema_version": 2,
-                "native_cost": native_cost,
-                "native_currency": billing.native_currency,
-                "billed_cost_cny": cost,
-                "fx_rate": (float(billing.fx_rate)
-                            if billing.fx_rate is not None else None),
-                "price_version": billing.price_version or "",
-                "pricing_source": billing.pricing_source,
-                "usage_source": billing.usage_source,
-                "input_cost": cost_breakdown["input_cost"],
-                "cached_input_cost": cost_breakdown["cached_input_cost"],
-                "output_cost": cost_breakdown["output_cost"],
-                "reasoning_cost_cny": float(billing.reasoning_cost_cny),
-                "cache_write_cost_cny": float(billing.cache_write_cost_cny),
-                "tool_call_cost_cny": float(billing.tool_call_cost_cny),
-                "cost_status": cost_status,
-                # 兼容列过渡语义：currency=原生币种；cost_usd 仅原生 USD 时有值，
-                # CNY 原生行为 0（真相在 billed_cost_cny，读层 V2-aware）。
-                "cost_usd": native_cost if billing.native_currency == "USD" else 0.0,
-                "currency": currency,
-                "total_cost": cost,
-                # 身份链（STOP C C2）+ 单价快照（原生币种）
-                "requested_model": requested_override,
-                "upstream_model_id": upstream_model or "",
-                "binding_source": ctx.binding_source if ctx is not None else "",
-                "input_unit_price": cost_breakdown["input_unit_price"],
-                "output_unit_price": cost_breakdown["output_unit_price"],
-                "cache_input_unit_price": cost_breakdown["cache_input_unit_price"],
-                "reasoning_unit_price": (
-                    float(billing.reasoning_unit_price)
-                    if billing.reasoning_unit_price is not None else None
-                ),
-                "cache_write_unit_price": (
-                    float(billing.cache_write_unit_price)
-                    if billing.cache_write_unit_price is not None else None
-                ),
-                "tool_call_unit_price": (
-                    float(billing.tool_call_unit_price)
-                    if billing.tool_call_unit_price is not None else None
-                ),
-                "finish_reason": finish_reason,
-                "decision": current_call_decision(),
-                "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
-                # 业务归因（M5）：skill/tool/域维度，随 attribution 落库
-                "skill_id": attribution["skill_id"],
-                "tool_id": attribution["tool_id"],
-                "agent_domain": attribution["agent_domain"],
-                "run_id": attribution["run_id"],
-                "step_id": attribution["step_id"],
-                "role": attribution["role"],
-                "stage": attribution["stage"],
-            }))
-            # C15：调用计数（低基数 label：model/provider/status）
-            try:
-                from backend.observability.metrics import llm_requests_total
-                llm_requests_total.labels(
-                    model=model, provider=provider_resolved, status="ok",
-                ).inc()
-            except Exception:
-                pass
-        except Exception:
-            pass
-        _notify_call_diagnostic(
-            "usage_ledger_write_finished",
-            written=usage_ledger_written,
-        )
-    except Exception:
-        _last_tokens_var.set({})
-        _last_call_meta_var.set({})
-
-
-def record_llm_result(
-    result,
-    *,
-    duration_ms: float | None = None,
-    model_name: str | None = None,
-) -> None:
-    """记录绕过 ``_LLMProxy`` 的专用角色调用。
-
-    入库阶段按角色获取的是底层 LangChain 实例，不能假设所有调用都经过
-    全局 ``llm`` 代理；专用富化入口用这个显式适配器复用同一计量口径。
-    """
-    _record_tokens(result, duration_ms=duration_ms, model_name=model_name)
-
-
-def _settle_estimated_stream_usage(
-    meter, call_args, duration_ms: float, mode: str,
-) -> bool:
-    """流式 usage 缺失时按本地估算结算（2026-10-02 企业口径）。
-
-    能估算（有输出文本或可识别的 prompt 入参）→ 按 estimated 结算并落
-    llm_usage（binding_source='estimated'），预占正常结算，不进待对账；
-    无法估算（零输出且 prompt 不可识别）→ 返回 False，调用方维持原
-    needs_review 路径。全程软失败：任何异常都返回 False 不反噬主链路。
-    """
-    try:
-        from backend.config.llm import LLM_USAGE_ESTIMATION_ENABLED
-        if not LLM_USAGE_ESTIMATION_ENABLED:
-            return False
-        from backend.infra.llm.usage_estimator import (
-            StreamTextMeter, estimate_prompt_tokens,
-        )
-        if not isinstance(meter, StreamTextMeter):
-            return False
-        prompt_tokens = estimate_prompt_tokens(call_args[0] if call_args else None)
-        completion_tokens = meter.completion_tokens
-        if prompt_tokens <= 0 and completion_tokens <= 0:
-            return False
-        total_tokens = prompt_tokens + completion_tokens
-
-        # 模型归属与 _record_tokens 同口径：调用时解析的 ctx 最权威
-        ctx = get_current_resolved_model()
-        canonical = canonical_model_id(ctx.model_id) if ctx is not None else ""
-        model = canonical or LLM_MODEL
-        if ctx is not None and ctx.model_id == model:
-            provider_resolved = ctx.provider
-        else:
-            provider_resolved = _get_provider_for(model)
-
-        from backend.infra.llm.pricing import (
-            USAGE_SOURCE_ESTIMATED, NormalizedUsage, price_usage,
-        )
-        from backend.infra.llm.budget import current_request_budget
-
-        _budget_state = current_request_budget()
-        _enforce = bool(
-            _budget_state
-            and _budget_state.mode == "enforce"
-            and _budget_state.quota_store is not None
-        )
-        billing = price_usage(
-            model, "llm",
-            NormalizedUsage(input_tokens=prompt_tokens, output_tokens=completion_tokens),
-            enforce=_enforce,
-            usage_source=USAGE_SOURCE_ESTIMATED,
-        )
-        cost_decimal = billing.billed_cost_cny
-        cost_status = billing.cost_status
-        _currency = billing.native_currency
-
-        # 预算结算：估算值视为本次调用的实际用量（保守性由 reserved 上限保证）；
-        # 结算金额 = BillingResult.billed_cost_cny（恒 CNY，与 observe/enforce 同源）
-        from backend.infra.llm.budget import (
-            current_call_decision, record_model_usage,
-        )
-        record_model_usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            cost=cost_decimal,
-        )
-
-        _last_tokens_var.set({
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-            "cached_tokens": 0, "reasoning_tokens": 0,
-        })
-        cost = float(cost_decimal)
-        _native_cost = float(billing.native_cost)
-        _last_call_meta_var.set({
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-            "billable_input_tokens": prompt_tokens,
-            "cached_tokens": 0, "reasoning_tokens": 0,
-            "finish_reason": "estimated_no_usage",
-            # 币种契约（V2）：记账金额看 cost_cny；cost_usd 仅原生 USD 时有值
-            "cost_usd": _native_cost if billing.native_currency == "USD" else 0.0,
-            "cost_cny": cost,
-            "native_cost": _native_cost,
-            "native_currency": billing.native_currency,
-            "fx_rate": float(billing.fx_rate) if billing.fx_rate is not None else None,
-            "price_version": billing.price_version or "",
-            "pricing_source": billing.pricing_source,
-            "usage_source": billing.usage_source,
-            "input_cost": float(billing.input_cost_cny),
-            "cached_input_cost": 0.0,
-            "output_cost": float(billing.output_cost_cny),
-            "input_unit_price": (
-                float(billing.input_unit_price)
-                if billing.input_unit_price is not None else None
-            ),
-            "output_unit_price": (
-                float(billing.output_unit_price)
-                if billing.output_unit_price is not None else None
-            ),
-            "cache_input_unit_price": None,
-            "cost_status": cost_status,
-            "currency": _currency,
-            "model": model,
-            "canonical_model_id": model,
-            "upstream_model_id": ctx.model_id if ctx is not None else "",
-            "requested_model": "",
-            "provider": provider_resolved,
-            "configured_model_id": ctx.model_id if ctx is not None else "",
-            "model_role": ctx.role if ctx is not None else "",
-            "binding_source": "estimated",
-            "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
-        })
-
-        # 估算结算行同样出 llm_call span（usage_source=estimated 标注来源；
-        # StreamTextMeter 不缓存文本，response 快照如实留空）
-        from backend.observability.llm_call_span import record_llm_call_span
-
-        record_llm_call_span(
-            metrics=dict(_last_call_meta_var.get() or {}),
-            result=None,
-            duration_ms=duration_ms or 0.0,
-        )
-
-        # llm_usage 明细落库（estimated 行：聚合口径与供应商 diff 的锚点）
-        try:
-            from backend.observability.llm_usage_store import (
-                current_usage_attribution, get_llm_usage_store,
-            )
-            attribution = current_usage_attribution()
-            get_llm_usage_store().record({
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
-                             + f".{int(time.time() % 1 * 1000):03d}Z",
-                "trace_id": attribution["trace_id"],
-                "request_id": attribution["request_id"],
-                "session_id": attribution["session_id"],
-                "user_id": attribution["user_id"],
-                "tenant_id": attribution["tenant_id"],
-                "component": _usage_component(),
-                "model": model,
-                "provider": provider_resolved,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-                "billable_input_tokens": prompt_tokens,
-                "cached_tokens": 0, "reasoning_tokens": 0,
-                # ── Billing V2（估算行：usage_source=estimated）──
-                "billing_schema_version": 2,
-                "native_cost": _native_cost,
-                "native_currency": billing.native_currency,
-                "billed_cost_cny": cost,
-                "fx_rate": (float(billing.fx_rate)
-                            if billing.fx_rate is not None else None),
-                "price_version": billing.price_version or "",
-                "pricing_source": billing.pricing_source,
-                "usage_source": billing.usage_source,
-                "input_cost": float(billing.input_cost_cny),
-                "cached_input_cost": 0.0,
-                "output_cost": float(billing.output_cost_cny),
-                "reasoning_cost_cny": 0.0,
-                "cache_write_cost_cny": 0.0,
-                "tool_call_cost_cny": 0.0,
-                "cost_status": cost_status,
-                "cost_usd": _native_cost if billing.native_currency == "USD" else 0.0,
-                "currency": _currency,
-                "total_cost": cost,
-                "requested_model": "",
-                "upstream_model_id": ctx.model_id if ctx is not None else "",
-                "binding_source": "estimated",
-                "input_unit_price": (
-                    float(billing.input_unit_price)
-                    if billing.input_unit_price is not None else None
-                ),
-                "output_unit_price": (
-                    float(billing.output_unit_price)
-                    if billing.output_unit_price is not None else None
-                ),
-                "cache_input_unit_price": None,
-                "finish_reason": "estimated_no_usage",
-                "decision": current_call_decision(),
-                "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
-                "run_id": attribution["run_id"],
-                "step_id": attribution["step_id"],
-                "role": attribution["role"],
-                "stage": attribution["stage"],
-                "skill_id": attribution["skill_id"],
-                "tool_id": attribution["tool_id"],
-                "agent_domain": attribution["agent_domain"],
-            })
-        except Exception:
-            pass  # 用量明细软失败，预算结算已发生
-
-        try:
-            from backend.observability.metrics import (
-                llm_usage_estimated_total, llm_usage_missing_total,
-            )
-            llm_usage_missing_total.inc()
-            llm_usage_estimated_total.inc()
-        except Exception:
-            pass
-        logger.info(
-            "[LLM:proxy] %s 流式缺 usage，已按本地估算结算 "
-            "model=%s prompt~%s completion~%s tokens cost=%s",
-            mode, model, prompt_tokens, completion_tokens, cost,
-        )
-        return True
-    except Exception:
-        logger.debug("[LLM:proxy] 估算结算失败，回退待对账路径", exc_info=True)
-        return False
-
-
-def _wrap_result(result, *, strip: bool = True):
-    """递归剥离 LLM 返回值中的 <think> 块，兼容 str / AIMessage / list / dict"""
-    if isinstance(result, str):
-        return _strip_think(result, strip=strip)
-    if hasattr(result, 'content') and isinstance(result.content, str):
-        result.content = _strip_think(result.content, strip=strip)
-    if isinstance(result, list):
-        return [_wrap_result(r, strip=strip) for r in result]
-    if isinstance(result, dict):
-        return {k: _wrap_result(v, strip=strip) for k, v in result.items()}
-    return result
-
-
-# =====================================================
-# 限流执行
-# =====================================================
-
-def _enforce_rate_limit(user_id: str | None) -> None:
-    """根据 LLM_RATE_LIMIT_ENFORCE 配置执行限流。
-
-    Phase 5: Redis 可用时使用分布式限流（跨进程一致），否则 fallback 到进程内限流。
-    二者互斥，不再叠加执行（原先两套都生效 = 同一请求双重扣减）。
-    off    → 仅日志（当前行为），不阻塞请求
-    wait   → 阻塞等待直到获取到令牌（轮询间隔 0.1s）
-    reject → 获取不到令牌时抛 RateLimitError
-    """
-    from backend.config.llm import LLM_RATE_LIMIT_BURST, LLM_RATE_LIMIT_ENFORCE, LLM_RATE_LIMIT_QPS
-
-    distributed = _try_distributed_rate_limit(user_id, LLM_RATE_LIMIT_QPS, LLM_RATE_LIMIT_BURST)
-    if distributed is None:
-        # 分布式限流不可用（Redis 缺失/异常）→ 进程内限流兜底
-        from backend.infra.llm.rate_limiter import get_rate_limiter
-        passed = get_rate_limiter().acquire(user_id=user_id)
-    else:
-        passed = distributed
-
-    if passed:
-        return
-
-    if LLM_RATE_LIMIT_ENFORCE == "reject":
-        from backend.infra.llm.rate_limiter import get_rate_limiter
-        limiter = get_rate_limiter()
-        raise RateLimitError(
-            f"LLM rate limit exceeded (user={user_id}), "
-            f"retry after {limiter.retry_after_seconds(user_id):.1f}s"
-        )
-
-    if LLM_RATE_LIMIT_ENFORCE == "wait":
-        import time
-
-        from backend.infra.llm.rate_limiter import get_rate_limiter
-        limiter = get_rate_limiter()
-        wait = limiter.retry_after_seconds(user_id)
-        logger.info(f"[RateLimit] wait mode: sleeping {wait:.1f}s (user={user_id})")
-        time.sleep(wait)
-        return
-
-    logger.warning(f"[RateLimit] rate limited but enforce=off, proceeding (user={user_id})")
-
-
-def _try_distributed_rate_limit(user_id: str | None, qps: float, burst: float) -> bool | None:
-    """尝试分布式限流。
-
-    Returns:
-        True/False: 分布式限流的获取结果（True=通过）
-        None: Redis 不可用，调用方需 fallback 到进程内限流
-    """
-    try:
-        from backend.infra.redis.client import get_redis
-        if get_redis() is None:
-            return None
-        from backend.infra.llm.distributed_rate_limiter import get_distributed_rate_limiter
-        drl = get_distributed_rate_limiter()
-        if not drl.acquire("global", "all", burst, qps):
-            return False
-        if user_id and not drl.acquire("user", user_id, max(1.0, burst / 10), max(1.0, qps / 10)):
-            return False
-        return True
-    except Exception:
-        return None
-
-
-class RateLimitError(RuntimeError):
-    """LLM 限流拒绝时抛出。"""
-
-
-class _BoundLLMProxy:
-    """绑定模型参数后的治理包装，保持调用和 LangChain 组合路径受控。
-
-    _LLMProxy.__getattr__ 只包装 _WRAP_METHODS 里的方法名，bind_tools
-    若原样透传，拿到的是真实实例上的 RunnableBinding——其后续
-    invoke/ainvoke 会绕过限流、韧性链（重试/熔断/fallback）与 token
-    记录。本类把绑定后的调用重新纳入与 _LLMProxy 相同的包装路径；
-    bind/with_config 和 RAGAS 使用的 generate_prompt 也保留治理包装。
-
-    P1 模型归属：绑定专用模型时（如 tool_selector）携带 model_name/role，
-    调用前登记 ResolvedModelContext，用量按真实模型结算、不串角色。
-    """
-
-    def __init__(self, bound, model_name: str | None = None, role: str = "main",
-                 tools: Any = None,
-                 generation_kwargs: dict[str, Any] | None = None):
-        self._bound = bound
-        self._model_name = model_name or ""
-        self._role = role
-        self._tools = tools
-        self._generation_kwargs = dict(generation_kwargs or {})
-        self._schema_tokens: int | None = None  # 懒算并缓存（schema 静态）
-
-    def _schema_reserved(self) -> int:
-        """bind_tools 的工具 schema token 占用（P0-1：计入输入预算）。"""
-        if self._tools is None:
-            return 0
-        if self._schema_tokens is None:
-            try:
-                from backend.context_budget.token_counter import (
-                    count_tool_schema_tokens,
-                )
-                self._schema_tokens = count_tool_schema_tokens(
-                    self._tools, model=self._model_name or None)
-            except Exception:
-                self._schema_tokens = 0
-        return self._schema_tokens
-
-    def _bind_context(self) -> None:
-        ctx = _resolve_call_context(
-            role=self._role, model_name=self._model_name or None)
-        if ctx is not None:
-            set_current_resolved_model(ctx)
-
-    def invoke(self, *args, **kwargs):
-        user_id = kwargs.get("user_id") or _thread_local_user_id()
-        _enforce_rate_limit(user_id)
-        _stage_started = time.monotonic()
-        self._bind_context()
-        _notify_call_diagnostic(
-            "proxy_model_bind_ms",
-            duration_ms=(time.monotonic() - _stage_started) * 1000,
-        )
-        _stage_started = time.monotonic()
-        args = _preflight_context(args, kwargs,
-            extra_reserved_tokens=self._schema_reserved(),
-            call_method="invoke",
-        )
-        _notify_call_diagnostic(
-            "price_preflight_ms",
-            duration_ms=(time.monotonic() - _stage_started) * 1000,
-        )
-        _t0 = time.monotonic()
-        token = _role_fallback_generation_kwargs.set(
-            self._generation_kwargs or None)
-        try:
-            result = _call_with_resilience(
-                self._bound.invoke, *args, **kwargs)
-        finally:
-            _role_fallback_generation_kwargs.reset(token)
-        from backend.infra.llm.budget import current_reservation_id
-
-        reservation_id = current_reservation_id()
-        _record_tokens(
-            result, duration_ms=(time.monotonic() - _t0) * 1000,
-            model_name=self._model_name or None,
-        )
-        metadata = _last_call_meta_var.get() or {}
-        _notify_call_diagnostic(
-            "usage_accounting_finished",
-            reservation_id=reservation_id,
-            usage_received=bool(_last_tokens_var.get()),
-            cost_status=metadata.get("cost_status", "unknown"),
-            pricing_source=metadata.get("pricing_source", "unknown"),
-            price_version=metadata.get("price_version", ""),
-            settlement_status=metadata.get("settlement_status", "unknown"),
-        )
-        return _wrap_result(result)
-
-    async def ainvoke(self, *args, **kwargs):
-        user_id = kwargs.get("user_id") or _thread_local_user_id()
-        _enforce_rate_limit(user_id)
-        self._bind_context()
-        args = await _apreflight_context(args, kwargs,
-            extra_reserved_tokens=self._schema_reserved(),
-            call_method="ainvoke",
-        )
-        _t0 = time.monotonic()
-        token = _role_fallback_generation_kwargs.set(
-            self._generation_kwargs or None)
-        try:
-            result = await _acall_with_resilience(
-                self._bound.ainvoke, *args, **kwargs)
-        finally:
-            _role_fallback_generation_kwargs.reset(token)
-        _record_tokens(
-            result, duration_ms=(time.monotonic() - _t0) * 1000,
-            model_name=self._model_name or None,
-        )
-        return _wrap_result(result)
-
-    def bind(self, **kwargs):
-        """绑定额外模型参数时继续保留预算与价格门禁。"""
-        return _BoundLLMProxy(
-            self._bound.bind(**kwargs),
-            model_name=self._model_name or None,
-            role=self._role,
-            tools=self._tools,
-        )
-
-    def with_config(self, config=None, **kwargs):
-        """绑定 callbacks/config 时继续经本代理执行。"""
-        return _BoundLLMProxy(
-            self._bound.with_config(config, **kwargs),
-            model_name=self._model_name or None,
-            role=self._role,
-            tools=self._tools,
-        )
-
-    def generate_prompt(self, prompts, stop=None, callbacks=None, **kwargs):
-        """实现 RAGAS 的 BaseLanguageModel 入口并逐条经过 invoke 门禁。"""
-        from langchain_core.outputs import ChatGeneration, LLMResult
-
-        config = {"callbacks": callbacks} if callbacks is not None else None
-        generations = []
-        for prompt in prompts:
-            result = self.invoke(
-                prompt,
-                config=config,
-                stop=stop,
-                **kwargs,
-            )
-            generations.append([
-                ChatGeneration(
-                    message=result,
-                    generation_info=getattr(result, "response_metadata", None),
-                ),
-            ])
-        return LLMResult(generations=generations)
-
-    async def agenerate_prompt(self, prompts, stop=None, callbacks=None, **kwargs):
-        """RAGAS 异步生成入口也逐条经过 ainvoke 预算与价格门禁。"""
-        from langchain_core.outputs import ChatGeneration, LLMResult
-
-        config = {"callbacks": callbacks} if callbacks is not None else None
-        generations = []
-        for prompt in prompts:
-            result = await self.ainvoke(
-                prompt,
-                config=config,
-                stop=stop,
-                **kwargs,
-            )
-            generations.append([
-                ChatGeneration(
-                    message=result,
-                    generation_info=getattr(result, "response_metadata", None),
-                ),
-            ])
-        return LLMResult(generations=generations)
-
-    def bind_tools(self, *args, **kwargs):
-        # 链式绑定（罕见）：继续走包装，不裸透传
-        return _BoundLLMProxy(
-            self._bound.bind_tools(*args, **kwargs),
-            model_name=self._model_name or None, role=self._role,
-            tools=args[0] if args else kwargs.get("tools"),
-            generation_kwargs=self._generation_kwargs,
-        )
-
-    def __getattr__(self, name: str):
-        return getattr(self._bound, name)
-
-
-def bind_tools_for_model(model_name: str, tools) -> "_BoundLLMProxy | None":
-    """为指定模型构建 bind_tools 包装（专用轻量模型场景，如 tool_selector）。
-
-    返回 None（model_name 为空 / 未注册 / 能力不支持 / 构建失败）时调用方
-    应回退全局 llm.bind_tools(tools)。实例经 _get_override_llm 缓存，且用
-    _BoundLLMProxy 包装——专用模型同样走限流/韧性链/token 记录。
-
-    STOP D（D1 工具调用能力门）：Registry 显式声明 capabilities.tools=false
-    的模型直接回退，不再让 provider 报 unsupported function calling 后才失败；
-    未声明（存量目录基本为空）维持现状宽松行为，避免一刀切拦截未登记模型。
-    """
-    if not model_name:
-        return None
-    try:
-        from backend.infra.llm.models import (
-            get_available_models,
-            model_supports,
-            registry_declares,
-        )
-        if model_name not in {m["name"] for m in get_available_models()}:
-            logger.warning(
-                f"[LLM:proxy] 专用模型未注册: {model_name}，回退全局模型")
-            return None
-        entry = get_model_entry(model_name)
-        if entry is not None and registry_declares(entry, "tools") \
-                and not model_supports(entry, "tools"):
-            logger.warning(
-                f"[LLM:proxy] 模型 {model_name} 已登记不支持工具调用"
-                f"(capabilities.tools=false)，回退全局模型")
-            return None
-        inst = _get_override_llm(model_name)
-        return _BoundLLMProxy(
-            inst.bind_tools(tools), model_name=model_name, role="tool_selector",
-            tools=tools,
-        )
-    except Exception as e:
-        logger.warning(f"[LLM:proxy] 专用模型 bind_tools 失败，回退全局: {e}")
-        return None
-
-
-def bind_llm_for_role(
-    role: str,
-    *,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-) -> "_BoundLLMProxy":
-    """按模型角色获取带参数绑定的治理化 LLM 包装（非 tools 场景）。
-
-    B1-B（2026-10-12）：与 ``bind_tools_for_model`` 同构的参数绑定出口。
-    此前旁路调用方（travel llm_intent 等）为带 temperature/max_tokens 只能
-    直构 ``_build_llm_for(...).bind(...)`` 裸实例——绕过限流/预算预占/韧性链/
-    token 记录（审计 P0-2）。本出口把这类调用收进与主链相同的
-    ``_BoundLLMProxy`` 包装：发起前预占预算，调用后按真实用量结算并入
-    llm_usage，role 归属按本函数入参登记。
-
-    角色无绑定模型时抛 RuntimeError（调用方按自身降级语义处理，如
-    travel llm_intent 回落词表链路）——与 ``get_llm_for_role`` 同契约。
-    """
-    from backend.config import model_roles
-
-    effective = model_roles.resolve_effective(role)
-    model_name = str(effective.get("value") or "").strip()
-    if not model_name:
-        raise RuntimeError(f"模型角色 {role!r} 没有可用模型")
-    ctx = _resolve_call_context(role=role, model_name=model_name)
-    if ctx is not None:
-        set_current_resolved_model(ctx)
-    bound = _get_override_llm(model_name)
-    bind_kwargs: dict[str, Any] = {}
-    if temperature is not None:
-        bind_kwargs["temperature"] = temperature
-    if max_tokens is not None:
-        bind_kwargs["max_tokens"] = max_tokens
-    if bind_kwargs:
-        bound = bound.bind(**bind_kwargs)
-    return _BoundLLMProxy(
-        bound, model_name=model_name, role=role,
-        generation_kwargs=bind_kwargs,
-    )
-
-
-# =====================================================
-# 代理对象
-# =====================================================
-
-def _enforce_model_input_price_tier(
-    args: tuple,
-    kwargs: dict | None = None,
-    extra_reserved_tokens: int = 0,
-    *,
-    model_name: str | None = None,
-    call_method: str = "invoke",
-) -> None:
-    """在所有代理调用与预算预占之前限制到已登记的输入价格档位。"""
-    from backend.context_budget.token_counter import (
-        count_message_tokens,
-        count_response_format_tokens,
-        count_tokens,
-        count_tool_schema_tokens,
-    )
-    from backend.infra.llm.pricing import model_input_price_tier_limit
-
-    if not model_name:
-        resolved_model = get_current_resolved_model()
-        model_name = (
-            resolved_model.model_id if resolved_model else get_active_model_name()
-        )
-    limit = model_input_price_tier_limit(model_name)
-    if limit is None:
-        return
-
-    if args:
-        payload = args[0]
-    else:
-        payload = next(
-            (kwargs[key] for key in ("input", "messages", "prompt")
-             if kwargs and key in kwargs),
-            None,
-        )
-        if payload is None:
-            from backend.context_budget.errors import ContextBudgetExceededError
-
-            raise ContextBudgetExceededError(
-                used_tokens=limit + 1,
-                input_budget=limit,
-                stage="price_tier_unrecognized_input",
-            )
-
-    from langchain_core.messages import BaseMessage
-
-    used_tokens: int
-    from langchain_core.messages.utils import convert_to_messages
-
-    def _count_message_sequence(values) -> int:
-        messages = convert_to_messages(values)
-        return sum(
-            count_message_tokens(message, model=model_name)
-            for message in messages
-        )
-
-    def _count_payload(value) -> int:
-        if isinstance(value, BaseMessage):
-            return count_message_tokens(value, model=model_name)
-        if isinstance(value, str):
-            return count_tokens(value, model=model_name)
-        if isinstance(value, dict) and isinstance(value.get("messages"), list):
-            return _count_message_sequence(value["messages"])
-        if isinstance(value, list):
-            if not value:
-                return 0
-            if all(isinstance(item, str) for item in value):
-                counts = [count_tokens(item, model=model_name) for item in value]
-                return (
-                    max(counts, default=0)
-                    if call_method in {"batch", "generate", "agenerate"}
-                    else sum(counts)
-                )
-            if all(isinstance(item, list) for item in value):
-                return max(
-                    (_count_message_sequence(batch) for batch in value),
-                    default=0,
-                )
-            if all(
-                isinstance(item, dict) and isinstance(item.get("messages"), list)
-                for item in value
-            ):
-                return max(
-                    (_count_payload(item) for item in value),
-                    default=0,
-                )
-            return _count_message_sequence(value)
-        if isinstance(value, tuple):
-            if len(value) == 2 and isinstance(value[0], str):
-                return _count_message_sequence([value])
-            return _count_message_sequence(list(value))
-        to_messages = getattr(value, "to_messages", None)
-        if callable(to_messages):
-            return _count_message_sequence(to_messages())
-        to_string = getattr(value, "to_string", None)
-        if callable(to_string):
-            return count_tokens(str(to_string()), model=model_name)
-        from backend.context_budget.errors import ContextBudgetExceededError
-
-        raise ContextBudgetExceededError(
-            used_tokens=limit + 1,
-            input_budget=limit,
-            stage="price_tier_unrecognized_input",
-        )
-
-    used_tokens = _count_payload(payload)
-
-    reserved = max(0, int(extra_reserved_tokens or 0))
-    if kwargs:
-        reserved += count_tool_schema_tokens(kwargs.get("tools"))
-        reserved += count_response_format_tokens(kwargs.get("response_format"))
-    total_tokens = used_tokens + reserved
-    if total_tokens > limit:
-        from backend.context_budget.errors import ContextBudgetExceededError
-
-        raise ContextBudgetExceededError(
-            used_tokens=total_tokens,
-            input_budget=limit,
-            stage="price_tier_input_limit",
-        )
-
-
-def enforce_model_input_price_tier(
-    args: tuple,
-    *,
-    model_name: str,
-    kwargs: dict | None = None,
-) -> None:
-    """为尚未迁入统一代理的兼容调用提供相同的价格档位硬门禁。"""
-    _enforce_model_input_price_tier(args, kwargs, model_name=model_name)
-
-
-def _prepare_context_budget(args: tuple, kwargs: dict | None = None,
-                            extra_reserved_tokens: int = 0,
-                            *, call_method: str = "invoke") -> tuple:
-    """统一 Prompt Preflight（2026-09-22，ContextBudgetManager）：LLM 调用前
-    对 messages 形态的输入走 ContextBudgetManager.prepare_llm_context
-    （L2 历史裁剪 → L4 折叠 → 确定性 hard trim → L5 AutoCompact 触发）。
-
-    - list[BaseMessage] 输入 → 超过 input_budget 时进入统一预算链路；
-      SystemMessage 与最后一条消息（当前 prompt/问题）永不丢弃；
-    - extra_reserved_tokens：bind_tools 场景的工具 schema 占用（调用方
-      构造时已折算）；kwargs 里的 tools/response_format 此处补算；
-    - 其他输入形态（str / PromptValue / 批量 / OpenAI dict）无法安全
-      改写：只做用量门禁，超预算直接拒绝（当前问题属保护项，放不下
-      = 明确报错，而不是静默超窗）；
-    只影响本次发送给模型的内容，不触碰任何持久化历史。
-
-    2026-09-23 P0 接线修复：invoke/ainvoke/stream/astream/bind_tools
-    全部挂进本函数（此前只有 _LLMProxy.__call__ 单点）。
-
-    2026-10-01 STOP A fail-closed 收口：
-      - 移除「预检失败原样放行」：预检链路自身异常 = 无法证明预算内，
-        计数 + error 日志后向上抛，由调用方终止本次模型调用；
-      - 全部裁剪后仍超预算（prepared.overflow）→ 抛
-        ContextBudgetExceededError，provider 调用次数必须为 0；
-      - 未知输入形态留 debug 日志后放行（仓库现有调用形态已全覆盖）。
-    """
-    from langchain_core.messages import BaseMessage
-
-    from backend.config import CONTEXT_BUDGET_ENABLED
-    if not CONTEXT_BUDGET_ENABLED or not args:
-        return args
-    payload = args[0]
-
-    from backend.context_budget import context_budget
-    from backend.context_budget.errors import ContextBudgetExceededError
-
-    # 非消息占用：bind_tools schema（构造期折算）+ kwargs 里的
-    # tools/response_format（每次调用现算，量小）
-    reserved = max(0, int(extra_reserved_tokens or 0))
-    if kwargs:
-        try:
-            from backend.context_budget.token_counter import (
-                count_response_format_tokens,
-                count_tool_schema_tokens,
-            )
-            reserved += count_tool_schema_tokens(kwargs.get("tools"))
-            reserved += count_response_format_tokens(
-                kwargs.get("response_format"))
-        except Exception:
-            pass
-
-    budget = context_budget.get_input_budget(extra_reserved_tokens=reserved)
-
-    # ── 形态 1：list[BaseMessage]（生产主路径）─────────────────────
-    if isinstance(payload, list) and payload \
-            and all(isinstance(m, BaseMessage) for m in payload):
-        from backend.memory.token_budget import count_message_tokens
-        total = sum(count_message_tokens(m) for m in payload)
-        # 快路径（STOP D 口径统一）：低于 L5 触发线（budget×
-        # CONTEXT_L5_TRIGGER_RATIO）才零改动返回——90%~100% 区间必须进入
-        # 统一预算链路（L2/L4 多为空转，L5 触发判定在同一份用量上执行），
-        # 不再出现「代理在 total<=budget 时短路、L5 永不触发」的入口分裂
-        l5_ratio = _l5_trigger_ratio()
-        if total <= budget * l5_ratio:
-            return args
-        try:
-            prepared = context_budget.prepare_llm_context(
-                messages=payload, extra_reserved_tokens=reserved)
-        except ContextBudgetExceededError:
-            raise
-        except Exception:
-            # 预检自身故障 = 无法证明预算内：fail-closed，不再原样放行
-            _record_preflight_failure()
-            logger.error(
-                "[LLM:preflight] 预检失败，无法证明预算内，拒绝发送"
-                "（fail-closed）", exc_info=True)
-            raise
-        if prepared.overflow:
-            # D-9 修复（2026-10-05）：压缩后仍超预算 → 优雅降级截断
-            # （保留 system 首条 + 最新消息，最新消息 content 尾部截断），
-            # 不再直接 500——多文档大召回场景（RAG）此前整体硬拒。
-            # CONTEXT_BUDGET_SOFT_OVERFLOW=false 可回退旧硬拒行为。
-            if _soft_overflow_enabled():
-                messages = _truncate_messages_to_budget(payload, budget)
-                from backend.context_budget.metrics import record_overflow
-                record_overflow("soft_truncate")
-                logger.warning(
-                    f"[LLM:preflight] overflow 优雅降级: {total} tokens → "
-                    f"截断至预算 {budget}（保留 system+最新消息）")
-                return (messages, *args[1:])
-            _reject_overbudget(
-                prepared.usage.used_tokens if prepared.usage else total,
-                budget, "final_gate")
-        logger.info(
-            f"[LLM:preflight] 上下文超预算已压缩: {total}→"
-            f"{prepared.usage.used_tokens} tokens (budget={budget})")
-        return (prepared.messages, *args[1:])
-
-    # ── 形态 2：批量 list[list[BaseMessage]]（逐条过预算链路）──────
-    if isinstance(payload, list) and payload and all(
-            isinstance(item, list) and item
-            and all(isinstance(m, BaseMessage) for m in item)
-            for item in payload):
-        gated: list[list] = []
-        for item in payload:
-            prepared = context_budget.prepare_llm_context(
-                messages=item, extra_reserved_tokens=reserved)
-            if prepared.overflow:
-                _reject_overbudget(
-                    prepared.usage.used_tokens if prepared.usage else 0,
-                    budget, "final_gate_batch")
-            gated.append(prepared.messages)
-        return (gated, *args[1:])
-
-    # ── 形态 3~5：不可安全改写的输入 → 只做用量门禁（同步/异步共用）──
-    if _gate_fixed_shape(payload, budget, call_method=call_method):
-        return args
-    return args  # 不可达（消息形态在上面两分支已返回）
-
-
-def _preflight_context(args: tuple, kwargs: dict | None = None,
-                       extra_reserved_tokens: int = 0,
-                       *, call_method: str = "invoke") -> tuple:
-    """先按上下文预算裁剪，再执行统一价格档位的硬输入上限。"""
-    from backend.config import CONTEXT_BUDGET_ENABLED
-
-    if not CONTEXT_BUDGET_ENABLED or not args:
-        _enforce_model_input_price_tier(
-            args, kwargs, extra_reserved_tokens, call_method=call_method,
-        )
-        return args
-    prepared = _prepare_context_budget(
-        args, kwargs, extra_reserved_tokens, call_method=call_method,
-    )
-    _enforce_model_input_price_tier(
-        prepared, kwargs, extra_reserved_tokens, call_method=call_method,
-    )
-    return prepared
-
-
-def _soft_overflow_enabled() -> bool:
-    """D-9：压缩后仍超预算时是否优雅降级（默认 true；false=旧硬拒）。"""
-    import os
-    return os.getenv("CONTEXT_BUDGET_SOFT_OVERFLOW", "true").lower() == "true"
-
-
-def _truncate_messages_to_budget(payload: list, budget: int) -> list:
-    """D-9 优雅降级：保留首条（system）+ 最新消息；最新消息 content
-    超预算则按字符比例截断（≈ tokens×4 的保守换算，中文偏安全）。"""
-    from backend.memory.token_budget import count_message_tokens
-
-    messages = list(payload)
-    if not messages:
-        return messages
-    head, tail = messages[0], messages[-1]
-    tail_tokens = count_message_tokens(tail)
-    head_tokens = count_message_tokens(head) if len(messages) > 1 else 0
-    allowance = max(budget - head_tokens - 256, 512)  # 留输出余量
-    if tail_tokens > allowance:
-        content = tail.content if isinstance(tail.content, str) else str(tail.content)
-        # 字符比例截断（tokens→chars 用 allowance/tail_tokens 比例，再留 5% 余量）
-        keep_chars = max(int(len(content) * allowance / max(tail_tokens, 1) * 0.95), 256)
-        truncated = content[:keep_chars] + chr(10) + "…（上下文过长，已截断尾部）"
-        try:
-            tail = tail.__class__(content=truncated,
-                                  additional_kwargs=tail.additional_kwargs)
-        except TypeError:
-            # 测试桩/非标消息类：退化为同型浅拷贝（content 替换）
-            import copy as _copy
-
-            tail = _copy.copy(tail)
-            tail.content = truncated
-    return [head, tail] if len(messages) > 1 else [tail]
-
-
-def _l5_trigger_ratio() -> float:
-    """L5 触发阈值（config 活读；proxy 快路径与 manager 共用同一常量）。"""
-    try:
-        import backend.config as _config
-        return max(0.0, min(1.0, float(getattr(
-            _config, "CONTEXT_L5_TRIGGER_RATIO", 0.90))))
-    except Exception:
-        return 0.90
-
-
-def _reject_overbudget(used: int, budget: int, stage: str) -> None:
-    """最终硬门禁：低基数计数 + error 日志 + 稳定错误码（provider 0 调用）。"""
-    from backend.context_budget.errors import ContextBudgetExceededError
-    from backend.context_budget.metrics import record_overflow
-    record_overflow(stage)
-    logger.error(
-        f"[LLM:preflight] {stage}: 输入无法容纳于预算 "
-        f"used={used} budget={budget}，拒绝调用 provider")
-    raise ContextBudgetExceededError(
-        used_tokens=used, input_budget=budget, stage=stage)
-
-
-def _record_preflight_failure() -> None:
-    """预检自身故障计数（低基数，无 payload 信息）。"""
-    try:
-        from backend.observability.metrics import degradation_alerts_total
-        degradation_alerts_total.labels(
-            code="context_preflight_failed", level="warn").inc()
-    except Exception:
-        pass
-
-
-def _gate_fixed_shape(
-    payload: Any, budget: int, *, call_method: str = "invoke",
-) -> bool:
-    """不可安全改写形态的用量门禁（同步/异步入口共用，STOP B）。
-
-    返回 True = 该形态已处理（门禁通过放行 / 未知形态 debug 留痕放行）；
-    返回 False = payload 是消息形态，由调用方的预算链路分支处理。
-    超预算直接抛 ContextBudgetExceededError（当前问题属保护项，
-    放不下 = 明确报错，而不是静默超窗）。
-    """
-    from backend.context_budget.token_counter import count_tokens
-
-    def _count_text(t: Any) -> int:
-        return count_tokens(t)
-
-    if isinstance(payload, str):
-        used = _count_text(payload)
-        if used > budget:
-            _reject_overbudget(used, budget, "str_input")
-        return True
-    if isinstance(payload, list) and payload \
-            and all(isinstance(s, str) for s in payload):
-        counts = [_count_text(s) for s in payload]
-        used = (
-            max(counts, default=0)
-            if call_method in {"batch", "generate", "agenerate"}
-            else sum(counts)
-        )
-        if used > budget:
-            _reject_overbudget(used, budget, "batch_str")
-        return True
-    if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
-        # OpenAI dict 形态：逐条累计 content（无法安全改写，只做门禁）
-        used = 0
-        for m in payload["messages"]:
-            content = m.get("content") if isinstance(m, dict) else None
-            if isinstance(content, str):
-                used += _count_text(content)
-        if used > budget:
-            _reject_overbudget(used, budget, "dict_messages")
-        return True
-    to_string = getattr(payload, "to_string", None)
-    if callable(to_string):  # PromptValue 形态
-        used = _count_text(str(to_string()))
-        if used > budget:
-            _reject_overbudget(used, budget, "prompt_value")
-        return True
-
-    logger.debug(
-        f"[LLM:preflight] 未知输入形态，跳过预算门禁: "
-        f"{type(payload).__name__}")
-    return True
-
-
-async def _prepare_context_budget_async(
-    args: tuple, kwargs: dict | None = None, extra_reserved_tokens: int = 0,
-    *, call_method: str = "invoke",
-) -> tuple:
-    """_preflight_context 的异步在线版（STOP B 2026-10-01）。
-
-    与同步版共享同一预算口径与最终硬门禁；差异仅在消息形态走
-    prepare_llm_context_async——L5 阶段「有时限地等待同轮摘要」，
-    成功重建本轮 projection，失败/超时沿用确定性结果。
-    两个入口必须同步演进：非消息形态门禁在 _gate_fixed_shape 共用。
-    """
-    from langchain_core.messages import BaseMessage
-
-    from backend.config import CONTEXT_BUDGET_ENABLED
-    if not CONTEXT_BUDGET_ENABLED or not args:
-        return args
-    payload = args[0]
-
-    from backend.context_budget import context_budget
-    from backend.context_budget.errors import ContextBudgetExceededError
-
-    reserved = max(0, int(extra_reserved_tokens or 0))
-    if kwargs:
-        try:
-            from backend.context_budget.token_counter import (
-                count_response_format_tokens,
-                count_tool_schema_tokens,
-            )
-            reserved += count_tool_schema_tokens(kwargs.get("tools"))
-            reserved += count_response_format_tokens(
-                kwargs.get("response_format"))
-        except Exception:
-            pass
-
-    budget = context_budget.get_input_budget(extra_reserved_tokens=reserved)
-
-    # ── 形态 1：list[BaseMessage]（异步在线路径）───────────────────
-    if isinstance(payload, list) and payload \
-            and all(isinstance(m, BaseMessage) for m in payload):
-        from backend.memory.token_budget import count_message_tokens
-        total = sum(count_message_tokens(m) for m in payload)
-        # 快路径阈值与同步版一致（STOP D：低于 L5 触发线才零改动跳过）
-        if total <= budget * _l5_trigger_ratio():
-            return args
-        try:
-            prepared = await context_budget.prepare_llm_context_async(
-                messages=payload, extra_reserved_tokens=reserved)
-        except ContextBudgetExceededError:
-            raise
-        except Exception:
-            _record_preflight_failure()
-            logger.error(
-                "[LLM:preflight] 异步预检失败，无法证明预算内，拒绝发送"
-                "（fail-closed）", exc_info=True)
-            raise
-        if prepared.overflow:
-            # D-9 修复（2026-10-05）：压缩后仍超预算 → 优雅降级截断
-            # （保留 system 首条 + 最新消息，最新消息 content 尾部截断），
-            # 不再直接 500——多文档大召回场景（RAG）此前整体硬拒。
-            # CONTEXT_BUDGET_SOFT_OVERFLOW=false 可回退旧硬拒行为。
-            if _soft_overflow_enabled():
-                messages = _truncate_messages_to_budget(payload, budget)
-                from backend.context_budget.metrics import record_overflow
-                record_overflow("soft_truncate")
-                logger.warning(
-                    f"[LLM:preflight] overflow 优雅降级: {total} tokens → "
-                    f"截断至预算 {budget}（保留 system+最新消息）")
-                return (messages, *args[1:])
-            _reject_overbudget(
-                prepared.usage.used_tokens if prepared.usage else total,
-                budget, "final_gate")
-        logger.info(
-            f"[LLM:preflight] 上下文超预算已压缩: {total}→"
-            f"{prepared.usage.used_tokens} tokens (budget={budget})")
-        return (prepared.messages, *args[1:])
-
-    # ── 形态 2：批量 list[list[BaseMessage]]───────────────────────
-    if isinstance(payload, list) and payload and all(
-            isinstance(item, list) and item
-            and all(isinstance(m, BaseMessage) for m in item)
-            for item in payload):
-        gated: list[list] = []
-        for item in payload:
-            prepared = await context_budget.prepare_llm_context_async(
-                messages=item, extra_reserved_tokens=reserved)
-            if prepared.overflow:
-                _reject_overbudget(
-                    prepared.usage.used_tokens if prepared.usage else 0,
-                    budget, "final_gate_batch")
-            gated.append(prepared.messages)
-        return (gated, *args[1:])
-
-    # ── 形态 3~5：与同步版共用同一门禁 ─────────────────────────────
-    if _gate_fixed_shape(payload, budget, call_method=call_method):
-        return args
-    return args
-
-
-async def _apreflight_context(args: tuple, kwargs: dict | None = None,
-                              extra_reserved_tokens: int = 0,
-                              *, call_method: str = "invoke") -> tuple:
-    """异步先裁剪上下文，再拒绝超出当前价格档位的输入。"""
-    from backend.config import CONTEXT_BUDGET_ENABLED
-
-    if not CONTEXT_BUDGET_ENABLED or not args:
-        _enforce_model_input_price_tier(
-            args, kwargs, extra_reserved_tokens, call_method=call_method,
-        )
-        return args
-    prepared = await _prepare_context_budget_async(
-        args, kwargs, extra_reserved_tokens, call_method=call_method,
-    )
-    _enforce_model_input_price_tier(
-        prepared, kwargs, extra_reserved_tokens, call_method=call_method,
-    )
-    return prepared
-
 
 class _LLMProxy:
-    """代理对象：每次调用都实时委派给当前活跃 LLM，并全局剥离 <think> 块"""
+    """代理对象：每次调用都实时委派给当前活跃 LLM，并协调韧性与用量记录。"""
 
     __slots__ = ()
-    # LangChain 在把可调用对象包装成 RunnableLambda 时会读取
-    # ``__name__``。这个元数据不应触发真正模型解析；否则仅构建检索链
-    # 也会提前初始化 provider，导致无凭据环境在构造期失败，并破坏代理
-    # 的惰性解析语义。
     __name__ = "llm_proxy"
-    # inspect.isasyncgenfunction / LangChain 的 runnable 适配还会读取
-    # ``__code__``。显式提供空值，避免这些纯元数据探测落入 __getattr__
-    # 解析真实 provider；有凭据与否都必须不影响链装配期。
     __code__ = None
     __defaults__ = None
     __kwdefaults__ = None
@@ -3026,9 +471,7 @@ class _LLMProxy:
             def bind_wrapper(*args, **kwargs):
                 return _BoundLLMProxy(attr(*args, **kwargs), role="main")
             return bind_wrapper
-        # bind_tools 返回 RunnableBinding，其 invoke/ainvoke 不在
-        # _WRAP_METHODS 内，裸透传会绕过限流/韧性链/token 记录——
-        # 用 _BoundLLMProxy 重新纳入包装（function calling 路径）
+
         if name == "bind_tools" and callable(attr):
             def bind_tools_wrapper(*args, **kwargs):
                 return _BoundLLMProxy(
@@ -3036,11 +479,8 @@ class _LLMProxy:
                     tools=args[0] if args else kwargs.get("tools"),
                 )
             return bind_tools_wrapper
+
         if name in self._WRAP_METHODS and callable(attr):
-            # async generator（astream）：包一层限流 + token 记录。
-            # 流式响应是生产主路径，原先完全透传 = 无限流、无用量统计。
-            # 注意：流中途失败无法安全重试（会重复输出已消费的 chunk），
-            # 韧性链（重试/熔断 fallback）仅覆盖非流式路径。
             if inspect.isasyncgenfunction(attr):
                 async def astream_wrapper(*args, **kwargs):
                     from backend.infra.llm.budget import (
@@ -3051,8 +491,6 @@ class _LLMProxy:
 
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
-                    # P1 模型归属：调用时实时解析并登记模型上下文，
-                    # 流式 chunk 无 metadata 时 usage 从此取真实模型
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
@@ -3067,42 +505,28 @@ class _LLMProxy:
                     usage_chunk = None
                     from backend.infra.llm.usage_estimator import StreamTextMeter
                     meter = StreamTextMeter()
-                    # 执行时限内：按剩余时限收窄读取超时（生成器体惰性执行，此时才生效）。
                     kwargs = provider_deadline_kwargs(attr, kwargs)
                     try:
                         async for chunk in attr(*args, **kwargs):
-                            # chunk 边界检查：单次 read 超时≠总时长上限
                             check_execution_deadline()
-                            # 携带 usage_metadata 的 chunk（通常为最后一个）留作用量记录
                             if getattr(chunk, "usage_metadata", None):
                                 usage_chunk = chunk
-                            # 估算兜底计量：统计原始 chunk 文本（_wrap_result 会剥 think）
                             meter.add(extract_chunk_text(chunk))
-                            # llm_call span 的 response 快照（有界累积）
                             note_response_chunk(extract_chunk_text(chunk))
-                            yield _wrap_result(chunk, strip=False)
+                            yield _wrap_result(chunk)
                     except Exception as e:
-                        # 超长输入不重试不降级：稳定错误码透传（astream 无韧性链，
-                        # 这里是 provider 原始异常唯一的映射点）
                         if _is_context_length_provider_error(e):
                             release_model_reservation()
                             raise _context_length_error() from e
-                        # 2026-10-01 P0 修复：流中途失败，供应商可能已处理并计费
-                        # （生产主路径是流式），转待对账而非释放
                         settle_or_review_model_reservation("stream_failed_possibly_billed")
                         raise
                     finally:
-                        # 正常结束或客户端中断都记录（finally 在 generator close 时也执行）
                         if usage_chunk is not None:
                             _record_tokens(
                                 usage_chunk,
                                 duration_ms=(time.monotonic() - _t0) * 1000,
                             )
                         else:
-                            # C13：provider 未回 usage chunk / 客户端提前中断。
-                            # 2026-10-01 P0 修复：缺 usage ≠ 没花钱。
-                            # 2026-10-02 估算兜底：能估算的按 estimated 结算
-                            # （不进待对账）；零输出且 prompt 不可识别才转待对账。
                             if not _settle_estimated_stream_usage(
                                 meter, args, (time.monotonic() - _t0) * 1000,
                                 "astream",
@@ -3110,13 +534,7 @@ class _LLMProxy:
                                 settle_or_review_model_reservation("stream_usage_missing")
                                 _notify_stream_usage_missing("astream")
                 return astream_wrapper
-            # sync generator（stream）：修好此前走通用 wrapper 的坏路径
-            # （generator 未消费就被 _record_tokens，token 清空），
-            # 并包上限流 + token 记录 + 首 chunk 前重试。
-            # 注意：不做 sink 增量转发——emit 责任在调用方（RAG 链要过滤
-            # META 尾部、reporter 聚合后转发；proxy 自动转发会双发 + 泄漏 META）。
-            # 流中途失败无法安全重试（会重复已输出内容）——
-            # 仅"第一个内容 chunk 之前"的瞬时错误整体重试；输出后失败直接抛。
+
             if inspect.isgeneratorfunction(attr):
                 def stream_wrapper(*args, **kwargs):
                     from backend.infra.llm.budget import (
@@ -3127,7 +545,6 @@ class _LLMProxy:
 
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
-                    # P1 模型归属：调用时实时解析并登记模型上下文
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
@@ -3140,16 +557,12 @@ class _LLMProxy:
                     meter = StreamTextMeter()
                     try:
                         for attempt in range(LLM_MAX_RETRIES + 1):
-                            # 执行时限过期不再发起新尝试；每次尝试前按剩余时限收窄读取超时。
                             check_execution_deadline()
                             kwargs = provider_deadline_kwargs(attr, kwargs)
                             reserve_model_call(
                                 "primary" if attempt == 0 else "retry",
                                 model_name=get_active_model_name(),
                             )
-                            # per-attempt 观测（2026-10-29）：attempt 序号、
-                            # 单次耗时与首 chunk 耗时必须可回答，否则
-                            # 「重试叠加」类尖峰（122s）无法归因。
                             _attempt_t0 = time.monotonic()
                             _first_chunk_ms: float | None = None
                             try:
@@ -3158,15 +571,13 @@ class _LLMProxy:
                                         _first_chunk_ms = (
                                             time.monotonic() - _attempt_t0
                                         ) * 1000
-                                    # chunk 边界检查：单次 read 超时≠总时长上限
                                     check_execution_deadline()
                                     if getattr(chunk, "usage_metadata", None):
                                         usage_chunk = chunk
-                                    wrapped = _wrap_result(chunk, strip=False)
+                                    wrapped = _wrap_result(chunk)
                                     if extract_chunk_text(wrapped):
                                         yielded_content = True
                                     meter.add(extract_chunk_text(chunk))
-                                    # llm_call span 的 response 快照（有界累积）
                                     note_response_chunk(extract_chunk_text(chunk))
                                     yield wrapped
                                 _record_stream_attempt(
@@ -3174,7 +585,7 @@ class _LLMProxy:
                                     (time.monotonic() - _attempt_t0) * 1000,
                                     _first_chunk_ms,
                                 )
-                                break  # 正常结束
+                                break
                             except Exception as e:
                                 _record_stream_attempt(
                                     attempt,
@@ -3182,9 +593,6 @@ class _LLMProxy:
                                     _first_chunk_ms,
                                     error_type=type(e).__name__,
                                 )
-                                # 2026-10-01 P0 修复：瞬时类失败供应商可能已计费；
-                                # 已产出内容后失败 = 必然已处理——都转待对账，
-                                # 只有"确定未发出"（非瞬时错误且未产出内容）才释放。
                                 if yielded_content or _is_transient(e):
                                     settle_or_review_model_reservation(
                                         "stream_failed_possibly_billed",
@@ -3192,8 +600,6 @@ class _LLMProxy:
                                 else:
                                     release_model_reservation()
                                 if _is_context_length_provider_error(e):
-                                    # 超长输入：首 chunk 前短路成稳定错误码，
-                                    # 不参与首 chunk 重试（同一份输入必再超）
                                     raise _context_length_error() from e
                                 if yielded_content or not _is_transient(e) \
                                         or attempt >= LLM_MAX_RETRIES:
@@ -3205,17 +611,12 @@ class _LLMProxy:
                                     f"({type(e).__name__}, {delay:.1f}s 后)")
                                 time.sleep(delay)
                     finally:
-                        # 正常结束 / 中止 / 客户端断开都记录（finally 在
-                        # generator close 时也执行），与 astream 包装对齐
                         if usage_chunk is not None:
                             _record_tokens(
                                 usage_chunk,
                                 duration_ms=(time.monotonic() - _t0) * 1000,
                             )
                         else:
-                            # 缺 usage ≠ 没花钱（2026-10-01 P0 修复）。
-                            # 2026-10-02 估算兜底：能估算的按 estimated 结算，
-                            # 零输出且 prompt 不可识别才转待对账。
                             if not _settle_estimated_stream_usage(
                                 meter, args, (time.monotonic() - _t0) * 1000,
                                 "stream",
@@ -3223,14 +624,11 @@ class _LLMProxy:
                                 settle_or_review_model_reservation("stream_usage_missing")
                                 _notify_stream_usage_missing("stream")
                 return stream_wrapper
-            # async 方法（ainvoke/agenerate）：coroutine 必须先 await 才能取结果，
-            # 否则 _record_tokens 作用在未执行的 coroutine 上会把 token 清空（既有 bug）。
+
             if inspect.iscoroutinefunction(attr):
                 async def async_wrapper(*args, **kwargs):
-                    # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
                     _enforce_rate_limit(user_id)
-                    # P1 模型归属：调用时实时解析并登记模型上下文
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
@@ -3242,11 +640,10 @@ class _LLMProxy:
                     _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
                     return _wrap_result(result)
                 return async_wrapper
+
             def wrapper(*args, **kwargs):
-                # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
                 user_id = kwargs.get("user_id") or _thread_local_user_id()
                 _enforce_rate_limit(user_id)
-                # P1 模型归属：调用时实时解析并登记模型上下文
                 ctx = _resolve_call_context()
                 if ctx is not None:
                     set_current_resolved_model(ctx)
@@ -3259,7 +656,6 @@ class _LLMProxy:
         return attr
 
     def __call__(self, *args, **kwargs):
-        # 限流执行 + 熔断/重试/fallback（P1-7 韧性链）
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         _enforce_rate_limit(user_id)
         ctx = _resolve_call_context()
@@ -3282,10 +678,10 @@ class _LLMProxy:
         return self.__repr__()
 
 
-# 公开名
+# 模块级唯一代理单例
 llm = _LLMProxy()
 
 
 def get_llm() -> BaseChatModel:
-    """显式获取当前 LLM 实例"""
+    """显式获取当前 LLM 实例。"""
     return _resolve_active_llm()
