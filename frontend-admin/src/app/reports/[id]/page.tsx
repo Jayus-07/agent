@@ -2,101 +2,135 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react'
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronUp,
+  ExternalLink,
+} from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { reportService, type DailyReportDetail } from '@/api/reports'
+import {
+  AssetActionButton,
+  AssetPageShell,
+  ASSET_SURFACE,
+} from '@/components/layout/AssetPageShell'
+import ErrorState from '@/components/shared/ErrorState'
+import { clsx } from 'clsx'
 
 export default function ReportDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const [report, setReport] = useState<DailyReportDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [showTech, setShowTech] = useState(false)
 
-  useEffect(() => {
-    reportService.getReport(id).then(r => {
-      setReport(r.report)
+  async function loadReport() {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await reportService.getReport(id)
+      setReport(res.report)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '加载报告详情失败')
+    } finally {
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }
+  }
+
+  useEffect(() => {
+    void loadReport()
   }, [id])
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-sm text-text-muted">加载中...</p>
-      </div>
+      <AssetPageShell title="经营日报查阅">
+        <div className="space-y-4 py-8">
+          <div className="h-10 w-1/3 animate-pulse rounded-lg bg-black/5" />
+          <div className="h-64 animate-pulse rounded-lg bg-black/5" />
+        </div>
+      </AssetPageShell>
     )
   }
 
-  if (!report) {
+  if (error || !report) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-sm text-text-muted">报告未找到</p>
-      </div>
+      <AssetPageShell
+        title="经营日报查阅"
+        actions={
+          <AssetActionButton icon={<ArrowLeft size={14} />} onClick={() => router.push('/reports')}>
+            返回列表
+          </AssetActionButton>
+        }
+      >
+        <ErrorState title="报告加载失败" message={error || '未找到该日报记录'} onRetry={loadReport} />
+      </AssetPageShell>
     )
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-4xl mx-auto px-6 py-8">
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
-          <button onClick={() => router.back()} className="p-1.5 rounded-lg hover:bg-black/5 text-text-muted">
-            <ArrowLeft size={18} />
-          </button>
-          <div>
-            <h1 className="text-lg font-semibold text-text-primary">
-              经营日报 · {report.report_date}
-            </h1>
-            <p className="text-xs text-text-muted">
-              生成时间: {report.created_at?.slice(0, 19)} · 状态: {report.status}
-            </p>
-          </div>
-        </div>
-
-        {/* Content: Business View */}
-        <div className="bg-surface-base rounded-xl border border-border-subtle p-6 mb-4">
-          <div className="prose prose-sm max-w-none">
+    <AssetPageShell
+      title={`经营日报 · ${report.report_date}`}
+      desc={`生成时间: ${report.created_at?.slice(0, 19) || '-'} · 状态: ${report.status}`}
+      actions={
+        <AssetActionButton icon={<ArrowLeft size={14} />} onClick={() => router.push('/reports')}>
+          返回列表
+        </AssetActionButton>
+      }
+    >
+      <div className="mx-auto max-w-4xl space-y-6">
+        {/* 正文卡片 */}
+        <div className={clsx(ASSET_SURFACE, 'p-8')}>
+          <div className="prose prose-sm max-w-none text-text-primary">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
               {report.report_content}
             </ReactMarkdown>
           </div>
         </div>
 
-        {/* Tech View (collapsible) */}
-        <div className="bg-surface-base rounded-xl border border-border-subtle">
+        {/* 技术视图折叠卡 */}
+        <div className={clsx(ASSET_SURFACE, 'overflow-hidden')}>
           <button
+            type="button"
             onClick={() => setShowTech(!showTech)}
-            className="w-full flex items-center justify-between px-6 py-3 text-sm text-text-secondary hover:bg-black/5 rounded-xl transition-colors"
+            className="flex w-full items-center justify-between px-6 py-3.5 text-xs font-semibold text-text-secondary transition-colors hover:bg-black/5"
           >
-            <span className="flex items-center gap-2">
-              📐 技术视图
-            </span>
+            <span>📐 技术元数据与 Trace</span>
             {showTech ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </button>
           {showTech && (
-            <div className="px-6 pb-4 space-y-3">
-              <div className="text-xs text-text-muted space-y-1">
-                <p>Report ID: <code className="text-[11px] bg-black/5 px-1 rounded">{report.id}</code></p>
-                <p>KPI Summary: <code className="text-[11px] bg-black/5 px-1 rounded">{JSON.stringify(report.kpi_summary)}</code></p>
+            <div className="space-y-3 border-t border-border-subtle bg-bg-elevated/40 p-5 text-xs text-text-muted">
+              <div>
+                Report ID: <code className="rounded bg-black/5 px-1.5 py-0.5 font-mono">{report.id}</code>
               </div>
-              {report.trace_id && (
-                <a
-                  href={`/observability/traces/${report.trace_id}`}
-                  target="_blank"
-                  className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
-                >
-                  查看完整 Trace <ExternalLink size={12} />
-                </a>
+              {report.kpi_summary && (
+                <div>
+                  KPI 摘要元数据:
+                  <pre className="mt-1.5 overflow-x-auto rounded bg-black/5 p-3 font-mono text-[11px] text-text-secondary">
+                    {JSON.stringify(report.kpi_summary, null, 2)}
+                  </pre>
+                </div>
               )}
-              {!report.trace_id && (
-                <p className="text-xs text-text-muted">无关联 Trace</p>
-              )}
+              <div className="pt-2">
+                {report.trace_id ? (
+                  <a
+                    href={`/observability/monitoring`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-accent hover:underline"
+                  >
+                    在运行控制中心查看关联 Trace ({report.trace_id.slice(0, 12)}...) <ExternalLink size={13} />
+                  </a>
+                ) : (
+                  <span>无关联执行 Trace</span>
+                )}
+              </div>
             </div>
           )}
         </div>
       </div>
-    </div>
+    </AssetPageShell>
   )
 }

@@ -2,8 +2,18 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, AlertCircle, AlertTriangle, CheckCircle2, XCircle, ExternalLink } from 'lucide-react'
+import {
+  ArrowLeft,
+  CheckCircle2,
+  ExternalLink,
+} from 'lucide-react'
 import { alertService, type AlertDetail, type AlertEvent } from '@/api/alerts'
+import {
+  AssetActionButton,
+  AssetPageShell,
+  ASSET_SURFACE,
+} from '@/components/layout/AssetPageShell'
+import ErrorState from '@/components/shared/ErrorState'
 import { clsx } from 'clsx'
 
 const EVENT_LABELS: Record<string, string> = {
@@ -16,19 +26,37 @@ const EVENT_LABELS: Record<string, string> = {
   closed: '关闭告警',
 }
 
+const STATUS_MAP: Record<string, string> = {
+  open: '待处理',
+  acknowledged: '已确认',
+  resolved: '已解决',
+  closed: '已关闭',
+}
+
 export default function AlertDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const [detail, setDetail] = useState<AlertDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [acting, setActing] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
-  useEffect(() => {
-    alertService.getAlert(Number(id)).then(d => {
+  async function loadDetail() {
+    setLoading(true)
+    setError(null)
+    try {
+      const d = await alertService.getAlert(Number(id))
       setDetail(d)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '加载工单详情失败')
+    } finally {
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }
+  }
+
+  useEffect(() => {
+    void loadDetail()
   }, [id])
 
   async function handleAction(action: string) {
@@ -42,11 +70,8 @@ export default function AlertDetailPage() {
       } else if (action === 'closed') {
         await alertService.patchAlert(Number(id), { status: 'closed', resolution_type: 'MANUAL_IGNORED' })
       }
-      // refresh
-      const d = await alertService.getAlert(Number(id))
-      setDetail(d)
+      await loadDetail()
     } catch (e) {
-      // 状态流转失败必须可见，否则用户会以为已生效
       setActionError(e instanceof Error ? e.message : '操作失败')
     } finally {
       setActing(false)
@@ -55,169 +80,175 @@ export default function AlertDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-sm text-text-muted">加载中...</p>
-      </div>
+      <AssetPageShell title="商品库存预警详情">
+        <div className="space-y-4 py-8">
+          <div className="h-10 animate-pulse rounded-lg bg-black/5" />
+          <div className="h-48 animate-pulse rounded-lg bg-black/5" />
+        </div>
+      </AssetPageShell>
     )
   }
 
-  if (!detail) {
+  if (error || !detail) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-sm text-text-muted">告警未找到</p>
-      </div>
+      <AssetPageShell
+        title="商品库存预警详情"
+        actions={
+          <AssetActionButton icon={<ArrowLeft size={14} />} onClick={() => router.push('/alerts')}>
+            返回列表
+          </AssetActionButton>
+        }
+      >
+        <ErrorState title="工单加载失败" message={error || '未找到该告警工单'} onRetry={loadDetail} />
+      </AssetPageShell>
     )
   }
 
   const c = detail.case
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-5xl mx-auto px-6 py-8">
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-6">
-          <button onClick={() => router.back()} className="p-1.5 rounded-lg hover:bg-black/5 text-text-muted">
-            <ArrowLeft size={18} />
-          </button>
-          <div>
-            <h1 className="text-lg font-semibold text-text-primary">{c.product_id} · 库存预警</h1>
-            <p className="text-xs text-text-muted">Case #{c.id} · 首次检测: {c.first_detected_at?.slice(0, 19)}</p>
+    <AssetPageShell
+      title={`${c.product_id} · 库存预警工单`}
+      desc={`Case #${c.id} · 首次检测: ${c.first_detected_at?.slice(0, 19) || '-'}`}
+      actions={
+        <AssetActionButton icon={<ArrowLeft size={14} />} onClick={() => router.push('/alerts')}>
+          返回列表
+        </AssetActionButton>
+      }
+    >
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* 左侧：事件时间线与分析 */}
+        <div className="space-y-5 lg:col-span-2">
+          {/* 事件时间线 */}
+          <div className={clsx(ASSET_SURFACE, 'p-5')}>
+            <h2 className="text-sm font-semibold text-text-primary">事件流转时间线</h2>
+            <div className="mt-4 space-y-3.5">
+              {(detail.events || []).map((ev: AlertEvent, i: number) => (
+                <div key={ev.id || i} className="flex gap-3">
+                  <div className="flex flex-col items-center">
+                    <div
+                      className={clsx(
+                        'mt-1.5 h-2 w-2 rounded-full',
+                        ev.notified ? 'bg-accent' : 'bg-text-muted',
+                      )}
+                    />
+                    {i < (detail.events || []).length - 1 && (
+                      <div className="my-1 w-px flex-1 bg-border-subtle" />
+                    )}
+                  </div>
+                  <div className="flex-1 pb-1">
+                    <div className="text-xs font-semibold text-text-primary">
+                      {EVENT_LABELS[ev.event_type] || ev.event_type}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-text-muted">
+                      {ev.created_at?.slice(0, 19)}
+                      {ev.from_state && ev.to_state && ` · 状态变迁: ${ev.from_state} → ${ev.to_state}`}
+                      {ev.notified && ' · 已下发通知渠道'}
+                    </div>
+                    {ev.reason && ev.reason.length > 0 && (
+                      <div className="mt-1 text-[11px] text-text-secondary">
+                        规则触发原因: {ev.reason.join('; ')}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {(!detail.events || detail.events.length === 0) && (
+                <p className="py-2 text-xs text-text-muted">暂无事件记录</p>
+              )}
+            </div>
+          </div>
+
+          {/* Agent 分析 */}
+          <div className={clsx(ASSET_SURFACE, 'p-5')}>
+            <h2 className="text-sm font-semibold text-text-primary">Agent 状态机分析</h2>
+            <div className="mt-3 text-xs leading-relaxed text-text-secondary">
+              <p>当前库存状态为 <span className="font-semibold text-text-primary">{c.current_state}</span>，预警等级判定为 <span className="font-semibold text-text-primary">{c.current_level}</span>。</p>
+              {c.resolution_type && <p className="mt-1">解决处置方式：{c.resolution_type}</p>}
+            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
-          {/* Left: Timeline + Agent Analysis */}
-          <div className="col-span-2 space-y-4">
-            {/* Timeline */}
-            <div className="bg-surface-base rounded-xl border border-border-subtle p-5">
-              <h2 className="text-sm font-semibold text-text-primary mb-3">事件时间线</h2>
-              <div className="space-y-3">
-                {(detail.events || []).map((ev: AlertEvent, i: number) => (
-                  <div key={ev.id || i} className="flex gap-3">
-                    <div className="flex flex-col items-center">
-                      <div className={clsx(
-                        'w-2 h-2 rounded-full mt-1.5',
-                        ev.notified ? 'bg-accent' : 'bg-text-muted'
-                      )} />
-                      {i < (detail.events || []).length - 1 && (
-                        <div className="w-px flex-1 bg-border-subtle my-1" />
-                      )}
-                    </div>
-                    <div className="flex-1 pb-2">
-                      <div className="text-xs text-text-secondary">
-                        {EVENT_LABELS[ev.event_type] || ev.event_type}
-                      </div>
-                      <div className="text-[11px] text-text-muted mt-0.5">
-                        {ev.created_at?.slice(0, 19)}
-                        {ev.from_state && ev.to_state && ` · ${ev.from_state} → ${ev.to_state}`}
-                        {ev.notified && ' · 已通知'}
-                      </div>
-                      {ev.reason && ev.reason.length > 0 && (
-                        <div className="text-[11px] text-text-muted mt-0.5">
-                          {ev.reason.join('; ')}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {(!detail.events || detail.events.length === 0) && (
-                  <p className="text-xs text-text-muted">暂无事件</p>
-                )}
+        {/* 右侧：工单操作与技术信息 */}
+        <div className="space-y-5">
+          <div className={clsx(ASSET_SURFACE, 'p-5')}>
+            <h2 className="text-sm font-semibold text-text-primary">工单处理</h2>
+            <div className="mt-3 space-y-2.5 border-b border-border-subtle pb-4 text-xs">
+              <div className="flex justify-between">
+                <span className="text-text-muted">当前状态</span>
+                <span className="font-medium text-text-primary">{STATUS_MAP[c.status] || c.status}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-text-muted">预警级别</span>
+                <span className="font-medium text-text-primary">{c.current_level}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-text-muted">库存水位</span>
+                <span className="font-medium text-text-primary">{c.current_state}</span>
               </div>
             </div>
 
-            {/* Agent Analysis placeholder */}
-            <div className="bg-surface-base rounded-xl border border-border-subtle p-5">
-              <h2 className="text-sm font-semibold text-text-primary mb-2">Agent 分析</h2>
-              <p className="text-xs text-text-muted">
-                库存状态: {c.current_state} · 级别: {c.current_level}
-                {c.resolution_type ? ` · 解决方式: ${c.resolution_type}` : ''}
-              </p>
-            </div>
+            {(c.status === 'open' || c.status === 'acknowledged') ? (
+              <div className="mt-4 space-y-2">
+                {c.status !== 'acknowledged' && (
+                  <button
+                    type="button"
+                    onClick={() => handleAction('acknowledged')}
+                    disabled={acting}
+                    className="w-full rounded-lg bg-accent/10 py-2 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-50"
+                  >
+                    ✓ 确认告警
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleAction('resolved')}
+                  disabled={acting}
+                  className="w-full rounded-lg bg-emerald-50 py-2 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-50"
+                >
+                  🔧 标记已解决
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAction('closed')}
+                  disabled={acting}
+                  className="w-full rounded-lg bg-gray-100 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-gray-200 disabled:opacity-50"
+                >
+                  🚫 忽略关闭
+                </button>
+              </div>
+            ) : c.status === 'resolved' ? (
+              <div className="mt-4 flex items-center gap-1.5 text-xs text-emerald-600">
+                <CheckCircle2 size={14} /> 已解决 ({c.resolution_type || '手动'})
+              </div>
+            ) : c.status === 'closed' ? (
+              <div className="mt-4 text-xs text-text-muted">🚫 已关闭</div>
+            ) : null}
+
+            {actionError && (
+              <p className="mt-2 text-xs text-rose-500">操作失败：{actionError}</p>
+            )}
           </div>
 
-          {/* Right: Ticket Operations */}
-          <div className="space-y-4">
-            <div className="bg-surface-base rounded-xl border border-border-subtle p-5">
-              <h2 className="text-sm font-semibold text-text-primary mb-3">工单操作</h2>
-              <div className="space-y-2 text-xs text-text-secondary mb-4">
-                <div className="flex justify-between">
-                  <span>状态</span>
-                  <span className="font-medium">{STATUS_MAP[c.status] || c.status}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>级别</span>
-                  <span className={clsx(
-                    c.current_level === 'critical' ? 'text-red-500' : c.current_level === 'warning' ? 'text-yellow-500' : 'text-blue-500'
-                  )}>{c.current_level}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>库存状态</span>
-                  <span>{c.current_state}</span>
-                </div>
-              </div>
-
-              {c.status === 'open' || c.status === 'acknowledged' ? (
-                <div className="space-y-2">
-                  {c.status !== 'acknowledged' && (
-                    <button
-                      onClick={() => handleAction('acknowledged')}
-                      disabled={acting}
-                      className="w-full py-2 text-xs rounded-lg bg-accent/5 text-accent hover:bg-accent/10 transition-colors disabled:opacity-50"
-                    >
-                      ✓ 确认告警
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleAction('resolved')}
-                    disabled={acting}
-                    className="w-full py-2 text-xs rounded-lg bg-green-50 text-green-700 hover:bg-green-100 transition-colors disabled:opacity-50"
-                  >
-                    🔧 已解决
-                  </button>
-                  <button
-                    onClick={() => handleAction('closed')}
-                    disabled={acting}
-                    className="w-full py-2 text-xs rounded-lg bg-gray-50 text-text-muted hover:bg-gray-100 transition-colors disabled:opacity-50"
-                  >
-                    🚫 忽略
-                  </button>
-                </div>
-              ) : c.status === 'resolved' ? (
-                <p className="text-xs text-green-600">✅ 已解决 ({c.resolution_type})</p>
-              ) : c.status === 'closed' ? (
-                <p className="text-xs text-text-muted">🚫 已关闭</p>
-              ) : null}
-
-              {actionError && (
-                <p className="text-xs text-red-500 mt-3">操作失败：{actionError}</p>
-              )}
+          <div className={clsx(ASSET_SURFACE, 'p-5')}>
+            <h2 className="text-sm font-semibold text-text-primary">技术信息</h2>
+            <div className="mt-2 space-y-1 text-xs text-text-muted">
+              <div>Case ID: <code className="font-mono">{c.id}</code></div>
+              <div>商品编码: <code className="font-mono">{c.product_id}</code></div>
             </div>
-
-            {/* Trace link */}
-            <div className="bg-surface-base rounded-xl border border-border-subtle p-5">
-              <h2 className="text-sm font-semibold text-text-primary mb-2">技术信息</h2>
-              <p className="text-xs text-text-muted mb-2">
-                Case ID: {c.id} · Product: {c.product_id}
-              </p>
+            <div className="mt-3">
               <a
-                href="/observability/monitoring?tab=traces"
+                href="/observability/monitoring"
                 target="_blank"
+                rel="noreferrer"
                 className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
               >
-                查看 Trace <ExternalLink size={12} />
+                在运行控制中心查看关联 Trace <ExternalLink size={12} />
               </a>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </AssetPageShell>
   )
-}
-
-const STATUS_MAP: Record<string, string> = {
-  open: 'OPEN',
-  acknowledged: 'ACK',
-  resolved: '已解决',
-  closed: '已关闭',
 }
