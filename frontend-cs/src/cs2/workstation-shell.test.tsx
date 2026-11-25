@@ -38,7 +38,7 @@ function mount() {
 }
 
 describe('WorkstationShell（/cs 工作台壳，P8 切换）', () => {
-  it('agent 角色隐藏 supervisorOnly 项（退款审核/看板），其余高亮', async () => {
+  it('普通坐席隐藏工单管理、退款审核和数据看板入口', async () => {
     api.getMyStatus.mockResolvedValueOnce({
       agent_id: 'a1', status: 'online', accepting: true,
       presence_online: true, cs_role: 'agent',
@@ -49,7 +49,6 @@ describe('WorkstationShell（/cs 工作台壳，P8 切换）', () => {
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
       '/cs/workspace',
       '/cs/conversations',
-      '/cs/tickets',
       '/cs/qa',
       '/cs/knowledge',
     ])

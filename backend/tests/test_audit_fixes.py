@@ -106,6 +106,7 @@ class TestHandoffTimeoutRecovery:
             "trigger_type": "explicit_request",
             "ticket_id": "T1",
             "updated_at": old,
+            "_conversation_id": "c1",
         }
         # STOP CS-A P0-6 后 handoff store 读路径 DB-first；本单测只测
         # Supervisor 超时裁决，注入事实源桩，避免依赖本机 PG/改 L1 缓存。
@@ -113,11 +114,12 @@ class TestHandoffTimeoutRecovery:
             store, "get_active_handoff", lambda _user_id: active if active else None,
         )
 
-        def _clear(_user_id, _session_id):
+        def _close(_active, *, now):
             nonlocal active
             active = None
+            return True
 
-        monkeypatch.setattr(store, "clear", _clear)
+        monkeypatch.setattr(store, "close_overdue_waiting", _close)
 
         update = _recover_handoff_timeout(_cs_state())
         assert update is not None

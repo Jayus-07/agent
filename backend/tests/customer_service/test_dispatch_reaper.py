@@ -166,6 +166,9 @@ class _EmptyResult:
     def all(self) -> list:
         return []
 
+    def first(self):
+        return None
+
     def scalar(self):
         return 0
 
