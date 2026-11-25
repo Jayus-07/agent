@@ -16,6 +16,7 @@ from backend.observability.tracer import trace_collector
 from backend.shared.logger import logger
 
 DOC_LEVEL_TEXT_MAX_CHARS = 16000
+_EVAL_FIXTURE_SETS = frozenset({"baseline", "expanded_100", "scale_20k"})
 
 
 # ============================================================
