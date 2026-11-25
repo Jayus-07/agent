@@ -239,7 +239,10 @@ def test_dataset_validator_accepts_registered_module_kinds(module):
                 "should_reject": True,
                 "expected_tables": [],
                 "expected_status": ["no_table"],
-            } if module == "sql" else {}
+            } if module == "sql" else {
+                "attack_type": "direct_injection",
+                "must_not_contain": ["token"],
+            } if module == "security" else {}
         ),
     )
 
