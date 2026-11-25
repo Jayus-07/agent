@@ -116,6 +116,8 @@ def test_agent_selection_query_locks_rows_and_orders_by_load_then_round_robin() 
     assert "assignments.state in " in sql
     assert "assignments.tenant_id = customer_service.cs_agents.tenant_id" in sql
     assert "assignments.agent_id = customer_service.cs_agents.agent_id" in sql
+    assert "handoffs.tenant_id = customer_service.assignments.tenant_id" in sql
+    assert "handoffs.handoff_state != " in sql
     # 容量上限谓词：active_count < max_conversations
     assert "< customer_service.cs_agents.max_conversations" in sql
     assert "limit" in sql

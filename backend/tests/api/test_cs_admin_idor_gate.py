@@ -156,7 +156,7 @@ class TestViewerMatrix:
 
 
 class TestAgentMatrix:
-    """坐席只放行「当前被分配」的会话（复用 _ensure_conversation_access）。"""
+    """同租户已绑定坐席可以回放会话，未绑定或跨租户时拒绝。"""
 
     def _patch_bound_agent(self, monkeypatch, agent_id):
         async def fake_lookup(*, tenant_id, user_id):
@@ -175,12 +175,33 @@ class TestAgentMatrix:
         resp = client.get("/cs/conversations/conv-1")
         assert resp.status_code == 200
 
-    def test_unassigned_agent_403(self, client, monkeypatch):
+    def test_bound_agent_without_assignment_can_read(self, client, monkeypatch):
         _patch_identity(monkeypatch, _identity("seat-2", roles=("agent",)))
         self._patch_bound_agent(monkeypatch, "agent-2")
         monkeypatch.setattr(
             "backend.memory.database.AsyncSessionLocal",
             lambda: _conv_db(assigned="agent-1"),
+        )
+        _stub_detail(monkeypatch)
+        resp = client.get("/cs/conversations/conv-1")
+        assert resp.status_code == 200
+
+    def test_unbound_agent_403(self, client, monkeypatch):
+        _patch_identity(monkeypatch, _identity("seat-2", roles=("agent",)))
+        self._patch_bound_agent(monkeypatch, None)
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal",
+            lambda: _conv_db(assigned="agent-1"),
+        )
+        resp = client.get("/cs/conversations/conv-1")
+        assert resp.status_code == 403
+
+    def test_bound_agent_in_other_tenant_403(self, client, monkeypatch):
+        _patch_identity(monkeypatch, _identity("seat-2", roles=("agent",)))
+        self._patch_bound_agent(monkeypatch, "agent-2")
+        monkeypatch.setattr(
+            "backend.memory.database.AsyncSessionLocal",
+            lambda: _conv_db(tenant_id="other-tenant", assigned="agent-1"),
         )
         resp = client.get("/cs/conversations/conv-1")
         assert resp.status_code == 403

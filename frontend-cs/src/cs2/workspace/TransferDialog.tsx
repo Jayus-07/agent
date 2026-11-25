@@ -3,7 +3,7 @@
 // cs-workstation-v2 P3：坐席间转接弹窗（目标在线/状态展示、原因必填；
 // 小休/离线坐席不可转——后端同口径校验 422 兜底）。
 import { useEffect, useMemo, useState } from 'react'
-import { request } from '@/api/client'
+import { ApiError, request } from '@/api/client'
 import { transferConversation, type TransferResult } from './api'
 
 interface AgentRow {
@@ -28,15 +28,17 @@ const STATUS_ZH: Record<string, string> = {
   offline: '离线',
 }
 
-export default function TransferDialog({
-  conversationId,
-  onClose,
-  onDone,
-}: {
+type TransferDialogProps = {
   conversationId: string
   onClose: () => void
-  onDone: (result: TransferResult) => void
-}) {
+} & (
+  | { handoffId?: never; onDone: (result: TransferResult) => void }
+  | { handoffId: string; onDone: () => void }
+)
+
+export default function TransferDialog(props: TransferDialogProps) {
+  const { conversationId, onClose } = props
+  const action = props.handoffId ? '重派' : '转接'
   const [agents, setAgents] = useState<AgentRow[]>([])
   const [target, setTarget] = useState('')
   const [reason, setReason] = useState('')
@@ -64,10 +66,17 @@ export default function TransferDialog({
     setSubmitting(true)
     setError(null)
     try {
-      const result = await transferConversation(conversationId, target, reason.trim())
-      onDone(result)
-    } catch {
-      setError('转接失败：目标可能已被认领或状态变化，请刷新重试')
+      if (props.handoffId) {
+        await request(`/api/cs/handoffs/${props.handoffId}/reassign`, {
+          method: 'POST',
+          body: JSON.stringify({ target_agent_id: target, reason: reason.trim() }),
+        })
+        props.onDone()
+      } else {
+        props.onDone(await transferConversation(conversationId, target, reason.trim()))
+      }
+    } catch (err) {
+      setError(err instanceof ApiError && err.status < 500 ? err.message : `${action}失败，请重试`)
     } finally {
       setSubmitting(false)
     }
@@ -76,16 +85,16 @@ export default function TransferDialog({
   return (
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40"
-      onClick={onClose}
+      onClick={submitting ? undefined : onClose}
     >
       <div
         className="w-[420px] max-w-[calc(100%-32px)] rounded-xl bg-white p-4 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="转接会话"
+        aria-label={`${action}会话`}
       >
-        <h3 className="mb-3 text-sm text-slate-900">转接会话 {conversationId.slice(0, 10)}…</h3>
+        <h3 className="mb-3 text-sm text-slate-900">{action}会话 {conversationId.slice(0, 10)}…</h3>
         {error && <p className="mb-2 text-xs text-red-500">{error}</p>}
         <div className="mb-3 max-h-56 overflow-auto rounded-lg border border-slate-100">
           {selectable.length === 0 && (
@@ -124,7 +133,7 @@ export default function TransferDialog({
         </div>
         <textarea
           className="min-h-16 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-800"
-          placeholder="转接原因（必填）"
+          placeholder={`${action}原因（必填）`}
           maxLength={200}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
@@ -134,6 +143,7 @@ export default function TransferDialog({
             type="button"
             className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
             onClick={onClose}
+            disabled={submitting}
           >
             取消
           </button>
@@ -143,7 +153,7 @@ export default function TransferDialog({
             disabled={!target || !reason.trim() || submitting}
             onClick={() => void submit()}
           >
-            {submitting ? '转接中…' : '发起转接'}
+            {submitting ? `${action}中…` : `发起${action}`}
           </button>
         </div>
       </div>

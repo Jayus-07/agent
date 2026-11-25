@@ -10,7 +10,7 @@ beat 周期任务的执行核心，与 Celery 完全解耦：
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from backend.shared.logger import logger
@@ -30,24 +30,17 @@ def _sla_event_kwargs(item: dict) -> dict:
 def scan_handoff_timeouts() -> dict[str, Any]:
     """全局扫描转接等待进度 → SLA warning 提前告警 + closed 兜底。
 
-    P3 分级职责（与 reaper 配合）：
-    - warning（elapsed ≥ 50% 窗口）：本扫描发出（Redis SETNX 幂等），
-      给主管通知中心留出接单窗口；
-    - breach（≥ 100% = total_deadline 到点）：**由 reaper 关闭路径发出**
-      （_close_handoff 置 sla_level=breach + sla.breach 事件）——dispatcher
-      worker 每秒扫描必先于本 beat 扫描关闭工单，maintenance 发 breach
-      在现网是死代码；本扫描对超时行仅保留 close_stale 兜底（reaper
-      不可用时）。
-    DB sla_level 只升不降；覆盖 handoff_requested / waiting_human 两态。
+    维护扫描提前发出 warning，到期后复用 reaper 的关单事务。
     """
+    from backend.config.cs_dispatch import CS_REAPER_COMMIT_CHUNK
     from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
     from backend.customer_service._db_loop import run_sync
 
     async def _scan() -> tuple[list[dict], list[dict]]:
-        from sqlalchemy import select
+        from sqlalchemy import or_, select, update
 
+        from backend.customer_service.handoff.dispatch import reaper
         from backend.customer_service.models.handoff import CSHandoff
-        from backend.customer_service.repository import HandoffRepository
         from backend.memory.database import AsyncSessionLocal
 
         now = datetime.now(timezone.utc)
@@ -67,7 +60,7 @@ def scan_handoff_timeouts() -> dict[str, Any]:
                 if row.created_at is None:
                     continue
                 elapsed = (now - row.created_at).total_seconds()
-                # 只做提前告警；≥timeout 的行交给 close_stale/reaper
+                # 只做提前告警，到期由下方关单事务处理。
                 if elapsed < timeout / 2 or elapsed >= timeout:
                     continue
                 if row.sla_level == "warning":
@@ -87,7 +80,22 @@ def scan_handoff_timeouts() -> dict[str, Any]:
                     )
                 if not fired:
                     continue
-                row.sla_level = "warning"
+                result = await db.execute(
+                    update(CSHandoff)
+                    .where(
+                        CSHandoff.id == row.id,
+                        CSHandoff.handoff_state.in_(
+                            ("handoff_requested", "waiting_human"),
+                        ),
+                        or_(
+                            CSHandoff.sla_level.is_(None),
+                            CSHandoff.sla_level.notin_(("warning", "breach")),
+                        ),
+                    )
+                    .values(sla_level="warning")
+                )
+                if not result.rowcount:
+                    continue
                 alerts.append({
                     "handoff_id": row.handoff_id,
                     "conversation_id": row.conversation_id,
@@ -96,14 +104,16 @@ def scan_handoff_timeouts() -> dict[str, Any]:
                     "elapsed_seconds": int(elapsed),
                 })
             await db.commit()
-            repo = HandoffRepository(db)
-            cutoff = now - timedelta(seconds=timeout)
-            closed = await repo.close_stale(
-                states=["handoff_requested", "waiting_human"],
-                cutoff=cutoff,
-            )
-            await db.commit()
-            return alerts, closed
+
+        closed: list[dict] = []
+        async with AsyncSessionLocal() as db:
+            async with db.begin():
+                await reaper.reap_overdue_waiting(
+                    db, now=now, limit=max(1, CS_REAPER_COMMIT_CHUNK),
+                    closed_items=closed,
+                )
+            reaper.start_committed_timeout_summaries(db)
+        return alerts, closed
 
     operation = _scan()
     try:
