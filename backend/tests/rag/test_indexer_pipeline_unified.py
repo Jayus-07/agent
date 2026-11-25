@@ -27,13 +27,21 @@ def test_indexer_does_not_use_langchain_pdf_loader():
 
 def test_indexer_calls_parse_and_chunk():
     """indexer 必须调 parse_and_chunk 切分。"""
-    source = inspect.getsource(IncrementalIndexer._index_file_inner)
+    from backend.rag.indexing.stages.parse_stage import ParseStage
+    source = (
+        inspect.getsource(IncrementalIndexer._index_file_inner)
+        + inspect.getsource(ParseStage.execute)
+    )
     assert "parse_and_chunk" in source
 
 
 def test_indexer_no_raw_docs_variable():
     """indexer 不再持有 raw_docs 变量（避免反向构造）。"""
-    source = inspect.getsource(IncrementalIndexer._index_file_inner)
+    from backend.rag.indexing.stages.pipeline import IndexingPipeline
+    source = (
+        inspect.getsource(IncrementalIndexer._index_file_inner)
+        + inspect.getsource(IndexingPipeline.run)
+    )
     assert "raw_docs" not in source, (
         "indexer 仍持有 raw_docs 变量，应统一改为 chunks"
     )
@@ -41,7 +49,11 @@ def test_indexer_no_raw_docs_variable():
 
 def test_chunk_quality_status_uses_current_index_result():
     """Chunk 质量状态不能复用重解析前 Registry 的旧值。"""
-    source = inspect.getsource(IncrementalIndexer._index_file_inner)
+    from backend.rag.indexing.stages.enrich_stage import EnrichStage
+    source = (
+        inspect.getsource(IncrementalIndexer._index_file_inner)
+        + inspect.getsource(EnrichStage.execute)
+    )
     stale_registry_copy = (
         'quality_status = str(doc_row.get("quality_status") or "unknown")'
     )
