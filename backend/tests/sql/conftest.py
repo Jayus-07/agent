@@ -38,11 +38,13 @@ def _no_real_audit_db(monkeypatch):
     防止宿主机测试环境把审计行写进 .env 指向的非权威 PG（双库坑）。
     """
     from backend.sql import audit as audit_mod
+    from backend.config import knowledge_base as kb_mod
 
     def _no_conn():
         raise RuntimeError("audit db disabled in unit tests")
 
     monkeypatch.setattr(audit_mod, "_conn", _no_conn)
+    monkeypatch.setattr(kb_mod, "get_knowledge_bases", lambda **kw: dict(kb_mod._BOOTSTRAP_KNOWLEDGE_BASES))
 
 
 @pytest.fixture
