@@ -29,65 +29,87 @@ describe('NAV — 管理端导航分类', () => {
     expect(new Set(allHrefs).size).toBe(allHrefs.length)
   })
 
-  it('工作台中的总览、执行记录、网关和 Token 入口分别指向对应视图', () => {
-    const overview = itemByLabel('运行总览')
-    const traces = itemByLabel('执行记录与 Trace')
-    const gateway = itemByLabel('网关安全')
-    const tokens = itemByLabel('Token 用量')
+  it('运行控制中心聚合可观测性入口，消除伪切页并兼容旧路由', () => {
+    const monitoring = itemByLabel('运行控制中心')
+    expect(monitoring).toBeDefined()
+    expect(monitoring?.path).toBe('/observability/monitoring')
+    expect(monitoring?.section).toBe('服务观测')
+    expect(monitoring?.activePaths).toEqual([
+      '/observability',
+      '/observability/traces',
+      '/observability/gateway',
+      '/observability/tokens',
+    ])
 
-    expect(overview?.href).toBe('/observability/monitoring?tab=overview')
-    expect(traces?.href).toBe('/observability/monitoring?tab=traces')
-    expect(gateway?.href).toBe('/observability/monitoring?tab=gateway')
-    expect(tokens?.href).toBe('/observability/monitoring?tab=tokens')
-    expect(isNavItemActive('/observability/monitoring', overview!, '')).toBe(true)
-    expect(isNavItemActive('/observability/monitoring', overview!, '?tab=traces')).toBe(false)
-    expect(isNavItemActive('/observability/monitoring', traces!, '?tab=traces')).toBe(true)
-    expect(isNavItemActive('/observability/monitoring', gateway!, '?tab=gateway')).toBe(true)
-    expect(isNavItemActive('/observability/monitoring', tokens!, '?tab=tokens')).toBe(true)
-    expect(isNavItemActive('/observability/traces/trace-1', traces!, '')).toBe(true)
+    expect(isNavItemActive('/observability/monitoring', monitoring!, '')).toBe(true)
+    expect(isNavItemActive('/observability/monitoring', monitoring!, '?tab=traces')).toBe(true)
+    expect(isNavItemActive('/observability/monitoring', monitoring!, '?tab=tokens')).toBe(true)
+    expect(isNavItemActive('/observability/traces/trace-1', monitoring!, '')).toBe(true)
   })
 
-  it('所有管理端工作台都归入对应分组，兼容入口仍能定位到工作台', () => {
+  it('所有管理端工作台都归入对应分组，垂直业务与能力资产物归其位', () => {
     const groupOf = (label: string) => groupByItemLabel(label)?.label
+    expect(groupOf('数据查询')).toBe('业务运营')
+    expect(groupOf('报告中心')).toBe('业务运营')
+    expect(groupOf('商品库存预警')).toBe('业务运营')
+    expect(groupOf('客服意图目录')).toBe('业务运营')
+    expect(groupOf('商旅服务扩展')).toBe('业务运营')
+
     expect(groupOf('知识库工作台')).toBe('内容与质量')
     expect(groupOf('评测中心')).toBe('内容与质量')
-    expect(groupOf('运行总览')).toBe('运行监控')
-    expect(groupOf('Agent 与工作流')).toBe('运行监控')
+
+    expect(groupOf('运行控制中心')).toBe('运行监控')
+    expect(groupOf('服务健康与告警')).toBe('运行监控')
+    expect(groupOf('任务中心')).toBe('运行监控')
+    expect(groupOf('定时任务')).toBe('运行监控')
+
     expect(groupOf('Tool 治理')).toBe('能力治理')
+    expect(groupOf('连接中心')).toBe('能力治理')
+    expect(groupOf('Skill 与 Capability')).toBe('能力治理')
     expect(groupOf('模型与供应商')).toBe('能力治理')
+    expect(groupOf('预算策略')).toBe('能力治理')
     expect(groupOf('Prompt 版本')).toBe('能力治理')
+    expect(groupOf('Agent 与工作流')).toBe('能力治理')
+    expect(groupOf('Agent 圆桌')).toBe('能力治理')
+    expect(groupOf('资产一致性检查')).toBe('能力治理')
+    expect(groupOf('发布记录')).toBe('能力治理')
+
     expect(groupOf('访问控制')).toBe('安全运维')
     expect(groupOf('审批与审计')).toBe('安全运维')
+    expect(groupOf('安全运营')).toBe('安全运维')
 
     for (const route of [
       '/knowledge', '/knowledge/documents', '/knowledge/pending', '/knowledge/upload-failures',
       '/knowledge/keywords', '/knowledge/operations', '/evaluations',
       '/evaluations/datasets', '/evaluations/feedback',
-      '/observability/traces', '/observability/gateway', '/observability/tokens',
+      '/observability', '/observability/traces', '/observability/gateway', '/observability/tokens',
       '/cost-governance/prices',
     ]) {
       expect(items.some((item) => item.activePaths?.includes(route)), `兼容入口 ${route} 未关联`).toBe(true)
     }
   })
 
-  it('业务、内容、治理和安全分组保留既有关键页面', () => {
+  it('业务、内容、治理和安全分组保留既有全部关键路径', () => {
     const paths = items.map((item) => item.path)
     for (const path of [
-      '/data-explorer', '/reports',
-      '/knowledge/workbench', '/evaluations/center', '/observability/monitoring',
-      '/agents', '/tasks', '/schedules',
-      '/tools', '/skills', '/settings/models', '/cost-governance/budgets', '/prompts',
-      '/consistency', '/releases', '/settings/access', '/approvals', '/security',
-      '/observability/alerts', '/alerts',
+      '/data-explorer', '/reports', '/alerts', '/capability-inventory', '/settings/travel-services',
+      '/knowledge/workbench', '/evaluations/center',
+      '/observability/monitoring', '/observability/alerts', '/tasks', '/schedules',
+      '/tools', '/mcp', '/skills', '/settings/models', '/cost-governance/budgets', '/prompts',
+      '/agents', '/roundtable', '/consistency', '/releases',
+      '/settings/access', '/approvals', '/security',
     ]) {
       expect(paths, `导航缺少 ${path}`).toContain(path)
     }
   })
 
   it('能力治理、发布、审批及访问控制入口保留既有角色声明', () => {
-    expect(groupByItemLabel('知识库工作台')?.minRole).toBe('editor')
+    expect(NAV.find((entry) => entry.label === '内容与质量')?.minRole).toBe('editor')
     expect(NAV.find((entry) => entry.label === '能力治理')?.minRole).toBe('editor')
-    for (const label of ['Tool 治理', '模型与供应商', '资产一致性检查', '发布记录', '访问控制', '审批与审计', '服务健康与告警']) {
+    for (const label of [
+      'Tool 治理', '连接中心', '模型与供应商', 'Agent 圆桌', '资产一致性检查',
+      '发布记录', '客服意图目录', '商旅服务扩展', '访问控制', '审批与审计', '服务健康与告警',
+    ]) {
       expect(itemByLabel(label)?.minRole, `${label} 应保留 admin 声明`).toBe('admin')
     }
   })
@@ -119,7 +141,7 @@ describe('visibleNav — 按角色过滤分组', () => {
       .toEqual(items.map((item) => item.path))
   })
 
-  it('viewer 仍可进入公开的监控与安全入口，编辑类分组保持隐藏', () => {
+  it('viewer 仍可进入公开的监控与业务入口，管理员类条目保持隐藏', () => {
     loginAs('viewer')
     const visible = visibleNav()
     const labels = visible.map((entry) => entry.label)
@@ -129,8 +151,13 @@ describe('visibleNav — 按角色过滤分组', () => {
     expect(paths).not.toContain('/approvals')
     expect(paths).not.toContain('/observability/alerts')
     expect(paths).not.toContain('/tools')
+    expect(paths).not.toContain('/capability-inventory')
+    expect(paths).not.toContain('/settings/travel-services')
     expect(paths).toContain('/observability/monitoring')
     expect(paths).toContain('/security')
+    expect(paths).toContain('/alerts')
+    expect(paths).toContain('/tasks')
+    expect(paths).toContain('/schedules')
   })
 
   it('admin 可见服务健康与告警入口，viewer 不会收到管理员快照的导航入口', () => {
@@ -147,8 +174,11 @@ describe('visibleNav — 按角色过滤分组', () => {
     expect(capabilityPaths).toContain('/skills')
     expect(capabilityPaths).toContain('/cost-governance/budgets')
     expect(capabilityPaths).toContain('/prompts')
+    expect(capabilityPaths).toContain('/agents')
     expect(capabilityPaths).not.toContain('/tools')
+    expect(capabilityPaths).not.toContain('/mcp')
     expect(capabilityPaths).not.toContain('/settings/models')
+    expect(capabilityPaths).not.toContain('/roundtable')
     expect(capabilityPaths).not.toContain('/consistency')
     expect(capabilityPaths).not.toContain('/releases')
 
@@ -164,6 +194,7 @@ describe('visibleNav — 按角色过滤分组', () => {
     expect(getActiveNavLabel('/observability/traces/trace-1')).toBe('运行监控')
     expect(getActiveNavLabel('/observability/monitoring')).toBe('运行监控')
     expect(getActiveNavLabel('/settings/access')).toBe('安全运维')
+    expect(getActiveNavLabel('/alerts')).toBe('业务运营')
     expect(getActiveNavLabel('/not-found')).toBeUndefined()
     expect(isNavPathActive('/observability/traces/trace-1', '/observability/monitoring', ['/observability/traces'])).toBe(true)
     expect(isNavPathActive('/observability/traces-other', '/observability/traces')).toBe(false)
