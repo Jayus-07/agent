@@ -27,13 +27,21 @@ def test_indexer_does_not_use_langchain_pdf_loader():
 
 def test_indexer_calls_parse_and_chunk():
     """indexer 必须调 parse_and_chunk 切分。"""
-    source = inspect.getsource(IncrementalIndexer._index_file_inner)
+    from backend.rag.indexing.stages.parse_stage import ParseStage
+    source = (
+        inspect.getsource(IncrementalIndexer._index_file_inner)
+        + inspect.getsource(ParseStage.execute)
+    )
     assert "parse_and_chunk" in source
 
 
 def test_indexer_no_raw_docs_variable():
     """indexer 不再持有 raw_docs 变量（避免反向构造）。"""
-    source = inspect.getsource(IncrementalIndexer._index_file_inner)
+    from backend.rag.indexing.stages.pipeline import IndexingPipeline
+    source = (
+        inspect.getsource(IncrementalIndexer._index_file_inner)
+        + inspect.getsource(IndexingPipeline.run)
+    )
     assert "raw_docs" not in source, (
         "indexer 仍持有 raw_docs 变量，应统一改为 chunks"
     )
@@ -41,7 +49,11 @@ def test_indexer_no_raw_docs_variable():
 
 def test_chunk_quality_status_uses_current_index_result():
     """Chunk 质量状态不能复用重解析前 Registry 的旧值。"""
-    source = inspect.getsource(IncrementalIndexer._index_file_inner)
+    from backend.rag.indexing.stages.enrich_stage import EnrichStage
+    source = (
+        inspect.getsource(IncrementalIndexer._index_file_inner)
+        + inspect.getsource(EnrichStage.execute)
+    )
     stale_registry_copy = (
         'quality_status = str(doc_row.get("quality_status") or "unknown")'
     )
@@ -171,11 +183,23 @@ def test_index_file_inner_uses_kb_id_param_not_self():
 
     缺陷 H 根因：doc_meta["kb_id"] 用了 self.kb_id（默认 "default"），
     覆盖了 _index_file 派生的 kb_id，导致所有文档 kb_id 变成 "default"。
+    重构为 Pipeline 模式后：
+    1. _index_file_inner 将 kb_id 参数透传给 pipeline.run(..., kb_id=kb_id)；
+    2. pipeline.run 中构建 doc_meta 严格使用 kb_id 参数而非 self.indexer.kb_id。
     """
-    source = inspect.getsource(IncrementalIndexer._index_file_inner)
-    assert '"kb_id": kb_id' in source, (
-        "_index_file_inner 的 doc_meta 未用 kb_id 参数，kb 隔离会失效"
+    inner_source = inspect.getsource(IncrementalIndexer._index_file_inner)
+    assert "kb_id=kb_id" in inner_source or '"kb_id": kb_id' in inner_source, (
+        "_index_file_inner 未将 kb_id 参数传给 pipeline，kb 隔离会失效"
     )
-    assert '"kb_id": self.kb_id' not in source, (
+    assert "kb_id=self.kb_id" not in inner_source and '"kb_id": self.kb_id' not in inner_source, (
         "_index_file_inner 仍用 self.kb_id，覆盖了派生值"
+    )
+
+    from backend.rag.indexing.stages.pipeline import IndexingPipeline
+    pipe_source = inspect.getsource(IndexingPipeline.run)
+    assert '"kb_id": kb_id' in pipe_source, (
+        "IndexingPipeline.run 的 doc_meta 未用 kb_id 参数"
+    )
+    assert '"kb_id": self.indexer.kb_id' not in pipe_source, (
+        "IndexingPipeline.run 误用 self.indexer.kb_id 覆盖了派生值"
     )
