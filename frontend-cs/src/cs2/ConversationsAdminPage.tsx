@@ -4,7 +4,8 @@
 // Trace 入口 + 主管重派/强制接管/关闭）。重派复用 /cs/handoffs/{id}/reassign。
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { request } from '@/api/client'
+import { ApiError, request } from '@/api/client'
+import TransferDialog from './workspace/TransferDialog'
 
 interface ConvSummary {
   conversation_id: string
@@ -19,6 +20,7 @@ interface ConvSummary {
 
 interface ConvDetail extends ConvSummary {
   context_summary: string | null
+  handoff_id?: string | null
   trace_count: number
   last_trace_id: string | null
   messages: Array<{
@@ -43,7 +45,8 @@ export default function ConversationsAdminPage() {
   const [selected, setSelected] = useState<ConvDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState('')
-  const [handoffId, setHandoffId] = useState('')
+  const [reassignOpen, setReassignOpen] = useState(false)
+  const handoffId = selected?.handoff_id
 
   const load = useCallback(() => {
     setLoading(true)
@@ -64,15 +67,6 @@ export default function ConversationsAdminPage() {
     request<ConvDetail>(`/api/cs/conversations/${conversationId}`)
       .then(setSelected)
       .catch(() => setSelected(null))
-    // 顺带查活跃 handoff（主管操作定位）
-    request<{ items: Array<{ handoff_id: string; conversation_id: string; handoff_state: string }> }>(
-      '/api/cs/conversations/handoff/queue',
-    )
-      .then((data) => {
-        const hit = (data.items ?? []).find((i) => i.conversation_id === conversationId)
-        setHandoffId(hit?.handoff_id ?? '')
-      })
-      .catch(() => setHandoffId(''))
   }
 
   const notify = (msg: string) => {
@@ -179,23 +173,48 @@ export default function ConversationsAdminPage() {
                 type="button"
                 className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-40"
                 disabled={!handoffId}
-                title={handoffId ? undefined : '无进行中人工工单（仅排队/派单中可重派）'}
+                title={handoffId ? undefined : '仅已派单或人工处理中的会话可重派'}
+                onClick={() => setReassignOpen(true)}
+              >
+                重派
+              </button>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                disabled={!handoffId}
                 onClick={() => {
                   if (!handoffId) return
                   request(`/api/cs/handoffs/${handoffId}/reassign`, {
                     method: 'POST',
                     body: JSON.stringify({ reason: 'supervisor 重新派单' }),
                   })
-                    .then(() => notify('已重派（回到派单队列）'))
-                    .catch(() => notify('重派失败'))
+                    .then(() => {
+                      notify('已退回待接入队列')
+                      openDetail(selected.conversation_id)
+                    })
+                    .catch((err: unknown) => notify(
+                      err instanceof ApiError && err.status < 500 ? err.message : '退回队列失败',
+                    ))
                 }}
               >
-                重派
+                退回队列
               </button>
               <button type="button" className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50" onClick={() => void closeConv()}>
                 关闭会话
               </button>
             </div>
+            {reassignOpen && handoffId && (
+              <TransferDialog
+                conversationId={selected.conversation_id}
+                handoffId={handoffId}
+                onClose={() => setReassignOpen(false)}
+                onDone={() => {
+                  setReassignOpen(false)
+                  notify('已向指定坐席发出接单邀请')
+                  openDetail(selected.conversation_id)
+                }}
+              />
+            )}
             <div className="mb-3 rounded-lg bg-white p-3 text-xs text-slate-600">
               <div>处理模式：{selected.handling_mode} · 优先级 {selected.priority}</div>
               <div className="mt-1">AI 阶段摘要：{selected.context_summary || '—'}</div>

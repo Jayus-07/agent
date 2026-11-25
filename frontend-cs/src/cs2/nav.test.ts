@@ -18,6 +18,6 @@ describe('cs 导航配置（P8 切换后路由）', () => {
     const supervisorOnly = CS2_NAV_ITEMS
       .filter((item) => item.supervisorOnly)
       .map((item) => item.href)
-    expect(supervisorOnly).toEqual(['/cs/refunds', '/cs/dashboard'])
+    expect(supervisorOnly).toEqual(['/cs/tickets', '/cs/refunds', '/cs/dashboard'])
   })
 })

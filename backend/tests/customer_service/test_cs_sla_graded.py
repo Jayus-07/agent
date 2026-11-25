@@ -41,6 +41,14 @@ def _redis():
 def _cleanup():
     with _pg() as conn, conn.cursor() as cur:
         cur.execute(
+            "DELETE FROM customer_service.tickets WHERE handoff_id LIKE %s",
+            (_PREFIX + "%",),
+        )
+        cur.execute(
+            "DELETE FROM customer_service.messages WHERE conversation_id LIKE %s",
+            (_PREFIX + "%",),
+        )
+        cur.execute(
             "DELETE FROM customer_service.events WHERE conversation_id LIKE %s",
             (_PREFIX + "%",),
         )
@@ -123,10 +131,7 @@ def _handoff_row(handoff_id: str):
 def test_sla_warning_alert_idempotent(env):
     """P3 分级职责：warning（50% 窗口）由 maintenance 扫描发出（幂等）。
 
-    breach（100% 到点）由 reaper 关闭路径发出（_close_handoff 置
-    sla_level=breach + sla.breach 事件，见 test_reaper_*）；本扫描对超时
-    行仅保留 close_stale 兜底。主栈 reaper 与本测试并行，超时行的关闭
-    来源不定（reaper 或 close_stale），故只断言最终 closed。
+    两个 worker 都走同一个关单事务，最终只登记一张工单和一条通知。
     """
     timeout = CS_HANDOFF_TIMEOUT_SECONDS
     conv_w = _PREFIX + "conv-w"
@@ -142,12 +147,55 @@ def test_sla_warning_alert_idempotent(env):
     assert alerts.get(handoff_w) == "warning"
     assert all(a["level"] == "warning" for a in result["alerts"])
     assert _handoff_row(handoff_w)[1] == "warning"
-    # 超时行最终 closed（来源：reaper 或 close_stale 兜底）
-    assert _handoff_row(handoff_b)[0] == "closed"
+    assert _handoff_row(handoff_b) == ("closed", "breach")
 
     # 幂等：DB 层 sla_level 已置 warning → 重扫不再产生该告警
     result2 = scan_handoff_timeouts()
     assert all(a["handoff_id"] != handoff_w for a in result2["alerts"])
+    with _pg() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT ticket_id FROM customer_service.tickets WHERE handoff_id = %s",
+            (handoff_b,),
+        )
+        [(ticket_id,)] = cur.fetchall()
+        cur.execute(
+            "SELECT content FROM customer_service.messages "
+            "WHERE conversation_id = %s AND sender_type = 'system'",
+            (conv_b,),
+        )
+        [(notice,)] = cur.fetchall()
+        assert ticket_id in notice
+
+
+def test_timeout_notice_failure_rolls_back_and_scan_retries(env, monkeypatch):
+    from backend.customer_service.managers.message_manager import MessageManager
+
+    conversation_id = _PREFIX + "retry"
+    handoff_id = _seed(
+        conversation_id, state="handoff_requested",
+        age_seconds=CS_HANDOFF_TIMEOUT_SECONDS * 1.5,
+    )
+    create = MessageManager.create
+
+    async def fail_test_notice(self, cid, *args, **kwargs):
+        if cid == conversation_id:
+            raise RuntimeError("模拟通知写入中断")
+        return await create(self, cid, *args, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(MessageManager, "create", fail_test_notice)
+        assert scan_handoff_timeouts()["ok"] is False
+
+    assert _handoff_row(handoff_id)[0] == "handoff_requested"
+    with _pg() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM customer_service.tickets WHERE handoff_id = %s",
+            (handoff_id,),
+        )
+        assert cur.fetchone() == (0,)
+
+    assert scan_handoff_timeouts()["ok"] is True
+    assert _handoff_row(handoff_id) == ("closed", "breach")
 
 
 def test_sla_level_only_escalates(env):

@@ -883,10 +883,11 @@ class _TrackedEmbedding(Embeddings):
     def embed_query(self, text: str) -> List[float]:
         """单条查询向量化（检索主路径；R1-A 去重 + 单飞 + 双层缓存）。"""
         self._refresh_if_changed()
-        key = _request_cache_key(text, self._identity())
+        normalized_text = text.strip() if isinstance(text, str) else text
+        key = _request_cache_key(normalized_text, self._identity())
 
         def _compute() -> Any:
-            return self._inner.embed_query(text)
+            return self._inner.embed_query(normalized_text)
 
         def _to_vector(raw: Any) -> list:
             # 只做形状校验与转换，不落账：转换失败必须走失败路径，

@@ -6,8 +6,14 @@ import { createRoot, type Root } from 'react-dom/client'
 const api = vi.hoisted(() => ({ issueWsTicket: vi.fn() }))
 vi.mock('./api', () => api)
 
-let socketLog: { events: Array<{ type: string; seq: number | null }>; reconnects: number }
-const events: Array<{ type: string; seq: number | null }> = []
+type ReceivedEvent = {
+  type: string
+  seq: number | null
+  payload: Record<string, unknown>
+}
+
+let socketLog: { events: ReceivedEvent[]; reconnects: number }
+const events: ReceivedEvent[] = []
 
 class FakeWebSocket {
   static OPEN = 1
@@ -48,7 +54,7 @@ import { useAgentSocket } from './useAgentSocket'
 function Harness() {
   useAgentSocket(
     (evt) => {
-      events.push({ type: evt.type, seq: evt.seq })
+      events.push({ type: evt.type, seq: evt.seq, payload: evt.payload })
     },
     { onReconnect: () => socketLog.reconnects += 1 },
   )
@@ -94,7 +100,39 @@ describe('useAgentSocket（cs2 坐席 WS）', () => {
     expect(api.issueWsTicket).toHaveBeenCalled()
     expect(instances[0].url).toContain('/ws/cs/agent?ticket=t-1')
     instances[0].emit({ type: 'message.created', seq: 5, event_id: 'e5', payload: { conversation_id: 'c1' }, ts: 'x' })
-    expect(events).toEqual([{ type: 'message.created', seq: 5 }])
+    expect(events).toEqual([{ type: 'message.created', seq: 5, payload: { conversation_id: 'c1' } }])
+  })
+
+  it('AgentHub 扁平业务字段会并入事件 payload', async () => {
+    const instances = await mount()
+    instances[0].emit({
+      type: 'assist.suggestion',
+      seq: null,
+      event_id: 'assist-1',
+      conversation_id: 'c1',
+      trigger: 'message',
+      suggestions: [{ kind: 'reply', text: '可以为您查询订单' }],
+    })
+    expect(events).toEqual([{
+      type: 'assist.suggestion',
+      seq: null,
+      payload: {
+        conversation_id: 'c1',
+        trigger: 'message',
+        suggestions: [{ kind: 'reply', text: '可以为您查询订单' }],
+      },
+    }])
+  })
+
+  it('嵌套 payload 字段覆盖同名的信封字段', async () => {
+    const instances = await mount()
+    instances[0].emit({
+      type: 'message.created',
+      seq: 6,
+      conversation_id: 'outer',
+      payload: { conversation_id: 'inner' },
+    })
+    expect(events[0].payload).toEqual({ conversation_id: 'inner' })
   })
 
   it('连接层帧（hello/pong/heartbeat）不分发', async () => {

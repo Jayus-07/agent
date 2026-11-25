@@ -24,6 +24,7 @@ from typing import Sequence
 from sqlalchemy import Select, and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config.customer_service import CS_HANDOFF_TIMEOUT_SECONDS
 from backend.customer_service.models.agent import CSAgent
 from backend.customer_service.models.assignment import CSAssignment
 from backend.customer_service.models.conversation import CSConversation
@@ -175,16 +176,27 @@ def agent_role_stmt(*, tenant_id: str, agent_id: str) -> Select:
     )
 
 
-def active_assignment_count_expr():
-    """同一租户同一坐席的活动 assignment 数（offered|accepted）。"""
+def active_assignment_count_expr(*, excluding_handoff_id: str | None = None):
+    """仅未关闭的转接占用容量，历史未终结的 assignment 不占名额。"""
+    conditions = [
+        CSAssignment.tenant_id == CSAgent.tenant_id,
+        CSAssignment.agent_id == CSAgent.agent_id,
+        CSAssignment.state.in_(_ACTIVE_ASSIGNMENT_STATES),
+        CSHandoff.handoff_state != "closed",
+    ]
+    if excluding_handoff_id is not None:
+        conditions.append(CSAssignment.handoff_id != excluding_handoff_id)
     return (
         select(func.count())
         .select_from(CSAssignment)
-        .where(
-            CSAssignment.tenant_id == CSAgent.tenant_id,
-            CSAssignment.agent_id == CSAgent.agent_id,
-            CSAssignment.state.in_(_ACTIVE_ASSIGNMENT_STATES),
+        .join(
+            CSHandoff,
+            and_(
+                CSHandoff.tenant_id == CSAssignment.tenant_id,
+                CSHandoff.handoff_id == CSAssignment.handoff_id,
+            ),
         )
+        .where(*conditions)
         .correlate(CSAgent)
         .scalar_subquery()
     )
@@ -395,6 +407,17 @@ async def find_agent_for_update(
     return result.scalar_one_or_none()
 
 
+async def count_other_active_assignments(
+    session: AsyncSession, *, tenant_id: str, agent_id: str, handoff_id: str,
+) -> int:
+    result = await session.execute(
+        select(active_assignment_count_expr(excluding_handoff_id=handoff_id))
+        .select_from(CSAgent)
+        .where(CSAgent.tenant_id == tenant_id, CSAgent.agent_id == agent_id)
+    )
+    return int(result.scalar_one())
+
+
 async def lock_dispatchable_handoff(
     session: AsyncSession,
     *,
@@ -488,6 +511,22 @@ def expired_offer_candidates_stmt(*, now: datetime, limit: int) -> Select:
     )
 
 
+def _overdue_waiting_condition(now: datetime):
+    # 老数据可能没有总期限，保留维护任务过去使用的更新时间兜底。
+    return and_(
+        CSHandoff.handoff_state.in_(("handoff_requested", _WAITING_STATE)),
+        or_(
+            CSHandoff.total_deadline_at <= now,
+            and_(
+                CSHandoff.total_deadline_at.is_(None),
+                CSHandoff.updated_at <= now - timedelta(
+                    seconds=CS_HANDOFF_TIMEOUT_SECONDS,
+                ),
+            ),
+        ),
+    )
+
+
 def overdue_waiting_candidates_stmt(*, now: datetime, limit: int) -> Select:
     """仍在排队但已超总等待期的工单（含 P6 刻意跳过的 Q5 终态，无锁候选）。"""
     return (
@@ -496,12 +535,11 @@ def overdue_waiting_candidates_stmt(*, now: datetime, limit: int) -> Select:
             CSHandoff.handoff_id,
             CSHandoff.conversation_id,
         )
-        .where(
-            CSHandoff.handoff_state == _WAITING_STATE,
-            CSHandoff.total_deadline_at.is_not(None),
-            CSHandoff.total_deadline_at <= now,
+        .where(_overdue_waiting_condition(now))
+        .order_by(
+            func.coalesce(CSHandoff.total_deadline_at, CSHandoff.updated_at),
+            CSHandoff.id,
         )
-        .order_by(CSHandoff.total_deadline_at.asc(), CSHandoff.id.asc())
         .limit(limit)
     )
 
@@ -532,9 +570,7 @@ def lock_overdue_waiting_handoff_stmt(
         .where(
             CSHandoff.tenant_id == tenant_id,
             CSHandoff.handoff_id == handoff_id,
-            CSHandoff.handoff_state == _WAITING_STATE,
-            CSHandoff.total_deadline_at.is_not(None),
-            CSHandoff.total_deadline_at <= now,
+            _overdue_waiting_condition(now),
         )
         .with_for_update(skip_locked=True)
         .limit(1)

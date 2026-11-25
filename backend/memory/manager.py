@@ -54,13 +54,14 @@ class MemoryManager:
         loop.create_task(_startup())
         loop.run_forever()
 
-    def _run(self, coro_factory):
-        """在后台 loop 上执行协程，最多等 _MEMORY_TIMEOUT 秒。
+    def _run(self, coro_factory, timeout: float | None = None):
+        """在后台 loop 上执行协程，最多等有效超时秒数（默认 _MEMORY_TIMEOUT）。
 
         返回结果或 None（超时/失败时降级）。降级必须留痕（error 日志 +
         degradation_alerts_total），静默丢失上下文是最难排查的故障形态。
         """
-        if not self._ready.wait(timeout=_MEMORY_TIMEOUT):
+        effective_timeout = timeout if timeout is not None else _MEMORY_TIMEOUT
+        if not self._ready.wait(timeout=effective_timeout):
             self._degraded("memory_loop_not_ready", "memory loop 未就绪，本次记忆操作被跳过")
             return None
         loop = self._loop
@@ -70,7 +71,7 @@ class MemoryManager:
         future = None
         try:
             future = asyncio.run_coroutine_threadsafe(coro_factory(), loop)
-            return future.result(timeout=_MEMORY_TIMEOUT)
+            return future.result(timeout=effective_timeout)
         except FutureTimeoutError:
             # 非关键记忆查询超过预算后立即请求取消，不能让它在后台继续占用
             # DB 连接、embedding 配额和 memory event loop。
@@ -78,7 +79,7 @@ class MemoryManager:
                 future.cancel()
             self._degraded(
                 "memory_op_timeout",
-                f"memory 操作超过 {_MEMORY_TIMEOUT}s，已请求取消后台协程",
+                f"memory 操作超过 {effective_timeout}s，已请求取消后台协程",
             )
             return None
         except Exception as e:
@@ -117,11 +118,13 @@ class MemoryManager:
         domain: str | None = None,
         event_scope=None,
         product: str = "",
+        timeout: float | None = None,
     ) -> ShortTermBuffer:
         # question 透传给 L3：长期记忆检索用当前问题做语义 query（此前误用 session_id）
         result = self._run(lambda: self._service.start_session(
             session_id, user_id, query=question, tenant_id=tenant_id,
-            domain=domain, event_scope=event_scope, product=product))
+            domain=domain, event_scope=event_scope, product=product),
+            timeout=timeout)
         if result is None:
             return ShortTermBuffer()
         return result

@@ -184,6 +184,7 @@ export interface PendingSnapshot {
   state: 'pending' | 'paused_handoff' | 'expired' | string
   /** 后端权威判定：need_info（缺槽位）提案为 false，不可确认 */
   confirmable?: boolean
+  refund_review_mode?: 'sandbox' | 'http'
 }
 
 export async function fetchPendingSnapshot(

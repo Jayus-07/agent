@@ -720,6 +720,7 @@ class ConversationDetail(BaseModel):
     channel: str
     summary: str | None = None
     context_summary: str | None = None
+    handoff_id: str | None = None
     trace_count: int = 0
     last_trace_id: str | None = None
     created_at: str
@@ -1279,6 +1280,7 @@ async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
     )
 
     action_type = str(pending.get("action_type") or "unknown")
+    refund_review_mode = None
     if action_type == "refund_request":
         from backend.config import customer_service as cfg
 
@@ -1286,7 +1288,9 @@ async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
         gateway_mode = str(getattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "")).lower()
         http_mode = gateway_mode == "http" and refund_mode == "http"
         sandbox_mode = gateway_mode == "sandbox" and refund_mode == "sandbox"
-        if not (http_mode or sandbox_mode):
+        if http_mode or sandbox_mode:
+            refund_review_mode = refund_mode
+        else:
             confirmable = False
 
     return {
@@ -1302,6 +1306,7 @@ async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
             "expires_at": expires_at,
             "state": state,
             "confirmable": confirmable,
+            **({"refund_review_mode": refund_review_mode} if refund_review_mode else {}),
         },
     }
 
@@ -2439,6 +2444,7 @@ async def _async_get_conversation(conversation_id: str, run_sync):
     from sqlalchemy import select
 
     from backend.customer_service.models.conversation import CSConversation
+    from backend.customer_service.models.handoff import CSHandoff
     from backend.customer_service.models.message import CSMessage
     from backend.memory.database import AsyncSessionLocal
 
@@ -2462,6 +2468,14 @@ async def _async_get_conversation(conversation_id: str, run_sync):
         )
         messages = list(msg_result.scalars().all())
 
+        handoff_id = await db.scalar(
+            select(CSHandoff.handoff_id).where(
+                CSHandoff.tenant_id == conv.tenant_id,
+                CSHandoff.conversation_id == conv.conversation_id,
+                CSHandoff.handoff_state.in_(("agent_offered", "human_active")),
+            ).order_by(CSHandoff.id.desc()).limit(1)
+        )
+
         return ConversationDetail(
             conversation_id=conv.conversation_id,
             user_id=conv.user_id,
@@ -2471,6 +2485,7 @@ async def _async_get_conversation(conversation_id: str, run_sync):
             channel=conv.channel,
             summary=conv.summary,
             context_summary=conv.context_summary,
+            handoff_id=handoff_id,
             trace_count=conv.trace_count or 0,
             last_trace_id=conv.last_trace_id,
             created_at=conv.created_at.isoformat() if conv.created_at else "",

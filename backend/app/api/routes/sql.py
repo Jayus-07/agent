@@ -134,8 +134,25 @@ def _ask_sql_agent(
     policy: SQLPolicyContext,
     query_context: dict | None = None,
     event_sink=None,
+    session_id: str | None = None,
 ):
     """调用 SQLAgent，并兼容外部旧版测试替身/集成适配器的旧签名。"""
+    from backend.observability.tracer import trace_collector
+
+    root_trace_started = False
+    current_trace = trace_collector._current_trace()
+    if current_trace is None:
+        try:
+            trace_collector.start(
+                question,
+                session_id=session_id or getattr(policy, "session_id", None) or "",
+                workflow_name="sql_agent",
+                workflow_kind="sql_query",
+            )
+            root_trace_started = True
+        except Exception:
+            logger.debug("[SQL] trace_collector.start 失败（不阻断执行）", exc_info=True)
+
     kwargs = {"policy": policy}
     try:
         parameters = inspect.signature(agent.ask_struct).parameters
@@ -154,7 +171,22 @@ def _ask_sql_agent(
         accepts_kwargs or "event_sink" in parameters
     ):
         kwargs["event_sink"] = event_sink
-    return agent.ask_struct(question, **kwargs)
+
+    try:
+        result = agent.ask_struct(question, **kwargs)
+        if root_trace_started:
+            try:
+                trace_collector.finish(output={"status": getattr(result, "status", "unknown")})
+            except Exception:
+                logger.debug("[SQL] trace_collector.finish 失败", exc_info=True)
+        return result
+    except Exception as exc:
+        if root_trace_started:
+            try:
+                trace_collector.finish(error=str(exc))
+            except Exception:
+                pass
+        raise
 
 
 @router.post("", responses={500: {"model": ErrorResponse}})
@@ -210,11 +242,11 @@ async def sql_query(
         # 首轮保持旧调用签名，兼容外部 Tool/测试替身；有上下文时才
         # 显式传入追问摘要。
         result = await asyncio.to_thread(
-            _ask_sql_agent, agent, req.question, policy=policy)
+            _ask_sql_agent, agent, req.question, policy=policy, session_id=req.session_id)
     else:
         result = await asyncio.to_thread(
             _ask_sql_agent, agent, req.question, policy=policy,
-            query_context=query_context)
+            query_context=query_context, session_id=req.session_id)
     memory = persist_sql_query_result(
         tenant_id=policy.tenant_id,
         user_id=policy.user_id,
