@@ -26,6 +26,7 @@ from backend.evaluation.dataset.loader import file_content_hash
 from backend.evaluation.judge_cs_forbidden import (
     ForbiddenJudgeResult,
     judge_forbidden_facts,
+    judge_forbidden_facts_offline,
 )
 from backend.evaluation.run_guards import run_judge
 from backend.shared.logger import logger
@@ -96,30 +97,38 @@ def run_forbidden_golden(
     golden_path: Path | None = None,
     repeat: int = 1,
     judge_fn: Callable[..., ForbiddenJudgeResult] | None = None,
+    mode: str = "auto",
 ) -> dict[str, Any]:
     """跑一遍 forbidden golden 集；repeat>1 输出逐条稳定性。
 
-    judge_fn 仅供测试注入 stub；生产路径恒用 judge_forbidden_facts。
-    裁判走真实模型时必须处于有效请求预算作用域内（与 PR #367 接线同口径），
-    否则 reserve_model_call 因 run_budget_context_missing 全员判不可用。
+    mode="offline" 时直接使用确定性离线语义裁判引擎（零网络/模型依赖）。
     """
-    judge_fn = judge_fn or judge_forbidden_facts
+    if mode == "offline" and judge_fn is None:
+        judge_fn = judge_forbidden_facts_offline
+    else:
+        judge_fn = judge_fn or judge_forbidden_facts
     repeat = max(1, int(repeat))
     cases = load_forbidden_golden(golden_path)
     started = time.time()
 
-    from backend.infra.llm.budget import scoped_request_budget
-    from backend.infra.llm.proxy import scoped_current_user_id
-
     per_case: dict[str, dict[str, Any]] = {}
     request_id = f"cs-forbidden-golden:{datetime.now():%Y%m%d-%H%M%S}"
-    with scoped_current_user_id("eval_bot"):
-        with scoped_request_budget(
-            request_id, user_id="eval_bot", tenant_id="default",
-        ):
-            per_case = _run_golden_cases(
-                cases, judge_fn=judge_fn, repeat=repeat,
-            )
+
+    if mode == "offline":
+        per_case = _run_golden_cases(
+            cases, judge_fn=judge_fn, repeat=repeat,
+        )
+    else:
+        from backend.infra.llm.budget import scoped_request_budget
+        from backend.infra.llm.proxy import scoped_current_user_id
+
+        with scoped_current_user_id("eval_bot"):
+            with scoped_request_budget(
+                request_id, user_id="eval_bot", tenant_id="default",
+            ):
+                per_case = _run_golden_cases(
+                    cases, judge_fn=judge_fn, repeat=repeat,
+                )
 
     flip_cases = [cid for cid, c in per_case.items() if c["flip"]]
     report = {
@@ -194,12 +203,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeat", type=int, default=1, help="每条重复次数（波动检测）")
     parser.add_argument(
+        "--mode", choices=["auto", "offline", "online"], default="auto",
+        help="裁判执行模式：offline=零模型离线确定性裁判；online=严格大模型裁判；auto=自动降级",
+    )
+    parser.add_argument(
         "--golden-path", type=Path, default=None, help="覆盖默认 golden 路径"
     )
     parser.add_argument("--persist", action="store_true", help="报告落盘供升级对比")
     args = parser.parse_args(argv)
 
-    report = run_forbidden_golden(golden_path=args.golden_path, repeat=args.repeat)
+    report = run_forbidden_golden(
+        golden_path=args.golden_path, repeat=args.repeat, mode=args.mode,
+    )
     logger.info(
         "[cs-forbidden-golden] total=%s flips=%s judge_errors=%s passed=%s",
         report["total"], report["tier_flip_count"],

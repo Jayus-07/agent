@@ -20,21 +20,12 @@ Trace
 - duration_ms
 - status
 
-## 常见 Span Type
+## 常见 Span Type（以 `SpanKind` 枚举为准）
 
-- `llm` / `llm_call`
-- `retrieval`
-- `rerank`
-- `sql`
-- `tool` / `tool_call`
-- `memory`
-- `agent`
-- `http`
-- `workflow`：用于评测答案生成、质量评分和结果整理等有边界的处理阶段。
-
-强约束以 `backend/observability/tracer.py` 的 `SpanKind` 枚举为准；`type` 为自由字符串
-仅做历史数据兼容。Planner/Reporter 等编排步骤现为 `type="agent"` 的具名 span
-（如「Planner 拆解」「Reporter 汇总」），不再是独立 type。
+强约束以 `backend/observability/tracer.py` 的 `SpanKind` 枚举为准（`type` 自由字符串仅作历史兼容）。常用枚举包括：
+- 核心与代理：`llm` / `llm_call`（统一由 `backend/observability/llm_call_span.py` 在 proxy 层生成，与 `llm_usage` 1:1 同源不双计）、`agent`（含 Planner/Reporter 等具名 span）、`tool` / `tool_call`、`workflow`
+- 检索与质量门禁：`retrieval`、`rerank`、`citation`、`faithfulness`、`evaluation`、`retrieval_gate`、`rerank_gate`、`faithfulness_gate`、`self_correction`
+- 知识库索引阶段：`index_upload`、`index_load`、`index_parse`、`index_clean`、`index_dedup`
 
 ## Tool 调用记录（必填）
 
@@ -76,7 +67,7 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 - 列表响应中的 Workflow、模型和 KB 筛选维度从已授权的留存 Trace 集合独立生成，不随当前页或所选筛选条件变化；不得先从未授权数据生成筛选项。
 - `has_tool` 下钻在留存上限内批量读取完整 Trace 和 Span，避免逐条查询造成 N+1 数据库访问。
 - 列表和统计均复用唯一 TraceStore。当前 TraceStore 最多保留 5,000 条；统计响应返回 `records_considered`、`retention_limit` 与 `observed_at`，仅代表该留存范围内的授权结果，不代表全量历史。
-- `trace_summary`（结构化摘要）与 `ai.trace_records`（PG 镜像）同样受留存期约束：`backend/observability/trace_retention.py` 的 `purge_expired_pg_traces()` 每周期按默认 14 天批量删除，不允许出现“SQLite store 在清理、PG 派生表无限保留”的分叉。
+- `trace_summary`（结构化摘要）与 `ai.trace_records`（PG 镜像）同样受留存期约束：`backend/observability/trace_retention.py` 的 `purge_expired_pg_traces()` 每周期按默认 14 天（敏感文档 180 天）批量清理主表与派生表。（注：`trace_retention.py::_cutoff()` 使用本地时间文本，与 `trace_store_pg.py` 的 UTC 统一口径在非 UTC 宿主机存在时区偏差风险，运维需保持容器 TZ 一致。）
 - 管理端运行总览最近记录表兼容最多展示 200 条样本；统计由 `GET /api/observability/traces/stats` 在服务端按当前身份和租户范围聚合。样本行数不能作为全量统计口径。
 - 列表页 CSV 导出已随 2026-10-30 管理端工作台重构移除；服务端全量导出为后续规划，落地前不得宣称存在导出能力。
 
@@ -106,8 +97,10 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 
 ## 当前实现（更正）
 
-- Tracer: `backend/observability/tracer.py`（`TraceCollector`；contextvar + thread 双轨）
-- 持久化: `backend/observability/trace_store_pg.py`（PostgreSQL；SQLite 轨已于 2026-09-17 删除）
+- Tracer: `backend/observability/tracer.py`（`TraceCollector`；`contextvars` + `bind_graph_node` / `set_scope_root` / `bind_external_parent_trace_id` 解决 LangGraph 并行与跨服务父子归因）
+- 持久化（主存储）: `backend/observability/trace_store_pg.py`（PostgreSQL 为唯一主存储；SQLite 轨已删除）
+- OTLP 镜像出口: `backend/observability/otel_exporter.py`（`OtelSpanMirror` 挂载在 `trace_collector` listener 回调，受 `OTEL_TRACE_OTLP_ENABLED` 与 `OTEL_EXPORTER_OTLP_ENDPOINT` 双开关控制，通过 `_ExplicitIdGenerator` + `ContextVar` 保持与自研 `trace_id`/`span_id` 确定性映射，异步 fire-and-forget 导出）
+- 统一 LLM Span 出口: `backend/observability/llm_call_span.py`（在 `_LLMProxy` 的 `_record_tokens` / `_settle_estimated_stream_usage` 统一生成 `llm_call` Span，与 `llm_usage` 同源同值不双计）
 - API: `backend/app/api/routes/observability.py`；DTO: `routes/_trace_dto.py`
 - 授权: `backend/app/api/routes/_trace_authz.py`
 - `knowledge_index` Trace 的标题和索引阶段 Span 名称使用正式逻辑路径中的文件名；候选索引不把随机暂存文件名作为页面标题。

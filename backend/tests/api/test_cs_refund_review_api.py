@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import psycopg2
 import pytest
 from fastapi import FastAPI
@@ -21,6 +23,17 @@ from backend.shared.idempotency import SideEffectOutcomeUnknown
 
 TENANT = "tenant-p5t"
 _PREFIX = "p5-"
+
+
+def test_approved_sandbox_case_has_no_wallet_refund_claim():
+    from backend.customer_service.case.service import _refund_request_view
+
+    view = _refund_request_view(SimpleNamespace(
+        case_id="sandbox-test-case", status="resolved", created_at=None,
+        updated_at=None, context={"refund_request": {"review": {"decision": "approved"}}},
+    ))
+    assert view["status"] == "approved"
+    assert view["status_display"] == "沙箱审核通过，钱包余额不变"
 
 
 def _pg():

@@ -10,10 +10,12 @@
 | `TaskManager` | `backend/tasks/task_manager.py` | 已持久化任务的入队/重投、任务级暂停/取消/恢复（`pause_task`/`cancel_task`/`resume_task`）及 SSE/事件通知。注意：这是**任务级控制 API**，与「用户经 Chat/旅游/客服入口主动暂停对话运行时」不同（后者见运行时生命周期规划，尚未实现） |
 | `QueueRouter` | `backend/tasks/queue_router.py` | workflow/task 到哪个逻辑 workload / 物理 queue |
 | `AdmissionController` | `backend/tasks/admission/controller.py` | 容量、请求/租户并发是否可进入执行 |
-| Lease / Heartbeat | `backend/tasks/lease_heartbeat.py` 与任务服务 | 当前哪个 execution 有权写任务状态（fencing） |
+| Lease / Heartbeat | `backend/tasks/lease_heartbeat.py` 与任务服务 | 当前哪个 execution 有权写任务状态（fencing；并发索引负载下通过租约原子锁防止僵尸竞争） |
 | RetryPolicy | `backend/tasks/retry_policy.py` | 已知临时失败的退避和次数边界 |
 | Pending Recovery | `backend/tasks/pending_recovery.py` | Worker 死亡、租约过期后能否重新领取 |
 | Side Effect Ledger | `backend/tasks/side_effect.py`、`backend/shared/idempotency.py` | 外部写操作有没有实际发生、是否可安全重试 |
+| Task Result Refs | `backend/tasks/result_refs.py`、`ai.task_result_refs`（迁移 122） | 大结果受控落盘与解耦：多步任务中 >8KB 的输出载荷脱离上下文落盘，仅留引用对象传递 |
+| Plan Revisions | `backend/orchestration/discovery/plan_revision.py`、`ai.plan_revisions`（迁移 124） | 运行中任务的多轮自然语言计划修订（draft -> apply，基于 `base_plan_version` 乐观锁防并发覆盖） |
 | Celery | `backend/tasks/celery_app.py` | broker、worker、beat 的执行和投递 |
 
 **关键区别**：TaskService=创建/持久化；TaskManager=投递/控制；QueueRouter=去哪里；Admission=能不能进；Lease=谁能执行；Ledger=写过没有；Retry=已知可恢复错误；Recovery=进程死亡后的重新协调。不能通过 Celery `autoretry_for` 代替不确定副作用账本。

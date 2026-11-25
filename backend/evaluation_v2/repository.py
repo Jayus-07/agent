@@ -16,6 +16,7 @@ from typing import Any, Iterator
 
 from psycopg2.extras import RealDictCursor
 
+from backend.shared.logger import logger
 from backend.evaluation_v2.domain_contracts import (
     validate_dataset_domain,
     validate_non_rag_case,
@@ -2486,6 +2487,311 @@ def list_runs(tenant_id: str, *, limit: int = 50, offset: int = 0) -> list[dict[
             (tenant_id, limit, offset),
         )
         return [_dict(row) for row in cur.fetchall()]
+
+
+def _normalize_ledger_row(row: dict[str, Any]) -> dict[str, Any]:
+    """将 ai.eval_run_records 中的记录标准化投影为符合 EvaluationV2Run 契约的字典。"""
+    module = str(row.get("module") or "")
+    total = int(row.get("case_count") or 0)
+    passed = int(row.get("pass_count") or 0)
+    raw_pass_rate = row.get("pass_rate")
+    pass_rate = float(raw_pass_rate) if raw_pass_rate is not None else (passed / total if total > 0 else 0.0)
+
+    status = str(row.get("status") or "")
+    if status in {"PASS", "completed"}:
+        job_status = "completed"
+    elif status in {"FAIL", "failed"}:
+        job_status = "failed"
+    elif status in {"running", "executing"}:
+        job_status = "running"
+    elif status in {"cancelled", "canceled"}:
+        job_status = "cancelled"
+    else:
+        job_status = "completed"
+
+    validity = str(row.get("validity") or "")
+    if validity in {"PASS", "FAIL", "INVALID"}:
+        gate_verdict = validity
+    elif pass_rate >= 0.8:
+        gate_verdict = "PASS"
+    else:
+        gate_verdict = "FAIL"
+
+    prompt_snapshot = row.get("prompt_snapshot") or {}
+    if isinstance(prompt_snapshot, str):
+        try:
+            prompt_snapshot = json.loads(prompt_snapshot)
+        except Exception:
+            prompt_snapshot = {}
+
+    d_ver = row.get("dataset_version")
+    if isinstance(d_ver, dict):
+        suite_version = str(d_ver.get("dataset_version") or "1.0.0")
+    else:
+        suite_version = str(d_ver or "1.0.0")
+
+    created_at = row.get("created_at")
+    return {
+        "run_id": str(row.get("run_id") or ""),
+        "suite_version_id": "",
+        "suite_key": module or "cli",
+        "suite_name": f"{module.upper() if module else 'CLI'} (CLI/门禁)",
+        "module": module,
+        "suite_version": suite_version,
+        "job_status": job_status,
+        "gate_verdict": gate_verdict,
+        "cost_amount": None,
+        "cost_currency": "USD",
+        "total_cases": total,
+        "completed_cases": total,
+        "passed_cases": passed,
+        "evaluation_mode": str(row.get("mode") or "offline"),
+        "source": str(row.get("trigger") or "ledger"),
+        "prompt_versions": prompt_snapshot,
+        "created_by": str(row.get("triggered_by") or "cli"),
+        "created_at": created_at,
+        "started_at": created_at,
+        "finished_at": created_at,
+    }
+
+
+def _fetch_ledger_runs(limit: int = 100) -> list[dict[str, Any]]:
+    """安全读取 ai.eval_run_records 记录；遇异常软失败返回空列表。"""
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT run_id, module, mode, status, validity, invalid_reason,
+                       case_count, pass_count, pass_rate, metrics,
+                       dataset_version, git_sha, trigger, triggered_by,
+                       prompt_snapshot, evaluation_snapshot_hash,
+                       created_at
+                FROM ai.eval_run_records
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[evaluation_v2] 读取 ai.eval_run_records 失败，软回退: {exc}")
+        return []
+
+
+def list_runs_unified(
+    tenant_id: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    include_ledger: bool = True,
+) -> list[dict[str, Any]]:
+    """双轨收口统一运行列表查询：混排 V2 原生评测与 CLI/发布门禁记录。"""
+    tenant_id = _tenant(tenant_id)
+    v2_runs = list_runs(tenant_id, limit=limit + offset, offset=0)
+    if not include_ledger:
+        return v2_runs[offset : offset + limit]
+
+    try:
+        raw_ledger_rows = _fetch_ledger_runs(limit=limit + offset)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[evaluation_v2] 获取 ledger runs 失败，降级为空: {exc}")
+        raw_ledger_rows = []
+    ledger_runs = [_normalize_ledger_row(r) for r in raw_ledger_rows]
+
+    seen_ids = {str(r.get("run_id")) for r in v2_runs}
+    merged: list[dict[str, Any]] = list(v2_runs)
+    for lr in ledger_runs:
+        rid = str(lr.get("run_id"))
+        if rid and rid not in seen_ids:
+            seen_ids.add(rid)
+            merged.append(lr)
+
+    def _sort_key(item: dict[str, Any]) -> str:
+        ts = item.get("created_at") or item.get("finished_at") or ""
+        return str(ts)
+
+    merged.sort(key=_sort_key, reverse=True)
+    return merged[offset : offset + limit]
+
+
+def get_run_unified(tenant_id: str, run_id: str) -> dict[str, Any]:
+    """统一评测详情查询：优先查 V2 表，失败时优雅回退查 ai.eval_run_records 与报告文件。"""
+    tenant_id = _tenant(tenant_id)
+    try:
+        return get_run(tenant_id, run_id)
+    except (RepositoryNotFoundError, ValueError):
+        pass
+
+    # 查 ai.eval_run_records
+    try:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT run_id, module, mode, status, validity, invalid_reason,
+                       case_count, pass_count, pass_rate, metrics,
+                       dataset_version, git_sha, trigger, triggered_by,
+                       prompt_snapshot, evaluation_snapshot_hash,
+                       created_at
+                FROM ai.eval_run_records
+                WHERE run_id = %s
+                LIMIT 1
+                """,
+                (run_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                cols = [d[0] for d in cur.description]
+                r = dict(zip(cols, row))
+                norm = _normalize_ledger_row(r)
+                return {
+                    **norm,
+                    "tenant_id": tenant_id,
+                    "corpus_snapshot_id": None,
+                    "request_id": None,
+                    "gate_reason": [{"invalid_reason": r.get("invalid_reason")}] if r.get("invalid_reason") else [],
+                    "snapshot_json": {
+                        "source": r.get("trigger") or "ledger",
+                        "evaluation_mode": r.get("mode") or "offline",
+                        "runner": "builtin",
+                        "module": r.get("module") or "",
+                        "prompt_versions": norm.get("prompt_versions") or {},
+                        "runtime_environment": {
+                            "git_sha": r.get("git_sha", ""),
+                        },
+                    },
+                    "env_hash": r.get("evaluation_snapshot_hash") or "",
+                    "invalid_reason": r.get("invalid_reason") or "",
+                    "suite_id": None,
+                    "suite_hash": r.get("evaluation_snapshot_hash") or "",
+                    "kb_id": None,
+                    "corpus_hash": None,
+                    "document_versions": [],
+                    "artifact_uri": f"data/eval_runs/{run_id}.json",
+                }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[evaluation_v2] 查询单条 ledger run 失败: {exc}")
+
+    # 查本地报告文件
+    try:
+        from backend.evaluation.storage import load_report
+        report, meta = load_report(run_id)
+        total = len(report.results)
+        passed = sum(1 for item in report.results if getattr(item, "status", "") == "pass")
+        return {
+            "run_id": run_id,
+            "tenant_id": tenant_id,
+            "suite_version_id": "",
+            "suite_key": report.module,
+            "suite_name": f"{report.module.upper()} (报告文件)",
+            "module": report.module,
+            "suite_version": "1.0.0",
+            "job_status": "completed",
+            "gate_verdict": "PASS" if passed == total else "FAIL",
+            "gate_reason": [],
+            "cost_amount": None,
+            "cost_currency": "USD",
+            "total_cases": total,
+            "completed_cases": total,
+            "passed_cases": passed,
+            "evaluation_mode": report.mode,
+            "source": (meta.get("env") or {}).get("trigger", "file"),
+            "prompt_versions": meta.get("prompt_snapshot") or {},
+            "snapshot_json": {
+                "source": (meta.get("env") or {}).get("trigger", "file"),
+                "evaluation_mode": report.mode,
+                "runner": "builtin",
+                "module": report.module,
+                "prompt_versions": meta.get("prompt_snapshot") or {},
+            },
+            "env_hash": "",
+            "invalid_reason": "",
+            "created_by": (meta.get("env") or {}).get("triggered_by", "cli"),
+            "created_at": report.timestamp,
+            "started_at": report.timestamp,
+            "finished_at": report.timestamp,
+            "suite_id": None,
+            "suite_hash": "",
+            "kb_id": None,
+            "corpus_hash": None,
+            "document_versions": [],
+            "artifact_uri": f"data/eval_runs/{run_id}.json",
+        }
+    except Exception:
+        pass
+
+    raise RepositoryNotFoundError(f"评测运行 {run_id} 不存在")
+
+
+def get_domain_overview(tenant_id: str) -> dict[str, dict[str, Any]]:
+    """聚合全域（rag, sql, cs, travel, agent, security）最新评测状态。"""
+    tenant_id = _tenant(tenant_id)
+    domains = ["rag", "sql", "cs", "travel", "agent", "security"]
+    result: dict[str, dict[str, Any]] = {
+        d: {
+            "domain": d,
+            "pass_rate": None,
+            "time": None,
+            "running": False,
+            "source": None,
+            "run_id": None,
+            "total_cases": 0,
+            "passed_cases": 0,
+            "status": None,
+        }
+        for d in domains
+    }
+
+    def _normalize_domain(mod: str) -> str:
+        mod = (mod or "").strip().lower()
+        if mod == "rag":
+            return "rag"
+        if mod == "sql":
+            return "sql"
+        if mod in {"cs", "customer_service"}:
+            return "cs"
+        if mod == "travel":
+            return "travel"
+        if mod == "security":
+            return "security"
+        return "agent"
+
+    runs = list_runs_unified(tenant_id, limit=100, offset=0, include_ledger=True)
+
+    for r in runs:
+        mod = str(r.get("module") or "")
+        d = _normalize_domain(mod)
+        cur = result[d]
+        t = str(r.get("finished_at") or r.get("created_at") or "")
+        if not t:
+            continue
+        cur_time = str(cur["time"] or "")
+        if not cur_time or t > cur_time:
+            total = int(r.get("total_cases") or 0)
+            passed = int(r.get("passed_cases") or 0)
+            pass_rate = round(passed / total, 4) if total > 0 else None
+            is_running = str(r.get("job_status") or "") in {"running", "queued", "preparing", "aggregating"}
+            result[d] = {
+                "domain": d,
+                "pass_rate": pass_rate,
+                "time": t,
+                "running": is_running,
+                "source": r.get("source") or ("v2" if r.get("suite_version_id") else "ledger"),
+                "run_id": str(r.get("run_id") or ""),
+                "total_cases": total,
+                "passed_cases": passed,
+                "status": str(r.get("job_status") or ""),
+            }
+
+    return result
 
 
 def set_run_status(

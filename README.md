@@ -2,7 +2,7 @@
 
 面向电商业务的 Agent Platform —— RAG + NL2SQL + 多域 Agent 编排，FastAPI · LangGraph · Next.js · APISIX。
 
-平台把「知识问答、数据分析、智能客服、旅游规划、选品决策」收敛到同一套 Router / Runtime / Domain Agent / Skill / Tool 架构上：一次请求由网关验签进入，由路由引擎拍板去向，再落到能力直连、预定义工作流、任务规划或垂直业务域图执行，过程与结果通过 SSE 实时回传。
+平台把「知识问答、数据分析、智能客服、旅游规划」收敛到同一套 Router / Runtime / Domain Agent / Skill / Tool 架构上：一次请求由网关验签进入，由路由引擎拍板去向，再落到能力直连、预定义工作流、任务规划或垂直业务域图执行，过程与结果通过 SSE 实时回传。
 
 > 本文件只负责「看懂系统 + 跑起来」。运行契约、开发规范与业务细节以下文链接的文档为唯一事实源，README 不维护第二份口径。
 
@@ -29,8 +29,8 @@ flowchart TB
     end
 
     subgraph AIRT["AI Runtime（LangGraph）"]
-        MAIN["主图：router → direct / workflow / plan 支线"]
-        DOM["业务域图<br/>客服 / 旅游（planning）/ 选品漏斗"]
+        MAIN["主图：router → tool_selector/skill_executor · workflow · plan · clarify/handoff"]
+        DOM["业务域图<br/>客服 / 旅游（planning）"]
     end
 
     subgraph CAPL["能力层 Capability / Skill"]
@@ -70,7 +70,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    OUT["SSE 流式返回<br/>status / log / delta → done ｜ memory.end_turn + trace 收尾"]
+    OUT["SSE 流式返回<br/>meta / status / thinking / log / delta / todo / usage / context / paused → done ｜ ping 保活 + stream/resume 断线恢复"]
     U["用户消息"] --> GW["APISIX 网关<br/>验签 + 注入身份头"]
     GW --> API["POST /chat/stream<br/>FastAPI Chat Runtime"]
     API --> IG
@@ -85,12 +85,13 @@ flowchart TB
 
     subgraph G["LangGraph 主图"]
         RT["Router Runtime<br/>域预过滤 + RoutingEngine（domain → intent → capability → policy）"]
-        RT -->|"direct"| DE["Capability Runtime<br/>skill_executor 直连执行"]
+        RT -->|"direct"| DE["Capability Runtime<br/>tool_selector → skill_executor"]
         RT -->|"workflow"| WE["workflow_executor"]
-        RT -->|"plan"| PL["Plan Runtime<br/>任务拆解 → 并行调度（Send）"]
+        RT -->|"plan"| PL["Plan Runtime<br/>任务拆解 → 并行调度（Send）｜ 满足多步条件移交后台 TaskGraphExecutor"]
         RT -->|"寒暄 / 能力咨询"| GC["general_chat 直答"]
-        RT -->|"域命中（开关 + 入口模式）"| DG["Domain Runtime<br/>客服 / 旅游 / 选品"]
-        DE --> REP["reporter"]
+        RT -->|"域命中（开关 + 入口模式）"| DG["Domain Runtime<br/>客服 / 旅游"]
+        RT -->|"clarify / handoff"| REP["reporter"]
+        DE --> REP
         WE --> REP
         PL --> REP
     end
@@ -108,7 +109,7 @@ flowchart TB
 |------|------|
 | 接入与编排 | Apache APISIX（standalone）+ FastAPI + SSE Streaming ｜ LangGraph（StateGraph + Send API + checkpointer） |
 | LLM | DeepSeek / Qwen / Ollama，经统一模型网关 `infra/llm`；provider 与 key 走 `sys_config` + 管理端，不进 env |
-| 存储与检索 | PostgreSQL + pgvector（BM25 + Vector → RRF → CrossEncoder Rerank） |
+| 存储与检索 | PostgreSQL + pgvector（`tsvector` GIN 倒排全文 + Vector → 加权 RRF → CrossEncoder Rerank） |
 | 异步与可观测 | Celery + Redis 双队列（Kafka 仅 `java-loop` profile）｜自研 Tracer（PG 权威，可镜像 OTLP）+ Prometheus + Grafana |
 | MCP 与前端 | MCP stdio / Streamable HTTP，既是 Tool 出口也消费外部数据源 ｜ Next.js 14 + React 18 + Tailwind 3 + Zustand + TanStack Query |
 
@@ -116,59 +117,52 @@ flowchart TB
 
 ### 企业知识问答 RAG
 
-文档解析（PDF / DOCX / Markdown / TXT，含 OCR 兜底）→ 类型感知切片 + Metadata 治理（关键词 / 摘要 / 实体）→ **混合检索**（Vector + BM25 → RRF 融合 → CrossEncoder Rerank + 阈值过滤）→ **Evidence Gate 三层主动拒答**（Retrieval / Rerank / Faithfulness）防幻觉 → **Citation** 内联引用 `[1][2]` + 参考文献列表 + META 尾拒答判定。细节见 [rag.md](docs/domains/rag.md)。
+文档解析（PDF / DOCX / Markdown / TXT / XLSX / CSV / HTML / PPTX / JSON / XML 共 10 种格式，含 OCR 兜底）→ 类型感知切片 + Metadata 治理（关键词 / 摘要 / 实体）→ **三层路由混合检索**（`vector_only` / `hybrid` / `hybrid_multi_query`，PG `tsvector` GIN 倒排全文 + Vector → §7 查询类型加权 RRF + 精确标识符加成 → CrossEncoder Rerank + 阈值过滤）→ **Evidence Gate 多道防线主动拒答**（Retrieval / Rerank / 程序化 `ClaimVerifier` 零容忍数值日期核验 / Faithfulness / `SelfCorrectionStrategy`）→ **Citation** 内联引用 `[1][2]` + 参考文献列表 + META 尾拒答判定。细节见 [rag.md](docs/domains/rag.md)。
 
 ### NL2SQL 数据分析
 
-`分析最近 30 天库存异常` → 选表（SQL Schema Router）→ SQL 生成 → 校验 → 行级范围处理 → 只读执行 → Markdown。**六层安全**：① SELECT 校验 ② 表名白名单 ③ 敏感列拒绝 ④ 函数黑名单 ⑤ LIMIT 强制 ⑥ `agent_readonly` 只读角色；授权表清单与数据范围由服务端 `SQLPolicyContext` 提供，查询 fail closed，拒绝不伪装成空结果。细节见 [sql.md](docs/domains/sql.md)。
+`分析最近 30 天库存异常` → 选表（SQL Schema Router）→ SQL 生成 → 校验 → 行级范围处理 → 只读执行 → Markdown。**六层安全**：① SELECT 校验 ② 表名白名单 ③ 敏感列拒绝 ④ **全函数正向白名单**（`POSITIVE_FUNCTION_ALLOWLIST`）⑤ LIMIT 强制 ⑥ `agent_readonly` 只读角色；授权表清单与数据范围由服务端 `SQLPolicyContext` 提供，查询 fail closed，拒绝不伪装成空结果。细节见 [sql.md](docs/domains/sql.md)。
 
 ### 智能客服
 
-客服域图由域主 Agent 调度 knowledge / query / action / complaint / handoff 子 Agent；域检测规则优先，配合实体感知路由，订单号等显式实体可精确定位到查单链路；转人工直通、等待倒计时与超时降级建留言工单构成人工接管闭环；写操作走操作预览 + 用户确认 + 幂等账本，权限与租户范围只取自服务端上下文。细节见 [customer-service.md](docs/domains/customer-service.md)。
+客服域图由域主 Agent 调度 knowledge / query / action / complaint / handoff 子 Agent；域检测规则优先，配合实体感知路由，订单号等显式实体可精确定位到查单链路；转人工直通、等待倒计时（`reaper.py` 时间驱动状态机）与超时降级建 `GD-*` 留言工单构成人工接管闭环；写操作走操作预览 + 用户确认 + 幂等账本，权限与租户范围只取自服务端上下文。细节见 [customer-service.md](docs/domains/customer-service.md)。
 
 ### 旅游规划
 
-独立旅游专属页 `/travel` 采用「表单首发 + 页内对话改单」：表单产出结构化行程（逐日时间轴、地图打点、日历导出），页内助手在同一会话上对话式改单；行程版本账本支持确认 / 放弃 / 恢复；路况与天气走真实 Provider，失败如实披露而不用本地估算冒充；住宿与交通查询由旅游域数据源层承接，预订事务由预订子域独立承接（有独立开关）。细节见 [travel.md](docs/domains/travel.md)。
-
-### 智能选品
-
-选品专属页 `/selection-funnel` 支持导入候选池（CSV / TSV / Excel 复制文本）→ 跑完整漏斗 → 页内出报告。漏斗链路为导入 → 粗筛（口碑线 / 热度线）→ 核验 → 单位经济测算 → 综合排序，附带各层留淘计数与 Top 榜；类目差异化阈值走配置声明而非硬编码；缺槽位时追问并复用同一会话续跑，候选池不丢。
+独立旅游专属页 `/travel` 采用「表单首发 + 页内对话改单」：表单与对话规划均走 `POST /api/travel/v2/plan/stream` 与 `travel_v2` Trip + Revision 体系（V1 端点已退役），产出结构化行程（逐日时间轴、地图打点、日历导出、精选模板与自动优选）；路况与天气走真实 Provider，失败如实披露而不用本地估算冒充；住宿与交通查询由旅游域数据源层承接，预订事务由 `travel_v2` REST 确认门承接（有独立开关）。细节见 [travel.md](docs/domains/travel.md)。
 
 ### Workflow 与公共平台能力
 
-预定义多步编排（绕过 Planner 直接执行）：日报生成 ｜ 库存预警 ｜ 市场调研（证据管线 → 章节化报告）｜ 选品决策（市场评估 → 差异化 → 财务测算 → AI 评审团）。公共平台能力是横切支撑，不与业务域并列：授权与 RBAC（含写操作审批门）、三层记忆（L1 短时 / L2 会话 / L3 长期）、上下文预算、模型治理、副作用幂等账本、可观测与评测。
+预定义多步编排（绕过 Planner 直接执行）：日报生成 ｜ 库存预警 ｜ 市场调研（证据管线 → 章节化报告）。（注：原「智能选品 / 选品漏斗」域及工作流已随 #484 退役。）公共平台能力是横切支撑，不与业务域并列：授权与 RBAC（含写操作审批门）、三层记忆（L1 短时 / L2 会话 / L3 长期）、上下文预算、模型治理、副作用幂等账本、可观测与评测。
 
 ## 垂直域图（Domain Graph）
 
-各业务域是独立子图，自带状态、检查点策略与 reporter，由 `backend/domains/__init__.py` 统一注册、主图 builder 自动布线。域图**恒注册、恒加载**：下表的开关只决定「**全局预过滤通路**放不放行」，既不代表域图不存在，也**不影响专属页面**（`/travel`、`/selection-funnel`、坐席工作台走各自端点）。开关**代码默认关闭**，在根 `.env` 或管理端 `sys_config` 中开启（DB 覆盖免重启生效）。
+各业务域是独立子图，自带状态、检查点策略与 reporter，由 `backend/domains/__init__.py` 统一注册、主图 builder 自动布线。域图**恒注册、恒加载**：下表的开关只决定「**全局预过滤通路**放不放行」，既不代表域图不存在，也**不影响专属页面**（`/travel`、坐席工作台走各自端点）。开关**代码默认关闭**，在根 `.env` 或管理端 `sys_config` 中开启（DB 覆盖免重启生效）。
 
 | 域图 | 开关 | 构成 |
 |---|---|---|
 | 客服 | `CS_ENABLED` | 域主 Agent + 5 子 Agent（knowledge / query / action / complaint / handoff） |
-| 旅游 | `TRAVEL_ENABLED` | slot_filler + 子 Agent + validator / repair 四轴校验 |
-| 选品漏斗 | `SELECTION_FUNNEL_ENABLED` | 线性漏斗域图 |
+| 旅游 | `TRAVEL_ENABLED` | slot_filler + 6 子 Agent + validator / repair 四轴校验 |
 
-> 2026-11-01 收编重构：原「旅游商务」「旅游预订」两域图壳已删除。商务实现收编进旅游域数据源层（`backend/travel/providers_support/commerce/`）；预订事务机制保留在 `backend/travel/booking/`，对外改为 travel_v2 REST 确认门（`/api/travel/v2/trips/{id}/bookings/*`），`TRAVEL_BOOKING_PROVIDER` 控制其数据源（off/fake/live）。
+> 2026-11-01 收编重构：原「旅游商务」「旅游预订」两域图壳已删除。商务实现收编进旅游域数据源层（`backend/travel/providers_support/commerce/`）；预订事务机制保留在 `backend/travel/booking/`，对外改为 travel_v2 REST 确认门（`/api/travel/v2/trips/{id}/bookings/*`），`TRAVEL_BOOKING_PROVIDER` 控制其数据源（off/fake/live）。随后 #484 已将「选品漏斗 / 选品决策」整体退役。
 
-进入域图有两条独立通路：**全局预过滤**（未带页面锁域时按 客服 → 旅游 → 选品 顺序判定，命中且总闸开启后按域入口模式分派）与**页面锁域**（前端在每条消息上带 `domain_hint`，锁定本页负责的域）。
+进入域图有两条独立通路：**全局预过滤**（未带页面锁域时按领域顺序判定，命中且总闸开启后按域入口模式分派）与**页面锁域**（前端在每条消息上带 `domain_hint`，锁定本页负责的域）。
 
 ### 主聊天页与旅游专属页的实际分工
 
-`/agent` 每条消息带 `domain_hint=main`，该锁域**无条件生效**：命中旅游 / 选品 / 预订强信号即直接产 `handoff` 引导卡并带参跳专属页，**不再经过**全局预过滤，也不读域入口模式（`router_node.py` 中 `main_forced` 与域预过滤是互斥分支）；SQL / RAG / 计划支线、`general_chat` 与客服引导不受此锁影响。**故 `/agent` 不生成行程**，行程在 `/travel` 生成 —— 表单与页内对话都走旅游域自身的 `/api/travel/plan(/stream)` 端点（只读改单走只读图）。
+注册的 `/chat/agent` 入口（`product_id == "agent"`）在 `main_forced=True` 时，严格只在自身产品能力范围内路由：**跳过** `main_forced_handoff_update()`（仅 `product_id == "internal"` 兼容入口才会在命中旅游/预订信号时生成跨助手 handoff），且**不走**全局 CS 兜底预过滤（`not main_forced`）。`/agent` 聚焦知识问答、SQL 问答、计划支线与 `general_chat`，行程规划与改单由 `/travel` 专属页的 `POST /api/travel/v2/plan/stream` 与 `travel_v2` REST 接口独立承接。
 
-> 由此带来一个容易误读的后果：**旅游 / 选品这 2 个开关在 `/agent` 这一页走不到**（请求在锁域分支就被截成引导卡了），但它们仍是其他入口的总闸，并非常量或废弃项。**客服不同**：`CS_ENABLED` 对应的兜底预过滤不在该互斥分支内，`/agent` 同样会读它。预订不走域图（收编后为 travel_v2 REST 确认门），预订强信号在锁域下同样产引导卡送旅游页。
-
-域入口模式（`*_GLOBAL_ENTRY_MODE`，代码默认 `execute`）只作用于**全局预过滤这条通路**：`execute` 进域图执行，`guide` 同样产引导卡送专属页；对已被 `/agent` 锁域拦下的请求无效。锁域判定见 `backend/orchestration/graph/routing/lock_domain.py`，模式定义见 `backend/services/sys_config.py`，细节见 [ai-runtime.md](docs/architecture/ai-runtime.md)。
+域入口模式（`*_GLOBAL_ENTRY_MODE`，代码默认 `execute`）只作用于**全局预过滤这条通路**：`execute` 进域图执行，`guide` 产引导卡送专属页；对已被 `/agent` 锁域拦下的请求无效。锁域判定见 `backend/orchestration/graph/routing/lock_domain.py`，模式定义见 `backend/services/sys_config.py`，细节见 [ai-runtime.md](docs/architecture/ai-runtime.md)。
 
 ## 前端三端
 
 ### 用户端 `frontend`（:3100）
 
-以聊天主界面 `/agent` 为核心（流式回答 + 实时路由与工具调用过程；知识问答、SQL 问答、闲聊自动分流），右上角有客服抽屉入口；旅游 / 选品 / 预订的引导卡也在此页触发，但**只送去专属页，不在本页执行**。另有旅游规划 `/travel`、智能选品 `/selection-funnel`、未登录兜底门户 `/`、登录注册与 `/change-password` 改密。
+以聊天主界面 `/agent` 为核心（流式回答 + 实时路由与工具调用过程；知识问答、SQL 问答、闲聊自动分流），右上角有客服抽屉入口；另有旅游规划 `/travel`、未登录兜底门户 `/`、登录注册与 `/change-password` 改密。
 
 ### 管理端 `frontend-admin`（:3200）
 
-面向管理员与运营，侧栏按工作台合并：**运营总览**、**知识库**（上传管理、关键词、待审队列、入库失败、索引 trace）、**平台资产**（Agent 清单、Skill / Capability 对账、Prompt 管理与 playground）、**可观测与成本**（Traces、告警、网关日志、Token 用量与成本、预算与模型价格双人审核）、**安全与设置**（RBAC、模型配置、写操作审批门）、**业务运营**（数据查询、选品决策与漏斗、竞品监控、预警、报告、定时任务、评测与反馈）、**任务中心**。
+面向管理员与运营，侧栏按 6 组二级分区组织（#564 重构）：**运营总览**、**业务运营**（数据查询、报告中心、商品库存预警、客服意图目录、商旅服务扩展）、**内容与质量**（知识库工作台、评测中心）、**运行监控**（运行控制中心、服务健康与告警、任务中心、定时任务）、**能力治理**（Tool/MCP/Skill、模型与供应商、预算策略、Prompt/Agent/圆桌、一致性/发布）、**安全运维**（访问控制、审批与审计、安全运营）。
 
 ### 客服坐席工作台 `frontend-cs`（:3300）
 
@@ -231,8 +225,8 @@ agent/
 │   ├── app/                   # FastAPI（routes / middleware / server）
 │   ├── orchestration/         # LangGraph 运行时（graph / router / workflows）
 │   ├── skills/  tools/        # Skill（业务能力封装）/ Tool（无状态原子操作）
-│   ├── domains/  customer_service/  travel/  selection_funnel/
-│   │                          #   域图注册入口 + 客服 / 旅游 / 选品漏斗域图
+│   ├── domains/  customer_service/  travel/
+│   │                          #   域图注册入口 + 客服 / 旅游域图
 │   ├── rag/  sql/             # RAG 管道 / NL2SQL（多层校验 + 行级权限）
 │   ├── memory/  tasks/        # 三层记忆 / Celery（双队列 + worker）
 │   ├── evaluation/  observability/  security/  infra/

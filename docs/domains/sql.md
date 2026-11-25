@@ -2,14 +2,14 @@
 
 ## 当前执行链
 
-backend/sql/sql_agent.py 按授权策略准备问题和可访问表，再组合选表、SQL 生成、验证、行级范围处理与只读执行；API/Skill 调用入口以 backend/app/api/routes/sql.py 和对应 Skill 实现为准。
+`backend/sql/sql_agent.py` 按 `precheck -> _prepare_sql_question -> select_tables -> generate_sql -> SQLPolicyGuard.validate_and_rewrite -> execute_sql_struct -> _observe` 编排执行；API/Skill 调用入口以 `backend/app/api/routes/sql.py`（`_ask_sql_agent` 补齐 `sql_agent` Root Trace）和对应 Skill 实现为准。
 
-## 安全约束
+## 安全约束与核心实现
 
-- 只执行只读查询，数据库账号保持最小权限。
-- 授权表清单和租户/用户/部门数据范围由服务端 SQLPolicyContext 提供；查询必须 fail closed。
-- 所有生成 SQL 经当前 Validator 与执行器边界；禁止模型直连数据库、拼接未参数化输入或绕过校验。
-- 权限拒绝、安全校验拒绝、Schema 生成错误和服务不可用须区分处理；不得把拒绝伪装为空结果。
+- **只读与最小权限**：执行层（`backend/sql/executor.py`）使用 `ThreadedConnectionPool`（借出探活自愈、`PoolExhaustedError` 限流）、`agent_readonly` 只读账号、`SET TRANSACTION READ ONLY`、`SET LOCAL statement_timeout` 与列级脱敏。
+- **服务端策略与原地注入（`backend/sql/policy.py`）**：`SQLPolicyContext` 仅能由 `Principal`/`AuthorizationContext` 装配，查询必须 fail closed；`precheck` 在调用 LLM 前拦截无 `sql.read` 或缺失身份/合法 scope 的请求；`SQLPolicyGuard.validate_and_rewrite` 按 `TablePolicy.data_domain`（`shared`/`personal`/`internal`）对 AST 内所有 `exp.Select`（含 CTE/子查询/UNION）原地注入 `%(sql_scope_*)s` 命名参数，取代旧 `row_security.inject_row_filter` 避免双重注入。
+- **AST 六层校验与终态分类（`backend/sql/sql_validator.py`）**：基于 `sqlglot` 执行单语句 SELECT 校验、拒绝 `SELECT INTO` 与 `FOR UPDATE|SHARE` 锁子句、表/Schema/列白名单（含 CTE 列白名单收紧）、**全函数正向白名单（`POSITIVE_FUNCTION_ALLOWLIST`）**、PG 保留字表名自动补双引号、别名未定义拦截与强制 `LIMIT`；通过 `TERMINAL_DENY_REASONS` 严禁安全拒绝进入重试循环，区分权限/校验拒绝与空结果。
+- **延迟优化**：`backend/sql/router.py` 与 `backend/sql/sql_generator.py` 对支持 thinking 的云端模型显式禁用 thinking（`extra_body={"thinking": {"type": "disabled"}}`、`temperature=0.0`），显著降低端到端问数耗时。
 
 ## 零售 ERP 单店试点
 

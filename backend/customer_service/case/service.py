@@ -86,7 +86,8 @@ def _refund_request_view(case: Any) -> dict | None:
     if review:
         status = str(review.get("decision") or "")
         status_display = (
-            "审核通过，退款已退回钱包" if status == "approved" else "审核未通过"
+            "沙箱审核通过，钱包余额不变"
+            if status == "approved" else "审核未通过"
         )
     else:
         status = state_to_status.get(case.status, "unknown")
@@ -565,6 +566,8 @@ class CSCaseService:
                     continue
                 if status and view.get("status") != status:
                     continue
+                view["reason"] = (case.context or {}).get("refund_request", {}).get("reason")
+                view["conversation_id"] = case.conversation_id
                 result.append(view)
             return result
 

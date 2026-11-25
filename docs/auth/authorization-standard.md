@@ -32,8 +32,8 @@ flowchart TD
 
 ## 3. 必须遵守的边界
 
-1. **可信身份**：拒绝来自客户端的 `user_id/tenant_id/role` 覆盖；API Key 是服务凭据不自动映射成用户；后端直连与网关请求必须都受必要守卫。
-2. **最小权限**：默认无权限；注册新用户、批量操作、管理员变更、客服席位都按明确规则；权限变更影响活跃会话时按 session revoke/刷新策略失效，不让旧令牌无限保权。
+1. **可信身份与凭据治理**：拒绝来自客户端的 `user_id/tenant_id/role` 覆盖；API Key 统一由数据库 `auth.api_keys`（迁移 141）持久化治理与验签，作为服务凭据时不自动映射成用户；支持 SSO 单点登录集成（迁移 151 `auth_sso`）；后端直连与网关请求必须都受必要守卫（`GATEWAY_TRUST_SECRET`）。
+2. **最小权限与只读基准**：默认无权限；只读数据库角色 `agent_readonly` 的可见面**恒等于** SQL Agent 声明面（`schema_config.py`），已通过迁移 147/148 明确回收客服核心业务表（`points_ledger`, `wallet_ledger`, `invoices` 等），安全下线爬虫账户权限（迁移 152），纵深杜绝 SQL 问数越权穿透业务底线。
 3. **后端权威**：`backend/security/principal.py`、`authorization.py` 的角色/权限上下文由服务端构建；新业务先定义资源 scope，再使用现有依赖或服务校验。不能每个 Agent 各写一张角色表。
 4. **数据**：KB/文档、SQL、客服工单与会话、旅游 Trip/Revision、选品/订单、Memory、Trace、预算和管理 API 的**列表、详情、统计、搜索、导出、WS** 都按用户/租户隔离；不能只保护写接口。
 5. **操作**：管理员改角色、禁用用户、密钥/模型/Prompt/预算变更属于治理写入，授权 + 审计 + 幂等/并发保护；不能通过另一条低权限 API、MCP 或 Workflow 绕过。
