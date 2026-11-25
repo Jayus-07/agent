@@ -87,13 +87,13 @@ class TestHandoffTimeoutRecovery:
         from backend.customer_service.handoff_store import get_handoff_store
 
         store = get_handoff_store()
-        store.save("u_timeout_test", "s1", {
+        store.save("u_timeout_test", "c1", {
             "handoff_state": "waiting_human",
             "trigger_type": "explicit_request",
             "ticket_id": "T1",
         })
         assert _recover_handoff_timeout(_cs_state()) is None
-        store.clear("u_timeout_test", "s1")
+        store.clear("u_timeout_test", "c1")
 
     def test_expired_handoff_recovered_to_ai_active(self, monkeypatch):
         from backend.customer_service.supervisor import _recover_handoff_timeout
@@ -108,10 +108,14 @@ class TestHandoffTimeoutRecovery:
             "updated_at": old,
             "_conversation_id": "c1",
         }
-        # STOP CS-A P0-6 后 handoff store 读路径 DB-first；本单测只测
-        # Supervisor 超时裁决，注入事实源桩，避免依赖本机 PG/改 L1 缓存。
+        # 保留实际 store.load，包括按用户及会话读取和缓存行为。
+        def _load(user_id, conversation_id):
+            if (user_id, conversation_id) == ("u_timeout_test", "c1"):
+                return active
+            return None
+
         monkeypatch.setattr(
-            store, "get_active_handoff", lambda _user_id: active if active else None,
+            store, "_db_load", _load,
         )
 
         def _close(_active, *, now):
@@ -129,7 +133,7 @@ class TestHandoffTimeoutRecovery:
             for e in update["cs_audit_entries"]
         )
         # store 已清空
-        assert store.get_active_handoff("u_timeout_test") is None
+        assert store.peek_l1("u_timeout_test", "c1") is None
 
     def test_ai_active_untouched(self):
         from backend.customer_service.supervisor import _recover_handoff_timeout

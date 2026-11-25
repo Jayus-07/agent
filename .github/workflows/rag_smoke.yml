@@ -235,6 +235,7 @@ jobs:
             backend/tests/customer_service/test_mall_order_create_sandbox_pg.py \
             backend/tests/customer_service/test_handoff_repo.py \
             backend/tests/customer_service/test_dispatch_reaper.py \
+            backend/tests/test_audit_fixes.py::TestHandoffTimeoutRecovery::test_expired_handoff_recovered_to_ai_active \
             backend/tests/customer_service/test_cs_sla_graded.py::test_timeout_notice_failure_rolls_back_and_scan_retries \
             backend/tests/customer_service/test_p5_stopcs_a_realpg.py::test_directed_offer_ignores_closed_assignment_but_enforces_capacity \
             backend/tests/customer_service/test_p4_handoff_ingress.py::test_active_handoff_is_reused_without_creating_a_second_row \
