@@ -339,6 +339,20 @@ export interface EvaluationV2Run {
   prompt_versions?: Record<string, number | string | null> | null;
 }
 
+export interface DomainOverviewItem {
+  domain: string;
+  pass_rate: number | null;
+  time: string | null;
+  running: boolean;
+  source: string | null;
+  run_id: string | null;
+  total_cases: number;
+  passed_cases: number;
+  status: string | null;
+}
+
+export type DomainOverviewResponse = Record<string, DomainOverviewItem>;
+
 export interface EvaluationV2RunFingerprint {
   source?: string;
   evaluation_mode?: string;
@@ -675,6 +689,10 @@ export const evaluationService = {
 
   listV2Runs(limit: number = 100, offset: number = 0): Promise<EvaluationV2Run[]> {
     return request<EvaluationV2Run[]>(`${BASE}/v2/runs?limit=${limit}&offset=${offset}`);
+  },
+
+  getDomainOverview(): Promise<DomainOverviewResponse> {
+    return request<DomainOverviewResponse>(`${BASE}/v2/domain-overview`);
   },
 
   listV2Experiments(limit: number = 100): Promise<EvaluationV2Experiment[]> {

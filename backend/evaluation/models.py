@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, Callable, get_args
 from pydantic import BaseModel, Field
 
-ModuleKind = Literal["planner", "rag", "cs", "sql", "e2e", "travel", "travel-provider"]
+ModuleKind = Literal["planner", "rag", "cs", "sql", "e2e", "travel", "travel-provider", "security"]
 
 # 模块清单的唯一事实源就是上面的 Literal——这里只是它的运行期视图。
 # 历史上「有哪些模块」被手写 5 份（CLI choices / service 的 all 清单 / MODULE_LABELS /

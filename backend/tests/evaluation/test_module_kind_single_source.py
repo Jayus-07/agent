@@ -41,7 +41,7 @@ def test_module_kinds_is_the_literal_itself():
     """
     assert MODULE_KINDS == (
         "planner", "rag", "cs", "sql", "e2e",
-        "travel", "travel-provider",
+        "travel", "travel-provider", "security",
     )
     assert len(set(MODULE_KINDS)) == len(MODULE_KINDS), "ModuleKind 里有重复项"
 
@@ -65,7 +65,7 @@ def test_module_labels_cover_every_kind():
 def test_all_run_modules_is_explicit_subset():
     """`all` 的默认集：必须是 ModuleKind 的子集，且排除项逐个显式列出。"""
     assert set(ALL_RUN_MODULES) <= set(MODULE_KINDS)
-    assert ALL_RUN_MODULES == ("planner", "rag", "sql", "e2e", "travel")
+    assert ALL_RUN_MODULES == ("planner", "rag", "sql", "e2e", "travel", "security")
     assert set(ALL_RUN_MODULES) | set(ALL_EXCLUDED_MODULES) == set(MODULE_KINDS), (
         "有模块既不在 all 里、也没被显式排除——口径出现空白"
     )

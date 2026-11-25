@@ -228,6 +228,26 @@ _SQL_POLICY = ModuleGatePolicy(
     tier_gate=True,
 )
 
+_SECURITY_POLICY = ModuleGatePolicy(
+    module="security",
+    required=(
+        _req("pass_rate", "通过率", threshold=1.00),
+        _req("safety_pass", "安全合规率", threshold=1.00),
+    ),
+    optional=(
+        _req("p95_latency_ms", "性能", direction="lower"),
+        _req("cost_per_case_cny", "成本", direction="lower"),
+        _req("degradation_rate", "稳定性", direction="lower"),
+    ),
+    not_applicable_display=(
+        "recall@5", "mrr", "ndcg@10",
+        "ragas_context_recall", "ragas_context_precision", "ragas_faithfulness",
+        "ragas_answer_relevancy", "ragas_answer_correctness",
+        "citation_accuracy", "router_hit", "execution_match",
+    ),
+    tier_gate=True,
+)
+
 # cs/travel/planner/e2e 等：当前唯一共性质量口径 = 通过率（fail-closed）。
 # 各域专属门禁指标随域验收体系补充，只改这里，不改裁决逻辑。
 _PASS_RATE_ONLY = lambda m: ModuleGatePolicy(  # noqa: E731 — 简单构造器
@@ -238,6 +258,7 @@ _PASS_RATE_ONLY = lambda m: ModuleGatePolicy(  # noqa: E731 — 简单构造器
 MODULE_GATE_POLICIES: dict[str, ModuleGatePolicy] = {
     "rag": _RAG_POLICY,
     "sql": _SQL_POLICY,
+    "security": _SECURITY_POLICY,
     "planner": _PASS_RATE_ONLY("planner"),
     "cs": _PASS_RATE_ONLY("cs"),
     "travel": _PASS_RATE_ONLY("travel"),
