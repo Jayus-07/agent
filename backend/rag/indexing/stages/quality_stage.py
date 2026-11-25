@@ -33,7 +33,7 @@ class PrepaidContentIntegrityError(ValueError):
     def __init__(self, issue_codes: list[str]):
         self.issue_codes = list(issue_codes)
         super().__init__(
-            f"付费前完整性预检失败: {','.join(self.issue_codes)}"
+            f"付费前预检失败(付费前完整性预检): {','.join(self.issue_codes)}"
         )
 
 
@@ -44,36 +44,63 @@ def reviewable_anomalies(anomalies: list) -> list:
         if not isinstance(item, dict):
             continue
         code = str(item.get("check") or "")
-        level = str(item.get("level") or "")
+        level = str(item.get("level") or item.get("severity") or "")
         if level == "warn" and code not in EXPECTED_SOFT_WARNING_CHECKS:
             reviewable.append(item)
     return reviewable
 
 
+_COVERAGE_AUDIT_FIELDS = frozenset({
+    "leaf_total", "audited_leaf_count", "covered", "uncovered_count",
+    "table_rows_total", "table_rows_uncovered",
+    "table_cells_total", "table_cells_uncovered",
+    "coverage_rate", "sampled",
+})
+
+
 def coverage_quality_metrics(coverage: dict) -> dict:
-    """从 coverage 产物抽取规范化审计度量。"""
+    """覆盖审计 → 质量门禁指标（付费前预检与付费后门禁同口径）。
+
+    只输出结构化指标，不带 uncovered 正文样本（Trace 不落未覆盖正文）。
+    """
     if not isinstance(coverage, dict):
         return {
-            "coverage_audit_error": "missing_coverage_result",
-            "coverage_ratio": 0.0,
-            "coverage_leaf_ratio": 0.0,
+            "coverage_sampled": False,
+            "coverage_leaf_total": 0,
+            "coverage_audited_leaf_count": 0,
             "coverage_uncovered_count": 1,
+            "coverage_audit_error": True,
             "coverage_issue": "coverage_audit_missing",
         }
-    err = str(coverage.get("error") or "")
-    uncovered = list(coverage.get("uncovered_nodes") or [])
-    ratio = float(coverage.get("coverage_ratio") or 0.0)
-    leaf_ratio = float(coverage.get("leaf_coverage_ratio") or 0.0)
+    coverage_error = bool(
+        coverage.get("error") or not _COVERAGE_AUDIT_FIELDS.issubset(coverage)
+    )
+    try:
+        leaf_total = int(coverage.get("leaf_total") or 0)
+        audited_count = int(coverage.get("audited_leaf_count") or 0)
+        uncovered_count = int(coverage.get("uncovered_count") or 0)
+        if (
+            leaf_total < 0
+            or audited_count < 0
+            or uncovered_count < 0
+            or audited_count > leaf_total
+            or uncovered_count > audited_count
+            or (audited_count < leaf_total and coverage.get("sampled") is not True)
+            or not isinstance(coverage.get("sampled"), bool)
+        ):
+            coverage_error = True
+    except (TypeError, ValueError):
+        leaf_total = audited_count = uncovered_count = 0
+        coverage_error = True
     return {
-        "coverage_audit_error": err,
-        "coverage_ratio": ratio,
-        "coverage_leaf_ratio": leaf_ratio,
-        "coverage_uncovered_count": len(uncovered),
+        "coverage_sampled": bool(coverage.get("sampled")),
+        "coverage_leaf_total": leaf_total,
+        "coverage_audited_leaf_count": audited_count,
+        "coverage_uncovered_count": uncovered_count,
+        "coverage_audit_error": coverage_error,
         "coverage_issue": (
-            "coverage_audit_failed"
-            if err
-            else "coverage_gap"
-            if uncovered
+            "coverage_audit_failed" if coverage_error
+            else "coverage_gap" if uncovered_count > 0
             else ""
         ),
     }
