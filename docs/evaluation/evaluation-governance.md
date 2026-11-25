@@ -6,7 +6,11 @@
 
 管理端的业务题集导入、知识库关联、格式与执行限制见 [业务题集管理](dataset-management.md)。内置 Suite 与上传资产各有明确来源，历史结果固定记录实际执行版本。
 
-- **模块清单**：`backend/evaluation/models.py` 的 `ModuleKind / MODULE_KINDS` 为统一评测框架的模块源；CLI/前端不能各复制列表。当前包含 `planner, rag, cs, sql, e2e, travel, travel-provider`（2026-11-01 收编重构：`travel-commerce` / `travel-booking` 探针随两域图壳退役）。记忆、Tool/Router、模型供应商及其它专项可有独立评测脚本，**不能假称都已接入 ModuleKind**。
+- **模块清单**：`backend/evaluation/models.py` 的 `ModuleKind / MODULE_KINDS` 为统一评测框架的模块源；CLI/前端不能各复制列表。当前包含 `planner, rag, cs, sql, e2e, travel, travel-provider`（2026-11-01 收编重构：`travel-commerce` / `travel-booking` 探针随两域图壳退役）。
+- **评测中心重构与按域导航（#536, #538, #551 演进）**：管理端评测中心已按操作流程重构为统一工作台，按业务域（RAG、SQL、客服、旅游）组织发起、配置与记录查看；提供发布评测运行对比抽屉（#540）与 Bad Case 深度诊断抽屉，聚合发布评测与 CLI 生产对比台账。
+- **RAG 五维黄金指标与 Ragas 深度套件（#551）**：RAG 评测已升级为五维黄金量化体系（忠实度 Faithfulness、答案相关性 Answer Relevance、上下文精度 Context Precision、上下文召回率 Context Recall、幻觉率 Hallucination Rate）；支持可选的深度 Ragas 评测套件，配合 **36 份评测基准语料中心（Controlled Corpus）** 建立不可漂移的质量基准线。
+- **门禁 Veto 一票否决机制（#542）**：在发布评测中建立 Veto 一票否决门禁。凡触碰提示注入防线、SQL 越权尝试、敏感 PII 泄露或核心事实无依据编造等 P0 级别红线，直接触发 Veto 判为 `FAIL`，严禁通过综合平均分稀释或抵消。
+- **Golden 标注数据面（迁移 153 `evaluation_v2.eval_case_golden`）**：建立逐题标杆标记机制，治理标记与用例内容修订彻底分离，采用 append-only 留痕并受租户 RLS 保护。
 - **数据集**：`backend/evaluation/datasets/<module>/` 常以 `cases.jsonl` 组织，具有版本治理的模块另提供 `manifest.json` 和可选的 `suites/<selection>.json`；使用 `backend/evaluation/dataset/loader.py` 和 `fixture_catalog.py`，不可随便复制一个新 loader。`travel-provider` 已有 `manifest.json`，但原先未声明 `content_hash`，loader 会兼容跳过该题集的内容锁定；本变更补齐 hash 并增加守卫测试后，`cases.jsonl` 内容漂移会 fail-fast。历史 deprecated 文件不可进入新运行基线。
 - **Runner**：`backend/evaluation/runners/`、`runners_config.py`；CLI `python -m backend.evaluation.cli`，实际选项先 `--help` 核对。离线评测、真实 Provider 探针和浏览器/API 端到端是不同覆盖层。
 - **发布裁决**：`backend/evaluation/release_gate.py` 已区分 `PASS / FAIL / INVALID`。基础设施坏了、凭据缺失、没有有效数据属于 `INVALID`，不能当作“模型质量差”；必要指标缺失又不能以 0 条通过冒充 `PASS`。

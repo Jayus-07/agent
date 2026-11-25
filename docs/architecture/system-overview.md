@@ -16,7 +16,11 @@
 
 APISIX 是外部请求入口。身份头由网关验证并注入，后端只接受已验证的服务端身份上下文；不能信任客户端自带的用户或租户标识。网关身份协议见 [identity-header-protocol.md](../contracts/identity-header-protocol.md)。
 
-请求体上限分两层：APISIX `nginx_config.http.client_max_body_size` 全局 64 MiB，`automations-webhook` 路由用 `client-control` 单独收紧到 1 MiB；后端 `middleware/body_limit.py` 在 endpoint 读取前按 Content-Length 再拦一次（webhook 1 MiB、RAG 上传为 `RAG_MAX_FILE_SIZE` 加 multipart 余量、其余 8 MiB），BFF 在读取 body 前按 `BFF_MAX_BODY_BYTES`（默认 64 MiB）预检。RAG 文件上限不能高于入口传输上限；提高到当前 64 MiB 以上前，必须同步调整 APISIX 和管理端 BFF。chunked 请求没有 Content-Length，源内无法预检，依赖 APISIX 按实际收包字节计数。
+请求体上限分两层：APISIX `nginx_config.http.client_max_body_size` 全局 64 MiB，`automations-webhook` 路由用 `client-control` 单独收紧到 1 MiB；后端 `backend/app/api/middleware/body_limit.py` 在 endpoint 读取前按 Content-Length 再拦一次（webhook 1 MiB、RAG 上传为 `RAG_MAX_FILE_SIZE` 加 multipart 余量、其余 8 MiB），BFF 在读取 body 前按 `BFF_MAX_BODY_BYTES`（默认 64 MiB）预检。RAG 文件上限不能高于入口传输上限；提高到当前 64 MiB 以上前，必须同步调整 APISIX 和管理端 BFF。chunked 请求没有 Content-Length，源内无法预检，依赖 APISIX 按实际收包字节计数。
+
+网关与后端纵深防御边界补充：
+- `apisix/apisix.yaml` 对公开认证/注册/验证码路由（`/api/auth/*`、`/api/sys/users/register`、`/api/sys/users/captcha`）无条件注入 `X-Tenant-Id: "default"`；`/ws/cs/*`（ticket 鉴权）与 `/api/report-files/*`（capability URL）豁免 `gateway-auth`。
+- FastAPI 侧叠加 `api_key_middleware`、Bearer JWT Redis 会话闸（`_session_guard`）以及 `GATEWAY_TRUST_SECRET`（`X-Gateway-Trust` 常量时间校验，防止绕过网关直连 8000 端口伪造身份头）。
 
 外部自动化回调（`/webhooks/automations/*`）不携带用户身份：APISIX 该路由不挂 gateway-auth，应用层用**每个自动化独立的 HMAC 密钥**验签并校验路径中的租户绑定；平台 API Key 不是该通道的凭据，也不由认证中间件校验。密钥由管理端按自动化配置，分发方式属部署决策。
 

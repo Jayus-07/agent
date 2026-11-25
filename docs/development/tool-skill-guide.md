@@ -76,12 +76,14 @@
   G4）、travel 域 `backend/app/api/routes/travel_inventory.py`（静态清单 +
   降级标注，G5）；管理端 `/capability-inventory` 页消费。
 
-## Tool 与 Skill 输出契约
+## Tool 与 Skill 输出契约及大结果落盘解耦
 
 每个 Skill 都要显式声明 `text` 或 `structured` 输出类型，并与其实际 Tool 结果保持一致：
 
 - `text` 用于 Markdown/纯文本结果，直接作为模型可读内容传递，不包装成 JSON。
 - `structured` 用于程序消费的 JSON 结果。成功封套为 `{"status":"success","data":...}`，失败封套为 `{"status":"failed","error":...}`。
+- **大结果受控落盘解耦（决策 #25，迁移 122 `ai.task_result_refs`）**：在多步复杂任务或长时间后台作业中，Skill 输出在 `BaseSkill` 边界序列化后若超过阈值（默认 >8KB），整包 Payload 自动落盘至 `ai.task_result_refs` 表，`step_results` 与 LLM 上下文中仅保留轻量引用对象（`ref_id + 摘要 + 行数 + schema 概要`）；真实数据仅在下游步骤参数注入等受控解引用点按租户校验取出，过期由 `cleanup_expired()` 兜底清理，彻底防止大体积 JSON 打爆大模型上下文或 Celery 状态。
+- **工具语义契约与发现治理（迁移 118–121）**：系统已将工具语义契约（`tool_semantic_contracts`）、动态发现策略（`tool_discovery_policies`）、失败分析归因（`tool_failure_analyses`）以及 MCP 实例探活与健康监控（`mcp_health_monitors`）全量纳入数据库持久化治理，支持在出网执行前对写操作进行强一致复验拦截。
 - Skill/Workflow 边界负责解包和失败判定。成功只向 Reporter 传业务数据；失败必须保留失败语义，不能作为成功内容展示。
 
 封套解析统一使用 `backend/shared/tool_envelope.py`；Skill 与 Workflow 的边界分别见 `backend/skills/base.py`、`backend/orchestration/workflow/skill_adapter.py`。契约守卫见 `backend/tests/skills/test_output_type_declarations.py` 和 `backend/tests/skills/test_tool_contract_boundary.py`。
