@@ -52,6 +52,25 @@ export default function DomainOverviewBar({ domain, onSelectDomain }: { domain: 
     queryKey: ['admin', 'evaluation-domain-overview'],
     enabled: allowed,
     queryFn: async () => {
+      try {
+        const unified = await evaluationService.getDomainOverview()
+        if (unified && Object.keys(unified).length > 0) {
+          const latest = {} as Record<EvalDomain, DomainLatest | undefined>
+          for (const item of EVAL_DOMAINS) {
+            const entry = unified[item.key]
+            if (entry) {
+              latest[item.key] = {
+                passRate: asNumber(entry.pass_rate),
+                time: entry.time || null,
+                running: Boolean(entry.running),
+              }
+            }
+          }
+          return latest
+        }
+      } catch {
+        // 服务端端点不可达时软降级为既有多路前端聚合
+      }
       const [releases, ledgerRuns, v2Runs] = await Promise.all([
         promptsService.listAllReleases(OVERVIEW_LIMIT).catch(() => []),
         evaluationService.listRuns(OVERVIEW_LIMIT).catch(() => []),
