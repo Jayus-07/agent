@@ -242,6 +242,8 @@ jobs:
             backend/tests/workers/test_cs_dispatcher.py \
             backend/tests/api/test_cs_tickets_api.py \
             backend/tests/api/test_cs_admin_api.py \
+            backend/tests/api/test_cs_pending_api.py \
+            backend/tests/api/test_cs_refund_review_api.py::test_approved_sandbox_case_has_no_wallet_refund_claim \
             backend/tests/customer_service/test_cs_faq_pg.py \
             backend/tests/customer_service/test_points_flow.py \
             backend/tests/customer_service/test_coupon_flow.py \
