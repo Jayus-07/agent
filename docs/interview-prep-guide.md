@@ -111,6 +111,24 @@
   - **向下消费**：系统作为 MCP Client，消费高德地图、天气等外部 MCP Server 工具（配置级接入，快照 15s 刷新，写操作强一致复验）；
   - **向上暴露**：自研 `mcp_servers/protocol_app.py` 实现了平台自身的 **MCP Server**，通过 `schema_adapter.py` 将系统内部的 RAG、SQL、知识检索等 Tool 自动转译为标准 MCP 协议，可直接接入外部 Cursor、Claude Desktop 等第三方开发生态。
 
+### 卡片 12：RAG 工业级 Parent-Child（父子块层级切分与回溯召回）
+- **核心痛点**：传统固定切分要么太小（缺乏上下文，模型答非所问），要么太大（向量相似度被语义稀释，检索不准）。
+- **两级解耦架构（`backend/rag/preprocessing/chunking.py`）**：
+  - **Leaf Chunk（200 tokens）**：小粒度、高语义密度，负责在 PGVector 和 GIN 倒排索引中做精准向量/关键词匹配；元数据打上所属 `parent_chunk_id`；
+  - **Parent Chunk（800 tokens）**：大粒度，覆盖完整 Section 业务章节或跨叶子滑动分组；无结构文档自动构造 Virtual Parent，杜绝孤儿块。
+- **检索端回溯与截断保护（`backend/rag/retrieval/retrievers.py`）**：
+  - **`attach_parent_context`**：检索命中的 Leaf 提取其 `parent_chunk_id`，批量回溯获取对应的大 Parent 块拼入上下文送给 LLM；
+  - **`_truncate_leaves_keep_parents` 截断保护**：Top-K 截断时仅截断 Leaf 数量，Parent 块作为上下文载体**绝不占用 $k$ 的名额**（解决传统实现把回溯出的 Parent 误截断的死穴）；
+  - **`attach_referenced_context` 表格协同**：同文档 Leaf 引用的 Markdown 费用表/规格表（`references=[{"table_id": "...", "relation": "refers_to"}]`）自动关联拉取，防止解读条款时缺失数据表。
+
+### 卡片 13：Agentic RAG（Self-Correction 自反思重试与动态改写闭环）
+- **核心痛点**：传统 RAG 是单向线性流水线（检索 $\rightarrow$ 失败即死），一旦初次检索没命准就直接幻觉或拒答。
+- **反思自救回路（`backend/rag/chain.py::_try_self_correct`）**：
+  - **LLM 自报协议（Gate 3）**：Prompt 约束模型在输出头部附带隐藏元数据注释 `<!--META{"can_answer": false, "reason": "no_evidence"}-->`；
+  - **区分“真没有”与“没找对”**：模型自报无法回答时，`SelfCorrectionStrategy` 并不直接放弃，而是结合原问题与拒答根因调用 `try_rewrite` 动态生成改写 Query，触发二次自救检索；
+  - **二次生成双重安全门禁**：二次生成的答案依然强制通过程序化 `ClaimVerifier` 核验数字/日期/金额，绝不允许自纠错成为绕过安全防护的后门；
+  - **严格步数熔断（`can_retry()`）**：受 `max_retries`（默认 1~2 次）硬限制，重试均在 OpenTelemetry 中独立记录 `SelfCorrection` Span；重试仍不达标立即收敛至统一拒答路径 `_reject`，彻底杜绝死循环与延迟失控。
+
 ---
 
 ## 四、 高频追问“防翻车”话术
@@ -123,9 +141,18 @@
      - **L4** 在用量超 80% 时做零 LLM 的可逆折叠，滞回压到 65% 安全区；
      - **L5** 在 90% 触发单飞增量摘要，并跑 **40 条关键受保护事实（禁令、日期、金额）确定性补丁**；如果全量压缩还超限，直接 **Fail-closed 拦截**报错，绝不超长硬发。
      这样既保证关键约束不丢，又彻底根治了死循环烧钱的问题。”
-2. **Q：为什么把原本的选品漏斗下线了？**
+2. **Q：RAG 中你们的分块策略是怎么定的？怎么解决长文档切分后的上下文丢失？**
+   - **答**：“我们采用了 **Parent-Child 两级分块与回溯机制**：
+     - 切块阶段拆分为 **200 tokens 的 Leaf Chunk** 和 **800 tokens 的 Parent Chunk**。Leaf Chunk 负责做高精度的向量与关键词检索；Parent Chunk 覆盖完整章节并挂载 `parent_chunk_id`；
+     - 检索召回时，命中 Leaf 后调用 `attach_parent_context` 回溯拉取大 Parent 块喂给大模型；
+     - 这里我们踩过一个大坑：如果直接做 `docs[:k]` 截断，会把刚回溯出来的 Parent 块截掉；我们在代码中实现了 `_truncate_leaves_keep_parents`，Parent 块作为上下文载体不占 $k$ 的名额，彻底保证了模型能读到完整的业务条款。”
+3. **Q：你们的 RAG 是传统 Pipeline 还是 Agentic RAG？初次检索效果不好怎么处理？**
+   - **答**：“我们是具备 **动态反思自纠错（Self-Correction Loop）的 Agentic RAG**：
+     - 当 LLM 自报证据不足（`no_evidence`）或置信度低于阈值时，系统不直接向用户抛出拒答，而是调用 `SelfCorrectionStrategy` 动态改写 Query 触发二次检索；
+     - 为了杜绝死循环和成本失控，我们设置了 `max_retries=1~2` 硬熔断，并且二次救活的答案依然必须经过程序化 `ClaimVerifier` 逐字核验数字和日期；一旦重试仍失败，优雅降级为统一拒答，P99 延迟始终锁定在安全预算内。”
+4. **Q：为什么把原本的选品漏斗下线了？**
    - **答**：“早期确实做过选品漏斗和竞品监控的探索，但随着平台往生产级演进，我发现业务战线拉得太长会稀释稳定性。后来我做了架构收敛（#484），把选品漏斗下线，集中精力把 **RAG（GIN 倒排+发布 CAS）、NL2SQL（AST 参数化安全+延迟优化）、智能客服（派单状态机）和旅游 V2（乐观锁+中断恢复）** 这四块真正打穿到生产可用。”
-3. **Q：这个项目里你用 AI 辅助写了多少？遇到过什么最难调的坑？**
+5. **Q：这个项目里你用 AI 辅助写了多少？遇到过什么最难调的坑？**
    - **答**：“我把 AI 当成高频编码搭档，重复性的前端页面、CRUD 和测试模板让 AI 生成提效；但**架构边界、状态机和并发锁序必须自己把控**。比如之前踩过两个很深的坑：一个是单机 BM25 pickle 在 4C8G 容器里并发发布时抢锁甚至 OOM，最后下决心重构成 PG 原生 `tsvector + GIN` 行级增量索引；另一个是思考型模型做 NL2SQL 路由和生成时动辄十几秒，排查 Trace 后发现是模型默认开启了隐式 thinking，显式关闭后直接压到了 2–3 秒。”
-4. **Q：如果记不清某个具体文件里的参数名怎么办？**
+6. **Q：如果记不清某个具体文件里的参数名怎么办？**
    - **答**：“具体配置常量我都收口在 `backend/config/` 和管理端 `sys_config` 热配置表里了，手头一时记不清精确的字段名，但它的**机制和边界**是……（直接切到上面卡片的架构原理）。”
