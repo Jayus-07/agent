@@ -143,7 +143,11 @@ class Scenario:
             self.calls.append("lock_agent")
             return self.target_agent
 
+        async def count_other_assignments(*_a, **_k):
+            return self.target_load
+
         self.target_agent = None
+        self.target_load = 0
         monkeypatch.setattr(repository, "find_handoff_conversation_id", find_conversation_id)
         monkeypatch.setattr(repository, "lock_conversation", lock_conversation)
         monkeypatch.setattr(repository, "lock_handoff_by_id", lock_handoff)
@@ -151,7 +155,10 @@ class Scenario:
             repository, "lock_active_assignments_for_handoff", lock_assignments
         )
         monkeypatch.setattr(repository, "list_my_handoffs", list_my)
-        monkeypatch.setattr(repository, "lock_least_loaded_agent", lock_agent)
+        monkeypatch.setattr(repository, "find_agent_for_update", lock_agent)
+        monkeypatch.setattr(
+            repository, "count_other_active_assignments", count_other_assignments,
+        )
 
     def outbox_events(self) -> list[CSEvent]:
         return [o for o in self.session.added if isinstance(o, CSEvent)]
@@ -360,7 +367,12 @@ async def test_reassign_without_target_resets_retry_budget(
 
 
 async def test_reassign_to_target_issues_directed_offer(scenario: Scenario) -> None:
-    scenario.target_agent = _assignment("agent-2")  # 任意行，仅表示可锁到
+    from backend.customer_service.models.agent import CSAgent
+
+    scenario.target_agent = CSAgent(
+        enabled=True, available=True, accepting=True, status="online",
+        max_conversations=10,
+    )
     result = await offers.reassign_handoff(
         scenario.session,
         tenant_id=TENANT,
@@ -393,15 +405,21 @@ async def test_reassign_to_target_issues_directed_offer(scenario: Scenario) -> N
     assert events[1].target_agent_id == "agent-2"
 
 
-async def test_reassign_to_offline_target_is_conflict(
-    scenario: Scenario, monkeypatch
+@pytest.mark.parametrize(("status", "load", "message"), [
+    ("offline", 0, "当前不可接单"),
+    ("online", 10, "已达到同时接单上限"),
+])
+async def test_reassign_to_ineligible_target_is_conflict(
+    scenario: Scenario, status: str, load: int, message: str,
 ) -> None:
-    async def no_agent(*_a, **_k):
-        return None
+    from backend.customer_service.models.agent import CSAgent
 
-    monkeypatch.setattr(repository, "lock_least_loaded_agent", no_agent)
-
-    with pytest.raises(offers.ReassignConflict):
+    scenario.target_agent = CSAgent(
+        enabled=True, available=True, accepting=True, status=status,
+        max_conversations=10,
+    )
+    scenario.target_load = load
+    with pytest.raises(offers.ReassignConflict, match=message):
         await offers.reassign_handoff(
             scenario.session,
             tenant_id=TENANT,

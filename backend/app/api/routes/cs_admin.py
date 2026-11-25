@@ -720,6 +720,7 @@ class ConversationDetail(BaseModel):
     channel: str
     summary: str | None = None
     context_summary: str | None = None
+    handoff_id: str | None = None
     trace_count: int = 0
     last_trace_id: str | None = None
     created_at: str
@@ -2439,6 +2440,7 @@ async def _async_get_conversation(conversation_id: str, run_sync):
     from sqlalchemy import select
 
     from backend.customer_service.models.conversation import CSConversation
+    from backend.customer_service.models.handoff import CSHandoff
     from backend.customer_service.models.message import CSMessage
     from backend.memory.database import AsyncSessionLocal
 
@@ -2462,6 +2464,14 @@ async def _async_get_conversation(conversation_id: str, run_sync):
         )
         messages = list(msg_result.scalars().all())
 
+        handoff_id = await db.scalar(
+            select(CSHandoff.handoff_id).where(
+                CSHandoff.tenant_id == conv.tenant_id,
+                CSHandoff.conversation_id == conv.conversation_id,
+                CSHandoff.handoff_state.in_(("agent_offered", "human_active")),
+            ).order_by(CSHandoff.id.desc()).limit(1)
+        )
+
         return ConversationDetail(
             conversation_id=conv.conversation_id,
             user_id=conv.user_id,
@@ -2471,6 +2481,7 @@ async def _async_get_conversation(conversation_id: str, run_sync):
             channel=conv.channel,
             summary=conv.summary,
             context_summary=conv.context_summary,
+            handoff_id=handoff_id,
             trace_count=conv.trace_count or 0,
             last_trace_id=conv.last_trace_id,
             created_at=conv.created_at.isoformat() if conv.created_at else "",

@@ -9,6 +9,7 @@ DB 永久分叉（audit-report §P0-5）。
 from __future__ import annotations
 
 import threading
+from datetime import datetime
 
 from backend.customer_service.confirmation_store import (
     StoreWriteError,
@@ -97,6 +98,30 @@ class HandoffStore:
         if self._db_clear(user_id, session_id):
             with self._lock:
                 self._data.pop((user_id, session_id), None)
+
+    def close_overdue_waiting(self, active: dict, *, now: datetime) -> bool:
+        from backend.customer_service._db_loop import run_sync
+        from backend.customer_service.handoff.dispatch import reaper
+        from backend.memory.database import AsyncSessionLocal
+
+        async def close() -> bool:
+            async with AsyncSessionLocal() as db:
+                async with db.begin():
+                    handoff = await reaper.close_overdue_waiting_handoff(
+                        db, tenant_id=active["tenant_id"],
+                        handoff_id=active["handoff_id"],
+                        conversation_id=active["_conversation_id"], now=now,
+                    )
+                reaper.start_committed_timeout_summaries(db)
+            return handoff is not None
+
+        operation = close()
+        try:
+            return run_sync(operation)
+        except Exception as exc:
+            operation.close()
+            _handoff_db_write_failed("close_overdue_waiting", exc)
+            return False
 
     def invalidate(self, user_id: str, session_id: str) -> None:
         """只失效 L1 内存缓存，不动 DB（坐席侧已直接改库时调用）。"""
@@ -282,7 +307,11 @@ def _handoff_to_dict(row) -> dict:
         "trigger_reason": row.trigger_reason,
         "ticket_id": row.ticket_id,
         "handoff_id": row.handoff_id,
+        "tenant_id": row.tenant_id,
         "_conversation_id": row.conversation_id,
+        "total_deadline_at": (
+            row.total_deadline_at.isoformat() if row.total_deadline_at else None
+        ),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

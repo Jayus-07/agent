@@ -10,7 +10,7 @@ export interface Cs2NavItem {
 export const CS2_NAV_ITEMS: Cs2NavItem[] = [
   { href: "/cs/workspace", label: "工作台" },
   { href: "/cs/conversations", label: "会话管理" },
-  { href: "/cs/tickets", label: "工单管理" },
+  { href: "/cs/tickets", label: "工单管理", supervisorOnly: true },
   { href: "/cs/refunds", label: "退款审核", supervisorOnly: true },
   { href: "/cs/qa", label: "质检中心" },
   { href: "/cs/dashboard", label: "数据看板", supervisorOnly: true },

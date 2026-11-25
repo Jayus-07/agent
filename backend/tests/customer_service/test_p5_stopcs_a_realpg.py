@@ -139,6 +139,74 @@ class TestDualTenantRealPG:
             _cleanup(env, (_TENANT_A, _TENANT_B))
 
 
+async def test_directed_offer_ignores_closed_assignment_but_enforces_capacity():
+    from backend.customer_service.handoff.dispatch import offers
+    from backend.customer_service.models.agent import CSAgent
+    from backend.customer_service.models.assignment import CSAssignment
+    from backend.customer_service.models.conversation import CSConversation
+    from backend.customer_service.models.handoff import CSHandoff
+    from backend.memory.database import AsyncSessionLocal
+
+    prefix = f"stpa-offer-{uuid.uuid4().hex[:8]}"
+    tenant_id = prefix
+    target = f"{prefix}-target"
+    supervisor = f"{prefix}-supervisor"
+
+    async with AsyncSessionLocal() as db:
+        db.add_all([
+            CSAgent(
+                tenant_id=tenant_id, agent_id=target, display_name="验收坐席",
+                max_conversations=1,
+            ),
+            CSAgent(
+                tenant_id=tenant_id, agent_id=supervisor, display_name="验收主管",
+                role="supervisor",
+            ),
+        ])
+        handoff_ids = []
+        for index, state in enumerate(("closed", "human_active", "human_active")):
+            conversation_id = f"{prefix}-conv-{index}"
+            handoff_id = f"{prefix}-handoff-{index}"
+            handoff_ids.append(handoff_id)
+            db.add(CSConversation(
+                tenant_id=tenant_id, conversation_id=conversation_id,
+                user_id="test-user", handling_mode="ai" if index == 0 else state,
+            ))
+            await db.flush()
+            db.add(CSHandoff(
+                tenant_id=tenant_id, handoff_id=handoff_id,
+                conversation_id=conversation_id, user_id="test-user",
+                handoff_state=state, trigger_type="manual", priority=50,
+                assigned_agent_id=target if index == 0 else supervisor,
+            ))
+            await db.flush()
+            db.add(CSAssignment(
+                tenant_id=tenant_id, handoff_id=handoff_id,
+                conversation_id=conversation_id, state="accepted",
+                agent_id=target if index == 0 else supervisor,
+            ))
+
+        result = await offers.reassign_handoff(
+            db, tenant_id=tenant_id, supervisor_agent_id=supervisor,
+            handoff_id=handoff_ids[1], target_agent_id=target,
+        )
+        assert result.handoff_state == "agent_offered"
+        assert result.agent_id == target
+
+        with pytest.raises(offers.ReassignConflict, match="已达到同时接单上限"):
+            await offers.reassign_handoff(
+                db, tenant_id=tenant_id, supervisor_agent_id=supervisor,
+                handoff_id=handoff_ids[2], target_agent_id=target,
+            )
+
+        accepted = await offers.accept_offer(
+            db, tenant_id=tenant_id, agent_id=target, handoff_id=handoff_ids[1],
+            offer_version=result.assignment_version,
+        )
+        assert accepted.handoff_state == "human_active"
+        await db.rollback()
+
+
 class TestLifecycleRealPG:
     """P0-6：lifecycle 唯一入口同事务维护 handoffs + handling_mode。"""
 

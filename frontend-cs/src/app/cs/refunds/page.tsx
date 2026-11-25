@@ -46,6 +46,7 @@ function fmtAmount(amount: string | number | null | undefined): string {
 export default function Cs2RefundsPage() {
   const [status, setStatus] = useState('')
   const [items, setItems] = useState<RefundQueueItem[]>([])
+  const [mode, setMode] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -59,6 +60,7 @@ export default function Cs2RefundsPage() {
     try {
       const data = await listRefundQueue(statusFilter || undefined)
       setItems(data.items ?? [])
+      setMode(data.mode)
     } catch {
       setError('审核队列加载失败，请重试')
     } finally {
@@ -213,7 +215,9 @@ export default function Cs2RefundsPage() {
                   </div>
                 </dl>
                 <p className="mt-2 rounded-lg bg-amber-50 p-2 text-[11px] text-amber-700">
-                  退款编号不代表已退款；审核通过后由订单系统退回用户钱包。
+                  {mode === 'sandbox'
+                    ? '当前为沙箱审核。审核操作只更新申请记录，用户钱包余额不变。'
+                    : '退款编号不代表已退款。审核通过后由订单系统退回用户钱包。'}
                 </p>
               </div>
 
@@ -253,7 +257,7 @@ export default function Cs2RefundsPage() {
                       disabled={!opinion.trim() || submitting}
                       onClick={() => void submit('approved')}
                     >
-                      {submitting ? '提交中…' : '通过并退款'}
+                      {submitting ? '提交中…' : mode === 'sandbox' ? '通过审核' : '通过并退款'}
                     </button>
                     <button
                       type="button"
