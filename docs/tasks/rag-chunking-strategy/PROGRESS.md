@@ -1,9 +1,11 @@
 # 任务进度：RAG Chunking 核心切分模块策略化重构
 
 ## 状态
-- 当前阶段: 本地验证完成，准备创建 PR 并监控 CI
+- 当前阶段: PR CI 门禁全绿，等待用户确认合并
 - 分支: `refactor/rag-chunking-strategy`
 - 工作树: `D:/Program Files/workplace/agent-rag-chunking`
+- PR: [#570](https://github.com/Jayus-07/agent/pull/570)
+- Commit SHA: `e463e25`
 
 ## 进展记录
 - [x] 任务初始化，检出工作树并拉取 main 最新提交（`bfcb35a`）
@@ -22,6 +24,10 @@
   - Batch 2 集成单测：85 passed in 107.19s
   - Batch 3 企业级单测：23 passed in 35.35s
   - Batch 4 质量门禁与架构守卫：18 passed + 50 passed + 4 passed
-- [ ] 提交代码并推送任务分支
-- [ ] 创建 PR 并观察 CI 状态
+- [x] 提交代码并推送任务分支至 `origin/refactor/rag-chunking-strategy` (Commit: `e463e25`)
+- [x] 创建 Pull Request #570 并监控 CI 状态：
+  - `scan`: pass (26s)
+  - `Detect RAG changes`: pass (8s)
+  - `RAG Smoke preflight (offline, no paid API)`: pass (5m20s)
+  - `RAG Smoke (8 cases)`: pass (2s)
 - [ ] 申请用户确认后合并至 main 并执行工作树安全收尾
