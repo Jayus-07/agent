@@ -93,6 +93,9 @@ def test_postgres_quota_store_inheritance_and_methods():
     assert issubclass(PostgresQuotaStore, QuotaReconciliationStoreMixin)
 
     store = PostgresQuotaStore(connection_factory=MagicMock())
+    assert hasattr(store, "_RESOLUTION_ACTIONS"), "PostgresQuotaStore 缺失 _RESOLUTION_ACTIONS 类属性"
+    assert "settled_actual" in store._RESOLUTION_ACTIONS
+
     expected_methods = [
         "get_policy",
         "get_budget_status",

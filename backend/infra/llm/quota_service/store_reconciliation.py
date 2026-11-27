@@ -24,6 +24,10 @@ from .dynamic import (
 class QuotaReconciliationStoreMixin:
     """PG 待对账、月度对账与回收核销混入。"""
 
+    _RESOLUTION_ACTIONS = frozenset(
+        {"settled_actual", "released", "written_off", "archived"}
+    )
+
     @staticmethod
     def _test_marker_sql_params() -> dict[str, Any]:
         """测试/评测数据的 SQL 匹配参数（第二批隔离：租户/用户前缀 + 请求前缀）。"""
