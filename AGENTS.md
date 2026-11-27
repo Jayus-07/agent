@@ -54,6 +54,8 @@
 | 任务 | 现行文档 |
 | --- | --- |
 | 网关、部署、异步运行 | docs/architecture/system-overview.md |
+| 统一大模型网关模块化架构 | docs/architecture/adr/0014-modular-llm-gateway-architecture.md |
+| 策略驱动的模块化文档切分体系 | docs/architecture/adr/0015-modular-chunking-strategy-architecture.md |
 | Router、LangGraph、Runtime、SSE、Checkpoint | docs/architecture/ai-runtime.md |
 | HNSW/RRF底层数学、AST防护与横向选型矩阵 | docs/architecture/theory-and-tradeoffs.md |
 | /agent 对话优先目标架构与跨产品隔离 | docs/architecture/adr/0002-main-agent-conversation-first.md（待施工） |

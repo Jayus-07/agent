@@ -24,6 +24,9 @@ class TestSelfResolver:
         ("3", 3),
         (" 12 ", 12),
         ("0", 0),
+        ("1850123456789012345", 1850123456789012345),  # 64 位雪花算法 Snowflake ID
+        ("9223372036854775807", 9223372036854775807),  # PG BIGINT 极限值
+        ("9223372036854775808", None),  # 超过 PG BIGINT 极限值
         ("", None),
         ("abc", None),
         ("u-admin", None),
@@ -54,6 +57,16 @@ class TestSelfInjectionOnOrders:
         ctx = make_ctx("self", user_id="3")
         guarded = SQLPolicyGuard().validate_and_rewrite(
             'SELECT order_no FROM "order".orders', ctx)
+        assert isinstance(guarded.params["sql_scope_self_value"], int)
+
+    def test_snowflake_user_id_injects_bigint(self):
+        """self + orders + 64 位雪花算法 Snowflake ID → 正确注入为 64 位 int。"""
+        snowflake_id = "1850123456789012345"
+        ctx = make_ctx("self", user_id=snowflake_id)
+        guarded = SQLPolicyGuard().validate_and_rewrite(
+            'SELECT order_no FROM "order".orders', ctx)
+        assert "customer_id = %(sql_scope_self_value)s" in guarded.executable_sql
+        assert guarded.params == {"sql_scope_self_value": 1850123456789012345}
         assert isinstance(guarded.params["sql_scope_self_value"], int)
 
     def test_non_numeric_user_id_denied(self):

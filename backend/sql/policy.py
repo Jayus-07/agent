@@ -71,13 +71,23 @@ class SQLPolicyError(Exception):
         return _USER_SAFE_TEXT.get(self.code, _USER_SAFE_TEXT[SQL_SCOPE_UNAVAILABLE])
 
 
-def resolve_self_value(user_id: str) -> int | None:
-    """self scope 的身份值解析（demo warehouse 显式兼容映射）。
+# PostgreSQL 整数边界守卫（防止执行期类型溢出并支持 64 位雪花 ID）
+PG_INTEGER_MAX = 2_147_483_647  # 32 位 signed int 上限 (2^31 - 1)
+PG_BIGINT_MAX = 9_223_372_036_854_775_807  # 64 位 signed bigint 上限 (2^63 - 1)
 
-    当前业务仓库 order.orders.customer_id 是 integer，而网关身份
+
+def resolve_self_value(
+    user_id: str | None,
+    *,
+    max_value: int = PG_BIGINT_MAX,
+) -> int | None:
+    """self scope 的身份值解析（兼容 32 位整型及 64 位雪花算法/BigInt ID）。
+
+    当前业务仓库 order.orders.customer_id 是整型列，而网关身份
     Principal.user_id 是 auth 侧字符串 ID。约定：纯数字 user_id 且在
-    PG integer 范围内时显式转为整数 self_value；其余（UUID/用户名/空/
-    超出 integer 范围）一律解析失败 → 调用方 fail-closed 拒绝
+    PostgreSQL 有效整型范围（默认 PG_BIGINT_MAX=9_223_372_036_854_775_807，
+    亦可指定为 PG_INTEGER_MAX）内时显式转为整数 self_value；其余（UUID/用户名/空/
+    超出上限/负数）一律解析失败 → 调用方 fail-closed 拒绝
     （超范围值留到执行期只会变成 PG 类型错误，早拒更干净）。
 
     ⚠️ 这是当前 demo warehouse 的显式兼容映射，
@@ -88,7 +98,7 @@ def resolve_self_value(user_id: str) -> int | None:
     if not s.isdigit():
         return None
     value = int(s)
-    if value > 2_147_483_647:  # PG integer 上限
+    if value < 0 or value > max_value:
         return None
     return value
 

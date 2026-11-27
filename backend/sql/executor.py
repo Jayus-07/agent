@@ -150,8 +150,11 @@ def _get_conn(timeout: float = None):
             broken = bool(getattr(conn, "closed", False))
             try:
                 conn.rollback()
+                if not broken and not conn.closed:
+                    with conn.cursor() as cur:
+                        cur.execute("RESET statement_timeout;")
             except Exception:
-                # rollback 失败 = 连接已坏（查询中途 PG 断开等），不再回流
+                # rollback 或 reset 失败 = 连接已坏（查询中途 PG 断开等），不再回流
                 broken = True
             pool.putconn(conn, close=broken)
 

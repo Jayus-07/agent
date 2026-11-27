@@ -822,9 +822,21 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     import os as _os
     import re as _re
 
+    # 常见技术/日常通用英文词：不作为业务精确标识符（防止普通英文查询误享受最强单路特权加分）
+    _COMMON_NON_ID_WORDS = frozenset({
+        "system", "service", "config", "database", "default", "action",
+        "create", "delete", "update", "select", "insert", "detail", "client",
+        "server", "request", "response", "message", "source", "target",
+        "filter", "status", "result", "vector", "hybrid", "search", "table",
+        "column", "record", "context", "process", "memory", "storage",
+        "network", "gateway", "manager", "handler", "router", "schema",
+        "document", "content", "metadata", "output", "format", "report",
+        "policy", "department", "customer", "product", "analytics", "standard",
+    })
+
     _id_tokens = {
         t.lower() for t in _re.findall(r"[0-9A-Za-z][0-9A-Za-z-]{3,}", query or "")
-        if not t.isalpha() or len(t) >= 6
+        if any(c.isdigit() for c in t) or "-" in t or (len(t) >= 6 and t.lower() not in _COMMON_NON_ID_WORDS)
     }
     _bonus_hits: list[str] = []
     if _id_tokens:

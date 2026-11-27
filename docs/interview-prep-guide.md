@@ -154,7 +154,31 @@
   - 7 种专业策略：`Structure`（层级章节与 Parent-Child）、`Legal`（条款号严格绑定与标题继承）、`QA`（局部问答对原子化绑定）、`Step`（SOP 操作步骤原子块）、`Financial`（数值表格与维度行块）、`Semantic`（句间余弦断崖突变）、`Recursive`（滑动窗口兜底）；
   - **局部内容单元分派（`ContentUnitDispatchStrategy`）**：按 AST 嵌套层级递归拆解局部单元，各自匹配独立最佳策略并统一命名空间；
   - **跨页表格智能拼接（`_merge_cross_page_tables`）**：自动合并分页 PDF/DOCX 的续页表格数据行，保留完整阅读顺序；
-  - **双重覆盖率审计（`audit.py`）**：`cleaning_coverage_audit`（防清洗造假）+ `coverage_audit`（Leaf 覆盖率 $\ge 98\%$ 对账），覆盖缺口触发硬异常阻断发布。
+  - **双重覆盖率审计**：`cleaning_coverage_audit`（`quality_gate.py` 防清洗造假）+ `coverage_audit`（`audit.py` Leaf 覆盖率 $\ge 98\%$ 对账），覆盖缺口触发硬异常阻断发布。
+
+### 卡片 17：统一大模型网关（Modular LLM Gateway）六大子系统与生产高可用容灾
+- **核心痛点**：历史单体 2876 行 `proxy.py` 职责过载，模型调用、计费、流式处理、重试熔断耦合严重，高并发下协程身份串扰且难以单独进行单元测试。
+- **六大职责包架构（PR #573，`backend/infra/llm/gateway/`）**：
+  - `accounting.py`：Token 财务落账、流式用量估算与轮次级用量累加；联动 DB 物理触发器 `trg_budget_resolution_audit_append_only`（迁移 146）实现只追加不可篡改；
+  - `bound_proxy.py`：`_BoundLLMProxy` 外观模式与透明参数绑定；
+  - `budget_guard.py`：五级预算防御（L1 Redis 分布式限流 $\rightarrow$ L2 租户额度预检预占 $\rightarrow$ L3 模型单价等级门禁 $\rightarrow$ L4 上下文预算滑动截断 $\rightarrow$ L5 增量摘要与物理熔断）；
+  - `context.py`：基于 Python `contextvars` 管理 `_thread_local_user_id` 与调用诊断，防止高并发异步身份串扰；
+  - `resilience.py`：瞬态错误识别（`_TRANSIENT_MARKERS`）、指数退避重试、断路器（Circuit Breaker）与优雅降级响应；
+  - `streaming.py`：SSE StreamSink 管理与流式思维链（`reasoning_content`）安全分离。
+
+### 卡片 18：旅游 V2 正式行程并发控制（Trip + Revision CAS 乐观锁）
+- **核心痛点**：多端（手机端、桌面端、后台 AI 优化器）同时编辑长途行程时，全量覆盖写入极易发生并发脏写与变更丢失。
+- **CAS 乐观并发契约（`backend/travel_v2/api/trips.py`）**：
+  - 彻底退役 V1 草稿架构，全量采用 Trip + Revision 链式版本模型；
+  - 结构化操作（`POST /api/travel/v2/trips/{id}/edits`）强制要求 Header 携带 `Idempotency-Key`，Body 携带 `expected_revision`；
+  - 数据库行级锁（`SELECT ... FOR UPDATE`）内执行 CAS 比对：若 `current_revision != expected_revision`，立即抛出 **HTTP 409 Conflict** 拒绝覆盖；成功则原子生成不可变 Revision 记录并自增版本号。
+
+### 卡片 19：11 类客服业务动作（Action）状态机与离线确定性语义裁判
+- **核心痛点**：客服场景下若由大模型自由发挥，容易发生虚构赔偿金额、随意承诺退款时效等严重客诉合规事故。
+- **11 类 Action 状态机闭环**：
+  - B1 咨询、B2 积分、B3 券核销、B4 支付与退款（`098_cs_refund_order_unique.sql` 唯一防重锁）、B5 催办、B6 价保试算（`mall_wallet` 演示钱包）、B7 改址、B8 发票等 11 类业务，严格遵循 `proposed -> confirmed -> executing -> succeeded/failed` 状态机；
+- **离线确定性语义裁判（PR #569，`forbidden_facts`）**：
+  - 绝不单信 LLM 裁判的打分，前置部署确定性红线规则库，扫描回答中的金额超限、时效虚构与政策篡改；命中任何红线执行一票否决。
 
 ---
 
@@ -193,3 +217,9 @@
    - **答**：“我把 AI 当成高频编码搭档，重复性的前端页面、CRUD 和测试模板让 AI 生成提效；但**架构边界、状态机和并发锁序必须自己把控**。比如之前踩过两个很深的坑：一个是单机 BM25 pickle 在 4C8G 容器里并发发布时抢锁甚至 OOM，最后下决心重构成 PG 原生 `tsvector + GIN` 行级增量索引；另一个是思考型模型做 NL2SQL 路由和生成时动辄十几秒，排查 Trace 后发现是模型默认开启了隐式 thinking，显式关闭后直接压到了 2–3 秒。”
 8. **Q：如果记不清某个具体文件里的参数名怎么办？**
    - **答**：“具体配置常量我都收口在 `backend/config/` 和管理端 `sys_config` 热配置表里了，手头一时记不清精确的字段名，但它的**机制和边界**是……（直接切到上面卡片的架构原理）。”
+9. **Q：混合检索中 RRF 是怎么防止“精准专名/发票单号被两路平庸命中的块挤出 Top-K”的？**
+   - **答**：“这是 RRF 算法经典的结构性偏置陷阱：当用户搜发票号或 SKU 时，BM25 能排第 0 名得分 $1/(60+0) \approx 0.0167$，而向量语义漂移排在 100 名开外；但另一篇在向量和全文各排第 10 名的平庸块，累加得分却有 $1/70 + 1/70 \approx 0.0286$，平庸块居然会反超精准命中块！我们在代码中设计了 `_EXACT_TOKEN_BONUS = max(vw, bw, 1.0) / rrf_k` 动态特权加分，一旦识别出包含精准标识符命中，直接注入特权加分，强行压制平庸累加，确保单号命中绝对稳坐 Top-1。”
+10. **Q：为什么在 SQL 语法树注入租户条件时，`sqlglot` 的 `copy=False` 如此致命？**
+    - **答**：“这是 `sqlglot` 非常危险的暗坑：`Select.where(...)` 默认行为是 `copy=True`，也就是它返回的是克隆修改后的 AST 新副本，而原语法树节点根本纹丝不动！如果工程师习惯性写 `sel.where(cond)` 而没有接收返回值，AST 原树上的 WHERE 注入会**静默完全丢失**，生成的 SQL 将在毫无租户过滤的情况下在生产环境全量读取跨租户数据！必须显式传入 `copy=False` 原地修改原节点，这是我们在代码审查时的一票否决红线。”
+11. **Q：生产级大模型调用为什么必须做五级预算门禁？怎么防财务账本被篡改？**
+    - **答**：“大模型绝不能发生‘调用完后才发现欠费超标’的事故。我们构建了 **五级门禁（`budget_guard.py`）**：L1 分布式限流 $\rightarrow$ L2 额度预检预占 $\rightarrow$ L3 模型单价等级门禁 $\rightarrow$ L4 上下文动态滑动截断 $\rightarrow$ L5 增量摘要与物理硬熔断；而在财务记账上，我们采用两阶段预占与结算模型，并在 PostgreSQL 底层植入了物理触发器 `trg_budget_resolution_audit_append_only`（迁移 146），**在数据库层严禁对核销审计行执行任何 UPDATE 或 DELETE**，确保财务审计流水具备绝对不可篡改的法律级效力。”

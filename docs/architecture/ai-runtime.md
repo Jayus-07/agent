@@ -1,90 +1,138 @@
-# AI Runtime
+# AI 运行时、LangGraph 编排与主图状态机
 
-本文说明主图、Domain Graph 接入和跨请求运行契约；节点、路由策略与事件 schema 的最终事实源均为源码。
+本文系统说明平台核心 AI 运行时的架构设计，涵盖 LangGraph 主图拓扑、自适应路由决策链路、工具治理契约、SSE 流式生命周期以及多产品会话隔离机制。
 
-## 主图与路由
+---
 
-主图构建于 backend/orchestration/graph/builder.py。内置节点承担 Router、Tool Selector、Skill Executor、Workflow Executor、Planner、Critique、Supervisor、Reporter 和 General Chat；Skill 节点和 Domain Graph 节点经各自注册表发现，不在 builder 中复制清单。
+## 一、 LangGraph 主图拓扑与执行状态机
 
-主路由由 backend/orchestration/router/engine.py 及其类型/投影模块负责。Router 决定运行目标，执行节点负责调用对应 Runtime；`route_selector` 返回 `"skill_executor"` 时映射到 `tool_selector → skill_executor → reporter` 两段执行，`clarify`、`handoff` 两条分支直连 `reporter`；其余 workflow、plan、general_chat 与 Domain Graph 的分流以当前图边和路由实现为准。
+主图构建于 `backend/orchestration/graph/builder.py`，基于状态机模式严格控制用户请求在各个认知节点之间的流转，杜绝循环死锁与状态串扰。
 
-能力 Fast Path 还须满足分数、top1/top2 分差、LOW 风险、清单白名单及请求权限门禁。其余候选交 Tool Selector 在域内注册候选中消歧；无法确认时转澄清。LLM 仅从动态合法候选中给出选择提示，模型自报分数不参与授权。Trace 保留候选、分数类型、分差、阻断原因、最终归宿和策略版本；缓存键包含会话状态、租户、权限、路由策略版本、`manifest` 指纹、模型角色（`main`/`embedding`）指纹及 `router.llm` Prompt 版本指纹，且明确不缓存降级/澄清结果。
+```mermaid
+graph TD
+    Start([请求入口: __start__]) --> Router[1. Router 意图路由节点<br>engine.py]
+    
+    %% Fast Path 分支
+    Router -- "Fast Path 命中 (高置信/低风险/已授权)" --> SkillDirect[3. Skill Executor 技能执行器]
+    
+    %% 常规两段式工具调用
+    Router -- "需要工具消歧 / 组合工具" --> ToolSelector[2. Tool Selector 工具选择器]
+    ToolSelector --> SkillDirect
+    
+    %% 技能执行后汇聚到报告节点
+    SkillDirect --> Reporter[4. Reporter 聚合回复节点]
+    
+    %% 领域图独立分流
+    Router -- "分流至客服子图" --> DomainCS[客服领域子图<br>customer_service/]
+    Router -- "分流至旅游子图" --> DomainTravel[旅游规划子图<br>travel_v2/]
+    Router -- "分流至智能查数" --> DomainSQL[SQL 查数流水线<br>sql/sql_agent.py]
+    Router -- "分流至 RAG 检索" --> DomainRAG[RAG 知识流水线<br>rag/chain.py]
+    
+    %% 澄清与直答
+    Router -- "意图模糊 / 证据不足" --> Clarify[澄清引导节点<br>clarify]
+    Router -- "闲聊 / 基础问答" --> GeneralChat[通用问答节点<br>general_chat]
+    
+    DomainCS --> End([流程结束: __end__])
+    DomainTravel --> End
+    DomainSQL --> End
+    DomainRAG --> End
+    Clarify --> Reporter
+    GeneralChat --> Reporter
+    Reporter --> End
+```
 
-候选 `CapabilityScore` 同时传递服务端解析得到的 `risk`、`fast_path_enabled`、`permission_ready`，这些字段在引擎组装、JSON往返和V2投影后保留，供 Tool Selector 二次校验。缺失时默认为 UNKNOWN/false/false，不能把分数或候选名称当作权限；实际执行仍由 Tool Governance 复核产品与主体权限。
+### 1. 核心内置节点与职责
+- **`Router`（意图路由器）**：基于用户输入、历史上下文与意图信号，判定分发目标；
+- **`Tool Selector`（工具选择器）**：当有多个候选工具或参数模糊时，在合法注册工具集合内进行语义消歧与参数预填；
+- **`Skill Executor`（技能执行器）**：负责实际调用 Skill Runtime，处理副作用审计、权限再校验与执行结果封装；
+- **`Reporter`（报告节点）**：接收 Skill 执行结果、知识片段或澄清建议，结合系统 Prompt 输出最终面向用户的结构化 Markdown；
+- **`General Chat`（通用问答）**：无外部工具依赖的直答节点，挂载严格的整体执行时限 `GENERAL_CHAT_LLM_DEADLINE=30s`；
+- **`Domain Graph Nodes`（领域子图节点）**：通过 `backend/domains/__init__.py` 与各业务域注册模块动态装载，不在主图代码中硬编码复制业务逻辑。
 
-Capability 映射与治理声明维护于 backend/orchestration/router/capabilities.yaml。明确的“联网查找/搜索”进入 knowledge 粗域，再由细路由在已授权能力中选择 web.search；否定联网不构成联网强信号，也不绕过工具权限。Tool 的选择和执行必须经过现有 Tool Governance；细节见 [tool-skill-guide.md](../development/tool-skill-guide.md)。
+---
 
-## Domain Graph
+## 二、 路由引擎与决策链路（`backend/orchestration/router/engine.py`）
 
-Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，builder 自动从 Domain Registry 建立图节点。新增域还须核对入口预过滤和 Runtime descriptor；不得假设仅注册即可自动接入所有用户入口。
+### 1. 两段式执行（Two-stage Execution）与直连分支
+主路由依据 `route_selector` 的返回结果驱动图边转移：
+- 当返回 `"skill_executor"` 时：严格映射到 `tool_selector → skill_executor → reporter` 两段式流水线；
+- 当返回 `clarify` 或 `handoff`（转人工）时：直连 `reporter` 节点输出引导话术，跳过工具选择；
+- 当返回 `domain_graph`（如客服、旅游、SQL、RAG）时：控制权直接下推给对应的领域独立子图或流水线。
 
-各域拥有自己的状态、检查点策略、执行节点和 Reporter。域图执行失败或降级由域契约处理，不应被主图 Reporter 二次解释成虚假的业务成功。服务依赖按 [domain-service-map.md](domain-service-map.md) 查阅。
+### 2. 能力快速通道（Capability Fast Path）硬门禁
+为降低端到端 RT，系统支持高频工具的 Fast Path 直通调用，但**必须同时满足以下 5 项严苛安全门禁**：
+1. **置信度门槛**：模型或分类器自报得分 $Score \ge 0.85$；
+2. **Top 分差安全余量**：$\Delta(Top1 - Top2) \ge 0.20$，杜绝边界模糊时的冒进调用；
+3. **低风险等级（LOW Risk）**：只有无副作用的只读查询类工具允许 Fast Path；有副作用的写操作一律强制进入二次确认；
+4. **系统白名单锁定**：工具必须显式声明在当前环境的 `fast_path_allowlist` 内；
+5. **主体权限已就绪**：请求上下文通过预检确认已持有执行该工具所需的全部 RBAC 权限点。
+*重要安全原则*：大模型自报的分数仅作为语义倾向提示，绝对不作为授权凭据；候选工具携带的 `risk`、`fast_path_enabled`、`permission_ready` 必须由服务端可信上下文二次核验。
 
-## 公共运行契约
+### 3. 多维缓存指纹（Fingerprint）算法与一致性契约
+为充分发挥大模型厂商的前缀缓存（Prefix Caching）并复用高频决策，Router 实现了严格的多维缓存指纹算法（`get_cache_fingerprint`）：
+- **指纹组成维度**：
+  $$\text{Fingerprint} = \text{Hash}(\text{会话上下文状态} + \text{租户 ID} + \text{权限集合} + \text{路由策略版本} + \text{Manifest 指纹} + \text{模型角色指纹} + \text{Prompt 版本哈希})$$
+- **明确不缓存异常状态**：降级响应（Degraded）、澄清状态（Clarify）以及发生瞬态重试的结果明确禁止入缓存，防止系统将暂时的异常决策持久化。
 
-- LangGraph state、RouteDecision 与兼容投影以 backend/orchestration/ 的现行 schema 为准；新增状态字段需检查状态投影、Checkpoint 与调用方。
-- Checkpoint 的身份键和数据读写必须按用户、租户、会话隔离；只读查询不应覆盖可写工作流状态。主图每次执行使用不透明 `agent-<UUID>` thread_id，避免 session_id 写入 checkpoint 索引；该键不跨轮复用，当前没有按此键恢复中断主图执行的公开路径。
-- 后台 TaskGraphExecutor 恢复时先重新校验当前授权，再从图检查点读取累计回答及步骤结果，并刷新执行权限。图已完成、没有新节点事件时仍应交付已保存结果；检查点缺失或无效时拒绝恢复，不重跑已完成节点。企业助手在Critique形成至少两个业务能力节点的实际计划后，可将累计状态保存到独立任务线程再派发，SSE以`done.task_id`关联后台任务；普通问答和单次长文仍走普通SSE。后台暂停在节点完成并保存检查点后生效，继续沿同一任务执行，不重新发送原问题。任务内嵌工作流仍按其原子节点边界暂停，不宣称已支持任意工具函数内部的细粒度恢复。
-- 运行中任务支持多轮计划修订（决策 #29）：`/plan-revisions` 三端点（draft/apply/list，`backend/app/api/routes/plan_revisions.py`，服务层 `backend/orchestration/discovery/plan_revision.py`）。只允许修订 pending/failed 步骤，修订步骤以新 step_id `{sid}r{v}` 重发；success 步骤不可修改，已完成的外部写入不回滚。apply 仅在任务静止（PAUSED/WAITING_USER/FAILED）时可用，FAILED 走显式 `allow_failed` 通道并标记 `dispatch_type=plan_revision`；并发以 `base_plan_version` 为准，不匹配返回 409；修订计划强制过 `normalize_plan` 与 plan_depth 门禁。
-- general_chat 直答节点挂整体执行时限 `GENERAL_CHAT_LLM_DEADLINE`（默认 30 秒，0=不限时，`backend/config/llm.py`）；超时按既有瞬时错误路径走重试/降级。LLM proxy 对流式调用做 per-attempt 观测；主模型在应用启动时预热（`backend/app/server.py`）。
-- SSE 事件结构与事件顺序以 backend/orchestration/graph/event_schema.py、具体事件生成器和 API 契约为准；新增事件须同步检查后端和消费端。
-- 上下文预算事件的缓冲作用域包含 Product、Tenant、User、命名空间 Session 和 Request。后台记忆裁剪事件只有在完整作用域与当前请求完全一致时才能进入该 SSE；作用域缺失、请求已超时或晚到事件不会转交给后续请求。事件只允许发送约定的结构元数据，不携带问题原文或摘要正文。
-- 主助手与客服分别使用 `/chat/agent/*`、`/chat/customer-service/*` 和 `/memory/agent/*`、`/memory/customer-service/*`。身份由注册路由固定，产品入口要求可信用户与租户；body `user_id`、`domain_hint` 不授予身份或能力。Agent Memory 保持存量 raw user/session key，由 `/memory/agent/*` 独占访问；客服历史读写既有 `customer_service.conversations/messages`，并用可信 user/tenant 校验归属。旧共享 `/chat/*`（`PUBLIC_PRODUCT`）在 `router_node.py` 中直接强制路由至 `general_chat`（`product_scope="public_only"`），旧共享 `/memory/*` 不开放持久记忆。
-- L2 会话所有权由 `chat_sessions.tenant_id/user_id/session_id` 共同界定；会话列表、单会话读写和删除均校验服务端身份的租户与用户。旧会话仅按 `auth.users` 权威映射租户，无法映射的记录保留在不可由运行时身份产生的 `quarantine` 范围。schema 由 `092_chat_session_tenant_scope.sql` 管理。旅游旧消息适配器把租户摘要并入内部 user key，兼容其专用调用路径。
-- 产品专属 `/chat/{product}/stream` 的成功轮次持久化以 `Idempotency-Key` 为幂等键；未提供时使用服务端 `request_id`。Memory 在同一事务中提交 L2 问答、幂等收据与 L3 outbox；收据按 tenant/user/session 隔离，只保留键和问题的 SHA-256。相同键与问题复用原轮次；相同键绑定不同问题时拒绝再次写入。表结构由 `090_memory_turn_idempotency.sql` 管理，随会话/消息删除级联清除。
-- L2 `chat_messages` 兼容保留普通 user/assistant 文本行；成功轮次的 `end_turn → save_turn` 以受控 LangChain 写入记录 `message_type`（human/ai）及 JSON `message_metadata`。通用写入也支持 tool，可恢复 `AIMessage.tool_calls` 和 `ToolMessage.tool_call_id` 等协议字段；恢复时始终以数据库消息 ID 生成 LangChain ID，旧行的空类型列继续按 user/assistant 还原。字段由 `091_chat_message_langchain_metadata.sql` 管理。当前主 Graph Runner 只暴露最终问答和结构化 step results，尚无可信 LangChain ToolMessage 流可接入。
-- HTTP 请求完成、Tool 执行结果、Domain Graph 业务结果是不同状态；错误和部分成功须保留可解释结果。
-- 产品专属流式对话遵循 F2 断线恢复协议（`backend/app/api/stream_resume.py`）：`StreamRecord.append()` 为事件注入单调 `seq` 并写入有界缓冲；客户端断连时 `event_generator` 仅脱离订阅而不置 `stop_event`，producer 继续运行至自然终态；重连端点 `/chat/*/stream/resume` 在追加锁内原子拷贝重放尾并注册 live `_Waiter`（缓冲溢出置 `_truncated` 返回 404 `STREAM_NOT_RESUMABLE`）。仅当显式取消或 Runner 生成器本身被关闭时停止后台图，避免无人消费时继续执行节点副作用。用户主动取消和图执行失败均不得写入成功轮次记忆。
-- Trace 与日志应记录必要的运行归因、耗时和错误类别，不写入敏感参数。
+---
 
-## Checkpoint 启用与恢复边界
+## 三、 工具治理体系（Tool Governance）
 
-图级 Checkpoint 保存 LangGraph 的执行状态，不替代会话历史、业务数据库或任务账本；打开开关本身也不会创建可供 API 使用的恢复入口。生产环境不需要把所有图一律打开，应按每条链路实际提供的暂停、续跑和跨请求状态契约决定。
+工具执行绝不等于简单的函数反射，必须经过严格的运行时治理门禁（`backend/core/tool_governance/`）：
 
-| 链路 | 当前实现 | 生产决策 |
-| --- | --- | --- |
-| 主图普通会话 | `MAIN_GRAPH_CHECKPOINTER_ENABLED` 默认 `false`。开启后每次主图执行仍用独立 `agent-<UUID>` thread_id；普通 `/agent` 没有按该 ID 恢复同一次中断运行的接口。多轮消息由 MemoryService 管理；开启还会把 RequestContext 转成 checkpoint-safe 字典，Send 并行分支的流式/Trace 绑定会降级。 | 普通问答保持关闭。需要暂停、等待用户或跨 Worker 恢复的多步骤任务走后台 TaskGraphExecutor。 |
-| 客服图 | `CS_CHECKPOINTER_ENABLED` 默认 `false`。客服域声明 `supports_checkpoint=true`、`supports_interrupt=false`；服务端身份齐全时 thread 为 `cs:{tenant}:{user}:{conversation}`，缺身份时使用较弱的 conversation 前缀。每轮入口从业务存储重载确认、转人工和会话状态，重置执行态；当前没有客服图 `Command(resume=...)` 路径。 | 普通客服流程可继续由业务库恢复，默认保持关闭。只有当产品确实依赖跨请求保留 LangGraph 执行态时才开启，并确保服务端 tenant/user 身份、状态清理和副作用幂等。 |
-| 旅游图 | Python 默认 `TRAVEL_CHECKPOINTER_ENABLED=false`；根 `docker-compose.yml` 的应用服务默认设为 `true`，后端为 PostgreSQL。旅游 thread 按租户、用户、会话隔离，行程 brief/itinerary 依赖它支持跨轮改单；只读问答图显式不挂 Checkpointer。`TRAVEL_USER_DECISION_INTERRUPT` 默认 `false`，只有启用时才走 interrupt 与后续 `Command(resume=...)`。 | 生产提供跨轮改单时保持 Checkpointer 开启。若明确关闭，产品需按每轮重新规划处理；不能把进程内 MemorySaver 误报成持久恢复。 |
-| 后台 TaskGraphExecutor | 独立于主图开关，始终构建 PostgreSQL Checkpointer，使用稳定 `task-{id}` thread；暂停、等待用户输入、Worker 接管和失败重试依赖已保存状态。 | 只要后台任务提供暂停/等待/恢复，就必须使用持久 PostgreSQL Checkpointer。PostgreSQL 不可用时失败关闭，不能回退内存后继续宣称可恢复。 |
+1. **语义契约校验（Semantic Contract）**：
+   - 工具入参必须通过 Pydantic Schema 的强类型校验；
+   - 包含文件路径、SQL 片段、Shell 命令的参数，强制经过对应业务安全过滤器的消毒（Sanitization）。
+2. **副作用审计与幂等闭环**：
+   - 带有写操作的 Tool 必须由调用方在 Header 中提供 `Idempotency-Key`；
+   - 执行前在 `agent_actions` 表中生成记录并锁定（`status="pending"`），执行成功变更为 `executed`，失败变更为 `failed`，杜绝重复执行与状态伪装。
+3. **资源级授权隔离**：
+   - 严格基于服务端的 `AuthorizationContext`，不仅校验工具本身的调用权限，更在工具执行体内校验目标数据资源的归属（Tenant Scope 与 User Scope），杜绝水平越权（IDOR）。
 
-主图、客服图和旅游图启用持久 Checkpointer 时，生产环境缺少 PostgreSQL Checkpointer 后端会 fail-loud；`CHECKPOINTER_ALLOW_DEGRADE=true` 是显式接受 MemorySaver 的例外，MemorySaver 不支持进程重启或多 Worker 间恢复。三类业务图共享 Checkpoint 表与清理守护，默认保留期为 7 天；变更保留期前需核对共享清理配置和敏感状态留存要求。
+---
 
-## Node Runtime
+## 四、 SSE 事件生命周期与恢复机制
 
-专家和域内节点的通用执行生命周期由 `backend/core/node_runtime/` 提供：执行上下文 → start hook → 节点调用 → 错误/超时策略（含 `THREAD_ISOLATED` 独立单 worker 隔离池与 `contextvars.copy_context()` 上下文显式拷贝）→ `NodeResult` → 完成/错误 hook。它只处理节点级错误策略与超时，不承担 Tool 的重试、熔断、并发隔离或副作用治理。
+全平台对话与流式生成严格遵循 `backend/orchestration/graph/event_schema.py` 约定的 SSE（Server-Sent Events）事件契约：
 
-`ExecutionContext` 与 `NodeResult` 是冻结的通用契约；`NodeResult` 只包含 `status`、`error`、`duration_ms`、`data`，领域结果类型由各域自己定义。观测 hook 负责域级 Trace/指标适配，改动时核对 `backend/tests/node_runtime/`。
+```
+客户端                                           服务端 (FastAPI Runtime)
+  │                                                        │
+  ├────── POST /chat/agent/stream (带 Token) ─────────────►│
+  │                                                        ├─► 身份校验与预算预检
+  │◄───── event: start (会话与 Trace 元数据) ───────────────┤
+  │                                                        │
+  │◄───── event: reasoning (流式思维链思考分片) ──────────────┤ (仅调试模式/管理端流)
+  │◄───── event: delta (正式文本内容增量分片) ────────────────┤
+  │                                                        │
+  │◄───── event: tool_start (调用工具名与入参摘要) ──────────┤
+  │◄───── event: tool_end (工具执行完成元数据) ──────────────┤
+  │                                                        │
+  │◄───── event: citations (引用证据锚点: [E1], [E2]) ─────┤
+  │◄───── event: done (最终 Token 用量、耗时与 TraceID) ────┤
+  │                                                        │
+```
 
-## Workflow 总 Deadline
+### 1. 流式分片与思维链剥离协议
+- **`delta` 事件**：输出清洗后的纯净业务回答，直接面向终端用户渲染；
+- **`reasoning` 事件**：承载云端思考型模型生成的原始思维链，仅当请求显式声明调试权限时才会输出，且两类事件的 Token 在网关层分别计量。
 
-`@workflow(deadline_sec=...)` 为整个 DAG 声明总执行预算，覆盖并行层、步骤和重试；未声明时默认 900 秒。在线图入口将 `RequestContext` 显式交给 Workflow Runtime，总预算取 Workflow 配置与请求 `remaining_workflow_ms()` 中较早的截止时间；Tool Runtime 在调用方未显式传入时继承同一请求 Deadline。调度任务没有请求上下文时只使用 Workflow 预算。每个 Step 的实际 timeout 取单步配置与总 Deadline 剩余量的较小值；总 Deadline 到期优先于单步 `on_error`、重试和降级，停止后续层并以 `failed` 保存唯一终态，迟到或吞取消的 Step 结果不会写成成功。单步 timeout 且物理完成未知时不自动重试，避免旧尝试与重试并发；Workflow 只结束自身 span，不 finish 调用方复用的请求 Trace。取消同步 Provider 的等待后无法确认供应商侧是否停止，step failure 与 Trace 会记录 `physical_completion=unknown_after_cancellation`；LLM 调用自身的 usage 记录负责其后续结算或待对账。
+### 2. 断线重连与恢复
+- 当客户端网络抖动中断连接时，客户端可携带上次收到的事件 `seq` 序号向恢复接口发起查询；
+- 后端在 Redis 中维护滑动事件窗口，支持游标级的重放补发，确保移动端弱网环境下的流式体验完整。
 
-## 上下文预算与跨请求状态
+---
 
-L1 短期历史由 `SHORT_TERM_MAX_MESSAGES` 和 `SHORT_TERM_MAX_TURNS` 分别限制消息数和用户轮数；裁剪以用户消息为轮次边界，轮内 AI/Tool 消息一并保留。L1 按稳定数据库消息 ID 去重；相同正文但不同 ID 的消息仍保留为独立历史。消息数上限用于淘汰旧的完整轮次；最新单轮即使超过该数也不拆分，实际模型输入仍由后续 Token Budget 硬门禁约束。模型调用前由 `backend/context_budget/` 统一执行 L2–L5 多级预算串联：L2 语义裁剪（`PinnedContext` 锚定豁免）→ L3 `compact_previous_outputs` → L4 `fold_messages`（可逆折叠与滞回）→ `RAGBudgeter`（价值+多样性裁剪）→ L5 `SummaryFlight`（单飞增量摘要）。原始会话历史不因预检而改写；全量裁剪后仍超预算时置 `overflow=True`，由模型代理按稳定错误契约抛出 `ContextBudgetExceededError` 拒绝发送。预算策略和 L4/L5 实现以该模块、配置及测试为准。
+## 五、 产品隔离与 Conversation-First 目标架构
 
-跨请求的轻量业务上下文通过 `ConversationContextRepository` 读写：Memory 后端用于测试/本地场景，Redis 后端承载共享热状态。调用方提交表达业务意图的 mutation；并发更新使用版本、run id 或 question id 做 CAS，不能用无条件整对象覆盖。Redis 上下文是有 TTL 的热状态，不替代持久业务记录或图 checkpoint；键按 tenant、user、conversation 隔离。后端不可用、过期或被驱逐时的恢复/降级路径以仓库实现和对应测试为准。
+根据系统架构决策 ADR-0002，平台对不同业务入口实施了严格的**物理级隔离机制**：
 
-## 源码定位
-
-- Router：backend/orchestration/graph/router_node.py、backend/orchestration/router/
-- 主图：backend/orchestration/graph/builder.py
-- Domain Graph 注册：backend/orchestration/domain_registry.py、backend/domains/
-- SSE：backend/orchestration/graph/event_schema.py、backend/app/api/routes/chat.py
-- Checkpoint 与状态投影：backend/orchestration/、各域状态与存储模块
-- 上下文预算：backend/context_budget/、backend/infra/llm/proxy.py
-- 会话轻状态：backend/orchestration/context/context_repository.py
-- Node Runtime：backend/core/node_runtime/；契约测试：backend/tests/node_runtime/
-
-修改公共契约前，读取其守卫测试以及 [Frozen Contracts](Frozen-Contracts.md)。
-
-## 失败传播与结果语义
-
-Runtime 的图路由决策、节点执行结果、Tool 执行结果、领域最终结果是**不同的状态面**。普通 Tool 连接失败，只有在当前用户目标确实无法安全满足时才应阻断；内部图状态错误或未处理异常不得被标成外部 Provider 的降级。
-
-- Tool Runtime 负责 `ToolStatus` 和执行可靠性；业务适配边界必须验证 HTTP 200 body 的 `status=failed`、业务错误码、Schema、空结果。未校验的 Raw ToolResult `SUCCESS` 仅证明执行成功，不代表业务成功。
-- Domain / Supervisor 根据本次 brief、权限和硬约束确定 REQUIRED、IMPORTANT、OPTIONAL，选择继续、标记 DEGRADED、BLOCKED 或内部 FAILED。领域具体状态字段以当前域实现为准。
-- Reporter 不得擅自覆盖真实结果或将 failed envelope 当文本答案；SSE `done`、Trace、数据库状态及前端终态须与同一业务结果一致。新增事件/字段先检查现有 schema、消费端、断线恢复和兼容性。
-- Agent handoff 是职责转交，不是绕过 Tool Governance/授权/确认的执行捷径；转交时应保留 trace、状态归因及用户目标的硬约束。
-- 完整分类矩阵及验收见 [Tool/Provider 失败规范](failure-degradation.md)。
+1. **多产品端点物理隔离**：
+   - 主助手独占：`/chat/agent/*` 与 `/memory/agent/*`；
+   - 客服独占：`/chat/customer-service/*` 与 `/memory/customer-service/*`；
+   - 身份必须由路由鉴权组件固定，禁止以请求体中的 `domain_hint` 或前端传参作为跨产品越权访问的依据。
+2. **存量共享路由收口**：
+   - 历史遗留的共享端点 `/chat/*`（`PUBLIC_PRODUCT`）在 `router_node.py` 中被强制静态下沉为仅能访问 `general_chat`（`product_scope="public_only"`），彻底杜绝公共对话访问私有持久记忆与高级业务工具。
+3. **上下文预算事件的严格作用域校验**：
+   - 后台触发的记忆修剪或预算预警事件，其作用域必须完整包含 Product、Tenant、User、Session 与 Request；
+   - 任何作用域不完全匹配、超时或晚到的事件严禁泄露至当前 SSE 通道，事件 payload 仅允许包含脱敏后的元数据结构，坚决不携带原始问题与摘要正文。

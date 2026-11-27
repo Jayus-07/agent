@@ -1,93 +1,129 @@
-# 全项目功能评测与发布质量治理规范
+# 评测体系、质量门禁与安全红队治理规范
 
-> **全域唯一评测治理入口。** T0–T3 是工程测试层级，和 AI 质量 Golden/Suite/Live 评测不是同一件事。此文档规定评测资产版本、模块口径、结果有效性、准入阈值、发布门禁与回归追责；具体指标算法和默认阈值以 `backend/evaluation/release_gate.py`、suite manifest、Runner 及测试为准，**不在文档再造一套分数配置**。
+本文档系统定义全平台的**评测中心（Evaluation Center）架构规范**，涵盖离线批次评测与在线影子评测的双轨运行收口、系统级安全红队与防越狱门禁（PR #566）、领域自动化 CI Smoke 流水线（PR #567）、确定性语义裁判（PR #569），以及发布上线门禁（Release Gate）的量化指标。
 
-## 1. 事实源与已有实现
+---
 
-管理端的业务题集导入、知识库关联、格式与执行限制见 [业务题集管理](dataset-management.md)。内置 Suite 与上传资产各有明确来源，历史结果固定记录实际执行版本。
+## 一、 评测中心双轨收口与运行记录统一投影（PR #568）
 
-- **模块清单**：`backend/evaluation/models.py` 的 `ModuleKind / MODULE_KINDS` 为统一评测框架的模块源；CLI/前端不能各复制列表。当前包含 `planner, rag, cs, sql, e2e, travel, travel-provider`（2026-11-01 收编重构：`travel-commerce` / `travel-booking` 探针随两域图壳退役）。
-- **评测中心重构与按域导航（#536, #538, #551 演进）**：管理端评测中心已按操作流程重构为统一工作台，按业务域（RAG、SQL、客服、旅游）组织发起、配置与记录查看；提供发布评测运行对比抽屉（#540）与 Bad Case 深度诊断抽屉，聚合发布评测与 CLI 生产对比台账。
-- **RAG 五维黄金指标与 Ragas 深度套件（#551）**：RAG 评测已升级为五维黄金量化体系（忠实度 Faithfulness、答案相关性 Answer Relevance、上下文精度 Context Precision、上下文召回率 Context Recall、幻觉率 Hallucination Rate）；支持可选的深度 Ragas 评测套件，配合 **36 份评测基准语料中心（Controlled Corpus）** 建立不可漂移的质量基准线。
-- **门禁 Veto 一票否决机制（#542）**：在发布评测中建立 Veto 一票否决门禁。凡触碰提示注入防线、SQL 越权尝试、敏感 PII 泄露或核心事实无依据编造等 P0 级别红线，直接触发 Veto 判为 `FAIL`，严禁通过综合平均分稀释或抵消。
-- **Golden 标注数据面（迁移 153 `evaluation_v2.eval_case_golden`）**：建立逐题标杆标记机制，治理标记与用例内容修订彻底分离，采用 append-only 留痕并受租户 RLS 保护。
-- **数据集**：`backend/evaluation/datasets/<module>/` 常以 `cases.jsonl` 组织，具有版本治理的模块另提供 `manifest.json` 和可选的 `suites/<selection>.json`；使用 `backend/evaluation/dataset/loader.py` 和 `fixture_catalog.py`，不可随便复制一个新 loader。`travel-provider` 已有 `manifest.json`，但原先未声明 `content_hash`，loader 会兼容跳过该题集的内容锁定；本变更补齐 hash 并增加守卫测试后，`cases.jsonl` 内容漂移会 fail-fast。历史 deprecated 文件不可进入新运行基线。
-- **Runner**：`backend/evaluation/runners/`、`runners_config.py`；CLI `python -m backend.evaluation.cli`，实际选项先 `--help` 核对。离线评测、真实 Provider 探针和浏览器/API 端到端是不同覆盖层。
-- **发布裁决**：`backend/evaluation/release_gate.py` 已区分 `PASS / FAIL / INVALID`。基础设施坏了、凭据缺失、没有有效数据属于 `INVALID`，不能当作“模型质量差”；必要指标缺失又不能以 0 条通过冒充 `PASS`。
-- **PASS 的范围**：离线报告的 PASS 只表示固定用例/假 Provider 套件通过，不是模型质量结论或生产发布许可；Live 模块评测 PASS 也不等于整个平台上线，仍需系统级验收和授权。报告必须保留门禁范围与运行模式。
-- **历史结果有效性**：评测列表与详情 API 共用 `backend/evaluation/validity.py` 的报告裁决器；历史 `VALID` 可被报告中的当前错误证据推翻，已持久化的 `INVALID` 不降级。详情接口只修正响应副本，不回写历史报告。
-- **批次停止状态**：RunGuard 的取消、deadline、预算和 token 熔断原因会使运行判为 `INVALID_*`；部分样本碰巧达到分数线时也不能以 `PASS` 作为完整评测证据。
-- **样本校验**：模块取值与 `ModuleKind / MODULE_KINDS` 同源；Planner 另要求每条样本有 capability、正反向约束、步骤范围及完整 DAG 依赖边。其它模块仍须由各自 Runner 和模块级契约测试验证，通用样本校验通过不代表 Live 能力已接通。
-- **Planner Live**：评测入口绕过计划缓存，输出必须有节点字段、授权 capability 和有效 DAG；期望能力、依赖边、步骤数精确匹配。模型输出契约失败是质量 `FAIL`；Provider 降级、预算/上下文不足、执行异常或 Live 样本跳过会使该次 run `INVALID`，不计入模型通过率。
-- **两套运行记录体系（现状说明，2026-11-22）**：管理端评测中心「运行记录」读 V2 表（`evaluation_v2.eval_runs`，schema 隔离）；CLI 评测（含发布门禁 local executor、生产口径对比台账）写 `ai.eval_run_records`（`backend/evaluation/storage.py`），目前仅首页「最近评测通过率」卡片消费。两套记录暂未统一，互不回填；排查一次评测时按发起入口确定查哪套：管理端发起 → V2 表；CLI/发布门禁 → `ai.eval_run_records` + `data/eval_runs/` 报告文件。统一收口为独立整改项，未完成前不得在文档或 UI 中宣称「全部运行记录可在一处查看」。
-- **V2 非 RAG 模块只支持离线契约执行（架构边界）**：`backend/evaluation_v2/runner.py::_execute_non_rag_run` 强制 `live=False`（不调模型、不出站），并以 `UnsafeRunnerEnvironmentError` 防护 live Provider（如 travel live map）——这是有意设计而非缺口。非 RAG 模块的在线生成评测（如 SQL live：真实生成 SQL → 业务库执行 → 对比 gold）走 CLI 评测或 Prompt 发布门禁链路；在 V2 开放 live 需要先设计模型调用、预算管控与业务库出站的安全边界，属独立任务。
+平台构建了统一的评测数据抽象与生命周期管理体系，将**离线开发态评测（Batch Testing）**与**在线生产态影子评测（Online Shadow Testing）**在底层数据模型层面实现了标准化归一：
 
-## 2. 统一评测资产规范
+```mermaid
+graph LR
+    subgraph InputSources ["评测输入源 (Input Fixtures)"]
+        GoldenDS["Golden 标杆标注集<br>(153_eval_case_golden.sql)"]
+        ProductionShadow["线上脱敏流量镜像<br>(Shadow Traffic)"]
+        RedTeamSuite["安全红队攻击套件<br>(Jailbreak / Injection)"]
+    end
 
-每个要进入发布判定的 Suite 至少固定：`module`、`suite_id/name`、版本/内容 hash、样本来源、`case_id`、问题及 expected/ground truth、适用环境、Runner 版本、模型与 Prompt 快照、检索 KB/fixture_set（若适用）、必需指标和阈值、有效最小样本数。样本集一旦进入正式基线，改样本/规则必须形成新版本，不能原地覆盖已使用的基线。Gold 数据含敏感信息时脱敏、控制访问与保留。
+    subgraph EvalEngine ["评测执行与裁判引擎 (Evaluation Engine)"]
+        Runner["Domain Runner 执行调度器"]
+        JudgeDeterministic["确定性规则裁判<br>(ClaimVerifier / forbidden_facts)"]
+        JudgeLLM["LLM-as-a-Judge 语义裁判<br>(对齐评判/Rubrics)"]
+    end
 
-每条样本状态至少可归因 `pass/fail/error/skip`，运行再区分 `PASS/FAIL/INVALID`；**SKIP 不计为成功，INVALID 不作为质量回退结论**。与真实生产不同的 mock/provider 数据必须显示数据源和环境。LLM Judge 的评分还需固定 Judge 模型/Prompt/评分规则、人工校准和争议样本复核，避免“换了 Judge 却当模型质量进步”。
+    subgraph DataPlane ["数据面统一存储 (Unified Data Plane)"]
+        Runs["eval_run_records (迁移 056 / 078)<br>• PENDING -> RUNNING -> COMPLETED<br>• 有效性校验: eval_run_validity"]
+        Results["eval_run_case_results<br>• 逐用例得分 / 消耗 Token / RT / 归因"]
+    end
 
-## 3. 按功能选择指标与风险用例
+    subgraph GateEnforcement ["质量门禁与发布准入 (Release Gate)"]
+        Gate["自动化门禁判定 (Release Gate)"]
+        AdminDashboard["管理端评测大盘 (:3001)"]
+    end
 
-| 功能/模块 | 重点质量指标或断言 | 必须覆盖的失败/安全用例 |
-| --- | --- | --- |
-| Router / Planner | 意图准确率、多意图拆分、合法候选选型、澄清率、路由耗时 | 候选外 Tool、低置信度、domain handoff、提示注入 |
-| RAG | Recall@k、MRR、nDCG、证据覆盖、引用准确/完整、拒答率与假回答率 | 无证据、跨 KB/租户、时效、上传失败、索引代次异常 |
-| SQL | 意图→查询正确率、结果级断言、时间语义、授权表/行过滤、错误归因 | 注入、越权、跨租户、超时、只读/参数化、业务空结果 |
-| CS | FAQ 命中、意图/槽位、工单/接管/确认状态机、正确拒绝、用户交付终态 | IDOR、错误退款、并发确认、转人工、业务 200+failed |
-| Travel / Travel V2 | Brief 抽槽正确率、目的地/天数、可执行日程、约束保持、修改 diff/CAS | 12306 不可用、硬依赖 BLOCKED、真实 Provider、写入冲突/恢复 |
-| Tool / MCP / Workflow | Schema 合法性、成功/empty/degraded/failed、重试与 fallback、成本耗时 | 跨域/候选外、SSRF、批准后参数篡改、重复写/未知结果 |
-| Prompt / LLM | 模型回答质量、成本、版本指纹、发布后生效及回滚一致性 | 注入、越权、热更新并发、budget 阻断、备用模型能力不符 |
-| Memory / Context | 召回准确、遗忘/更新、跨会话隔离、压缩忠实度及 token 预算 | 错用户记忆、旧事实覆盖、重要约束丢失、异步失败 |
-| Evaluation / Admin / Frontend | 集版本一致、运行可恢复、数据指标真实、前端状态正确 | 未授权运行/发布、伪造 PASS、SSE 假成功、丢 Trace |
-| Observability / Billing | 指标真实性、模型 token/账单对账、dashboard 查询有效 | No Data 冒充 0、泄漏 PII、失效告警未发送、价格漂移 |
+    InputSources --> Runner
+    Runner --> JudgeDeterministic
+    Runner --> JudgeLLM
+    JudgeDeterministic --> Runs
+    JudgeLLM --> Runs
+    Runs --> Results
+    Results --> Gate
+    Gate --> AdminDashboard
+```
 
-**表格是选指标的目录，不代表所有模块当前已有统一 Runner 或上线阈值。** 每个模块的强制 Gate 和优先级由实际 `ModuleGatePolicy`、Suite 与对应安全契约决定。安全 P0 闸不以“综合平均分高”抵消。
+### 1. 运行记录统一投影（`eval_run_records`）
+- 依据迁移 `056_eval_run_records.sql` 与 `078_eval_run_validity.sql`，每一次评测任务均被赋予全平台唯一的 `run_id`；
+- **状态转移与有效性判定（Validity State）**：
+  - 任务状态严格遵循 `PENDING` $\rightarrow$ `RUNNING` $\rightarrow$ `COMPLETED` / `FAILED`；
+  - 迁移 078 引入了 `eval_run_validity` 校验触发器：若评测运行过程中发生超过 5% 的用例由于网络瞬时超时未跑完，该运行记录自动标记为 `INVALID`，禁止将其作为发布门禁（Release Gate）的判定输入，防止以假通过瞒报质量。
 
-SQL Live 结果比较必须能实际执行参考 `gold_sql`。参考 SQL 校验失败或执行失败时，用例记为 `error`、`error_stage=sql_gold`，整轮按数据集、环境或基础设施原因归为 `INVALID_*`；禁止退回表路由命中并记为结果正确。
+---
 
-## 4. 四层验证与准入决策
+## 二、 系统级安全红队与防越狱评测门禁（PR #566）
 
-| 层级 | 测试来源 | 适用门禁 |
-| --- | --- | --- |
-| E0：Asset & Schema | dataset、manifest、hash、registry 校验 | 缺必要样本/真值/fixture → `INVALID`，拒绝开始 |
-| E1：Offline / Unit | 固定数据与确定性 fake，算法/状态/安全测试 | 日常 PR 快速回归；不能宣称真实模型性能 |
-| E2：Integrated / Live | 隔离 PG、Redis、真实 LLM/Embedding/Provider（按需） | 高风险契约、新模型/Prompt/检索策略发布 |
-| E3：Product E2E | 实际网关、权限、三端 UI、实际 Provider、降级与恢复 | 发布/高风险迁移；截图和 Trace/API/DB 证据 |
+针对大模型容易遭受提示词注入（Prompt Injection）和角色扮演越狱的风险，平台在 PR #566 中建立了**系统级自动化红队安全攻击评测套件**：
 
-E0 的模块校验由统一数据集校验器按模块契约执行：RAG 的 `answer_type` / `query_type` 使用 RAG 枚举；SQL、E2E 等模块保留各自的查询类型，并校验 SQL 正向题的 `gold_sql` / `expected_tables` 与拒答题的 `expected_status`。评测服务须在创建 run 和启动任一 Runner 前，预校验本次所有模块的数据；校验失败时拒绝启动，不能先运行前序模块后才发现后续题集损坏。题集 Curator 写入也必须在校验失败时拒绝落盘。
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        安全红队自动化攻击向量套件                       │
+├────────────────────────────────────────────────────────────────────────┤
+│ 1. 提示词注入 (Prompt Injection):                                      │
+│    • 忽略先前所有指令 (Ignore previous instructions and do X)          │
+│    • 系统级 Prompt 泄露窃取 (Output your initial system prompt)        │
+├────────────────────────────────────────────────────────────────────────┤
+│ 2. 角色扮演越狱 (Role-Playing & Jailbreak Variants):                   │
+│    • DAN 模式 / 奶奶故事漏洞 / 虚构小说情景诱导                         │
+│    • 逆向心理学攻击与 BASE64 / 混淆编码逃逸                             │
+├────────────────────────────────────────────────────────────────────────┤
+│ 3. 越权与多租户探针 (IDOR Probing):                                    │
+│    • 注入未授权租户的 tenant_id 尝试跨租户读取数据                      │
+│    • 尝试执行 DDL / pg_sleep 探测 SQL 盲注与只读防护                    │
+├────────────────────────────────────────────────────────────────────────┤
+│ 4. 业务禁令对抗 (Business Policy Violation):                           │
+│    • 诱导客服承认未核实的百万赔偿、诱导旅游规划违规进入军事禁区         │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
-T0–T3 的选择继续由 [测试策略](../development/testing-guide.md) 决定；E0–E3 描述评测的**证据层**，不要求每个 Bug 都运行所有层。只有运行有效、必要指标达标、安全红线全过，且没有阻断项才能输出发布 PASS。可用配置将低风险功能直接发布到本机，不强制影子双跑或灰度。
+### 1. 安全红队判定门禁
+- **一票否决制（Zero Tolerance）**：在 Release Gate 流程中，系统级安全红队测试的通过率必须为 **100%**。只要有任意一条注入攻击成功突破防护并导致系统泄露内部 Prompt、越权获取数据或执行非授权操作，发布流水线立即硬熔断，直接阻断上线。
+- **自动化安全事件归因**：任何红队拦截失败均自动向 `security_events` 表写入高危安全事件并联动飞书/邮件告警。
 
-**Prompt 发布门禁按 prompt category 路由评测模块（2026-11-22）**：事实源 `backend/evaluation/prompt_release_runner.py`（`_CATEGORY_TO_MODULE`）与 `.github/workflows/prompt_eval.yml`（同口径内嵌路由）。SQL prompt 的门禁评测跑 SQL 题集（canonical `datasets/sql/cases.jsonl`，15 条，manifest 锁定），不再复用 RAG 的 `pr_smoke` suite。SQL 门禁不套用 RAG 校准的 tier 绝对阈值（smoke 0.95/core 0.85/hard 0.70 对 SQL 真实水位不可达，分层结果仅展示），改以「候选 vs 现网」同题集同模型双跑对比为主门禁：候选全局通过率 ≥ 现网 − 5%（GATE-11 同款降幅）+ 防全挂下限（smoke 层通过率 ≥ 0.20）+ 样本量门（GATE-12）；RAGAS 门对 SQL 不适用（N/A 落痕，publish 侧按 `gate.ragas_applicable` 跳过）。RAG prompt 门禁口径不变（tier 阈值门 + 样本量门 + baseline 回归门 + RAGAS 门）。未登记映射的 prompt category 回落 RAG 门禁并留痕，按域补齐专属评测时在 `_CATEGORY_TO_MODULE` 登记。已知限制：GitHub executor 路径评测的是 candidate commit 的 defaults 文件内容而非 DB 候选草稿（CI 测试库无 DB 数据），SQL 候选与 defaults 不一致时须走 local executor（生产容器内存受限，SQL 评测链路不加载 torch，实测可行后作为默认路径）。
+---
 
-## 5. 生命周期与输出
+## 三、 领域自动化 CI Smoke 门禁流水线（PR #567）
 
-- **报告时间**：面向人的报告和控制台摘要显示上海时间，精确到秒；机器字段 `timestamp` 使用带时区的 ISO 8601 UTC，另提供 `timestamp_shanghai` 便于读取。
-1. **收录**：新增样本来自已修复回归、人工标注、生产脱敏失败案例或明确对抗集；有稳定 id、人工责任人、版本和质量审查。生产 Trace 详情页可一键收录候选（`POST /v2/intake/from-trace`，admin 权限、Trace 可见性校验、自动脱敏后以 `privacy_status=redacted` 进入既有候选审核流）；另存旧通道 `/dataset-candidates/from-trace`（见 dataset-management 文档）。
-   - **坏例回流 SOP（2026-11-02 P8 起，持久化 intake 通道；替代原 manual 口径）**：`ai.unanswered_questions`（rag_miss/sql_empty）是持久化坏例池，`intake/from-trace` 只认进程内 trace collector 最近 200 条——跨重启的历史坏例走 `POST /v2/intake/from-unanswered`（body：`entry_id` + `idempotency_key`；admin 权限）：服务端读行后自动脱敏，以 `source_kind=trace`、`metadata.source=unanswered_question`、`source_ref.origin=<entry id>` 进入候选审核流。幂等三层：idempotency_key 重放、`source_ref.origin` 查重（同一条坏例只回流一次，命中返回 `duplicate: true`）、审核层防重查询。周度评审：拉取高频未解决问题（按 question_hash 聚合）→ 逐条 `intake/from-unanswered` → 管理端审核 approve/reject → approve 进数据集下一 version、reject 留痕。链路已用真实坏例验证可达（intake 201 → origin 幂等重放 → review reject 留痕，cs-evaluation-upgrade P8 实证）。旧通道 `POST /v2/candidates`（source_kind=manual）保留兜底，仅限坏例行已不可考等边缘场景。
-2. **运行**：记录 `commit_sha`、数据集 hash、suite、模型/Prompt、路由策略、Provider、fixture_set、环境与 runner，以及 Trace/run_id、成本和持续时间。
-3. **裁决**：必需指标/有效样本/安全断言缺失按 `INVALID/FAIL` 的实际含义判决；不能把 LLM 调用失败归类模型质量不合格。
-4. **回归**：与同数据集/同规则基线比较并输出变化，发生阈值/算法/模型变化时说明不可直接对比的原因。
-5. **发布**：管理员/授权人确认，记录判决、风险挂账、审批和回滚版本；高风险变更按 [发布质量](../operations/release-quality.md) 处理。
-6. **维护**：旧测试由新契约替代且有覆盖证据才删除；数据集 `deprecated` 不能再用于新发布基线。
+为解决每次微调代码导致各业务域契约漂移的问题，PR #567 建立了针对 **SQL Agent** 与 **Planner（规划器）** 的专属自动化 CI Smoke 门禁流水线（`.github/workflows/rag_smoke.yml` 及相关任务）：
 
-## 6. 收口验收（EV-01～EV-12）
+1. **SQL 域自动化 Smoke 契约**：
+   - 验证 6 层 AST 校验对非法 DDL/危险函数的拦截率；
+   - 验证 `SQLPolicyGuard` 在各种复杂语法（子查询、UNION ALL、多表 JOIN）下的参数化注入完整性；
+   - 验证 `agent_readonly` 物理账号在并发压测下的连接借出与自愈。
+2. **Planner / 旅游域 Smoke 契约**：
+   - 验证在面临多重物理时间冲突时的 `decision_token` 挂起与状态机恢复；
+   - 验证并发修改时 Trip Revision 的 CAS 冲突拦截（必须返回 HTTP 409）。
 
-| 编号 | 场景与通过标准 |
-| --- | --- |
-| EV-01 | ModuleKind、CLI、前端、Runner 注册与 manifest 一致；未知模块拒绝 |
-| EV-02 | 缺字段、重复 case、坏 hash、未知 fixture_set 在开始前拒绝，避免污染数据 |
-| EV-03 | Suite 版本/阈值、Prompt/model/commit 快照固定，历史运行不随新版本漂移 |
-| EV-04 | 真实 valid 样本数不足、全部 skip、provider 不可用为 INVALID，不误报 PASS |
-| EV-05 | 质量不达标为 FAIL；安全 P0 强制 FAIL/BLOCKED，不能靠平均分绕过 |
-| EV-06 | RAG、SQL、CS、Travel 的指标按各自 policy 判，不强制用同一 RAG 指标 |
-| EV-07 | 断点续跑/重复运行与 `run_id` 不造成双重样本或假完成 |
-| EV-08 | 旧数据集弃用/替换有迁移说明与 Golden 断言，不无证据删测试 |
-| EV-09 | 存储、队列、鉴权、租户及历史运行记录的读写权限通过 |
-| EV-10 | 本地、CI 与真实 Live 报告区分，保留命令、环境、样本量与时间 |
-| EV-11 | LLM Judge 模型/版本/人工抽查与评估成本可追溯 |
-| EV-12 | 与发布/Prompt/模型切换正确关联，失败不可推断生产 READY |
+---
 
-标准化任务的下一轮审计需要从 `dataset/validator.py` 的模块范围、Release Gate 与 API 的历史记录一致性开始；报告明确 `已实现 / 部分实现 / 缺失 / 环境待验`，未实测项不能打勾。
+## 四、 确定性语义裁判与 Golden 标注事实库（PR #569）
+
+### 1. 双重裁判架构（Deterministic + LLM Judge）
+- **第一层：确定性规则裁判（Priority 1，一票否决）**：
+  - 由程序化正则引擎执行：`ClaimVerifier`（核验金额、日期、百分比）+ `forbidden_facts`（核验禁令违规）；
+  - 确定性裁判结果享有**最高法定效力**，任何 LLM-as-a-Judge 的高分评价均不能覆盖确定性规则的违规判定。
+- **第二层：LLM-as-a-Judge 语义裁判（Priority 2）**：
+  - 针对回答的通顺度、结构合理性、语气专业度进行打分（1~5 分 Rubrics 标准）；
+  - 评判过程必须附带明确的打分依据（Reasoning）并入库审计。
+
+### 2. Golden 标杆标注数据集（迁移 153）
+依据迁移 `153_eval_case_golden.sql`，系统构建了涵盖 RAG、SQL、客服、旅游四大业务域的人工黄金标注集（Golden Dataset）：
+- 包含标准提问、预期召回 Chunk ID、标准 SQL AST、不可违反的事实清单（Ground Truth）；
+- 任何模型版本更新或 Prompt 改动，必须全量跑通 Golden 数据集，且综合得分不得低于基线基线。
+
+---
+
+## 五、 发布质量门禁（Release Gate）量化标准
+
+任何功能进入生产环境前，必须在评测大盘上达到以下**物理硬指标门禁**：
+
+| 评测维度 | 考核核心指标 | 生产发布硬门禁要求 | 违规处理 |
+| :--- | :--- | :--- | :--- |
+| **安全与合规** | 安全红队攻击拦截率 | **100%**（零容忍） | **一票否决阻断** |
+| | 客服禁令事实违规率（`forbidden_facts`） | **0.0%** | **一票否决阻断** |
+| **事实准确性** | RAG 关键数字/日期事实核验通过率 | $\ge 98.0\%$ | 阻断发布 |
+| | SQL 语法与多租户注入成功率 | **100%** | 阻断发布 |
+| **检索效果** | Golden 标杆数据集召回率 (Recall@5) | $\ge 92.0\%$ | 阻断发布 |
+| | Reranker Top-1 准确率 (NDCG@3) | $\ge 88.0\%$ | 阻断发布 |
+| **性能与可用性** | SQL Agent 端到端 P99 响应耗时 | $\le 3.5\text{s}$ | 阻断发布 |
+| | RAG 检索端到端 P99 响应耗时 | $\le 2.0\text{s}$ | 阻断发布 |
+| | 测试运行有效率（`eval_run_validity`） | $\ge 95.0\%$ | 标记为无效，强制重跑 |

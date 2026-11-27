@@ -1,66 +1,122 @@
-# 客服域
+# 智能客服业务域与双端工作台架构指南
 
-## 入口与当前链路
+本文档全面梳理平台智能客服（Customer Service）的端到端架构设计，涵盖用户端 AI 对话工作台、坐席端管理控制台、11 类业务动作（Action）状态机与沙盒模拟、WebSocket 实时通信协议，以及离线 `forbidden_facts` 确定性裁判安全机制。
 
-- Domain Graph 在 backend/customer_service/register.py 注册，适配器为 backend/orchestration/graph/cs_graph_node.py。
-- 子图由 backend/customer_service/graph_builder.py 构建，包含状态加载、待确认处理、Supervisor、业务专家和 Reporter。
-- 会话状态流转、工单、确认和派单分别维护在 backend/customer_service/；管理端 API 集中于 backend/app/api/routes/ 中的客服路由模块。
-- 用户端智能客服整页为 `/customer-service`（cs-workstation-v2 重建版，组件在 `frontend/src/cs2/`，P8 已删除旧 `components/cs/*` 抽屉树）：AI 会话流（SSE 全事件、确认卡、候选点选）、转人工 4 态横幅、人工接管后用户可继续输入（`POST /cs/conversations/my/{id}/messages`，Idempotency-Key 必填）、退款/工单折叠卡、商城三页 `/mall`、`/my-orders` 与资金闭环（Mock 账本）；B2 积分/等级查询、B3 券查询/用券校验、B4 支付流水查询与严格条件下显式开启的 mock 自动退款模拟、B5 催办模拟登记、B6 价保模拟入账、B7 在途改址模拟登记、B8 发票抬头/记录查询及确认后模拟申请均已覆盖。业务动作只改模拟状态并保留审计，不接真实支付、物流或税务系统。
-- 坐席工作台在 frontend-cs（:3300）`/cs/*` 七视图（P8 由 `/cs2/*` 切换，组件命名空间 `src/cs2/` 保留）：`/cs/workspace`（三栏工作台：双 Tab 认领、快捷回复、AI Copilot、接单开关）、`/cs/conversations`（会话管理：回放/重派/强制接管/关闭）、`/cs/tickets`（工单流转）、`/cs/refunds`（退款审核，supervisor：队列/意见必填/通过回款/驳回/终态锁/审计）、`/cs/qa`（质检：抽检/AI 预填/评分/申诉终审/日报）、`/cs/dashboard`（六卡看板+绩效，supervisor 全量）、`/cs/knowledge`（未解决聚合/话术/FAQ 草稿/检索）。
-- 坐席工作台实时层：WS `useAgentSocket`（ticket 鉴权、seq 游标补发、降级轮询）；坐席状态四态（`cs_agents.status`，away/offline 不派单）与接单开关（`accepting`）即时生效；坐席间转接复用 offer 状态机（拒单/超时回退 waiting_human 队列）；SLA warning/breach 分级事件幂等。
-- 侧栏订单复用 `AccountService` 与 `OrderService`；演示沙盒开启时仍由客服业务层映射到演示客户，页面明确标记演示数据。
+---
 
-## 首期投产范围
+## 一、 系统架构与双端交互拓扑
 
-- 价保退差价采用 B6 mock-only 流程：提案、用户确认、确认前重核订单和自营售价、写 business-mock 演示钱包并落客服审计；客服与 business-mock 两侧 CS_PRICE_MATCH_MODE 默认 disabled、价保窗口默认 0，不影响真实资金。
-- 真实接入渠道为 web（2026-11-01 用户确认）；app、phone、wechat 尚未接入。
-- 首期退款申请写入保持 `CS_REFUND_REQUEST_MODE=disabled`；业务网关 `CS_BUSINESS_GATEWAY_MODE` 同时控制订单和物流查询，支持 http / sandbox，不将 disabled 当作关闭资金的开关。2026-11-02 本机共享 app 为 http 网关、退款申请未显式设置（默认 disabled）；此记录不代表其他支付或退款审核路径已经验收。资金首期范围与真实后端仍待 Q6 拍板。
-- B4 演示自动退款使用独立开关 `CS_AUTO_DUPLICATE_REFUND_MODE=mock` 与金额上限；默认关闭/上限为 0，且仅允许业务 URL 精确指向 `business-mock:8081`。它只记录 `simulated` 状态，不创建真实退款申请，不改变 `CS_REFUND_REQUEST_MODE` 的人工确认与审核语义。
+智能客服包含两套完全独立但数据互通的工作台界面与后端运行环境：
 
-## 领域职责与安全边界
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        用户端 (User Experience)                        │
+│ • 访问路由: /customer-service (组件在 frontend/src/cs2/)               │
+│ • 核心能力: AI 会话流 (SSE 全事件)、候选点选、确认卡片、转人工 4 态横幅 │
+│ • 资金交互: 商城三页 (/mall, /my-orders)、退款折叠卡、演示钱包账本     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ HTTP / SSE / REST
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                   客服领域子图 (backend/customer_service/)             │
+│ • 图注册: register.py (通过 cs_graph_node.py 接入主图)                 │
+│ • 图编排: graph_builder.py (State -> 待确认处理 -> Supervisor -> 专家) │
+│ • 业务子模块: context / actions / dispatch / tickets / qa / rules     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ WebSocket / REST API
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        坐席工作台 (Agent Workstation)                  │
+│ • 访问路由: frontend-cs (:3300) 的 /cs/* 七大专业视图                  │
+│ • 实时层: WS useAgentSocket (Ticket 鉴权、Seq 游标补发、降级轮询)      │
+│ • 七大视图: workspace (三栏工作台)、conversations (会话回放)、tickets  │
+│   (工单)、refunds (退款审核)、qa (质检)、dashboard (看板)、knowledge  │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
-- 价保模拟独立使用 CS_PRICE_MATCH_MODE=disabled 与 CS_PRICE_MATCH_WINDOW_DAYS=0 默认值；客服和 business-mock 两侧都显式设为 mock、窗口相同且为正数、目标地址在允许列表内时才开放确认流程。它只写内存演示钱包，并由既有 agent_actions/audit_logs 记录操作事实；不连接真实资金或支付系统。
-- Supervisor 按当前请求状态分派知识查询、业务查询、动作提案、投诉或人工接管；专家通过共享 state 和显式结果协作，不互相直接调用。
-- 权限与租户范围只取自服务端验证后的身份；订单、工单及会话数据必须按资源授权隔离。输出守卫和知识库证据规则按当前安全模块及测试执行。
-- 退款、退货等写操作先形成提案并校验必填信息，再进入用户确认、授权执行和幂等保护；`pending`、`executed`、`failed`、`unknown` 等状态不可互相伪装。
-- 退款写入默认关闭。`CS_BUSINESS_GATEWAY_MODE=sandbox` 与 `CS_REFUND_REQUEST_MODE=sandbox` 时，确认后登记到 `customer_service.cs_case`；HTTP 模式须同时显式设为 `http`，退款申请由 business-service 创建。两条路径都只登记待人工审核，不执行资金退款。
-- B4 重复扣款模拟仅改变 business-mock 的演示流水，并通过既有 `agent_actions` / `audit_logs` 幂等持久化；响应和记录均标记 `execution_mode=simulation`、`real_funds_affected=false`。非 mock 或超出已配置上限时沿用确认与人工审核；事实变化时 fail-closed；写入结果未知时不自动重试或另发退款提案，并提示人工核实。
-- sandbox 活跃申请由 PostgreSQL 按租户、用户和规范化订单 ID 跨会话唯一约束；HTTP 活跃申请由 business-service 按相同所有权维度裁决。HTTP 失败不回退 sandbox；写请求无自动重试，网络错误或 5xx 结果未知时确认进入 `verifying`。
-- 订单列表、详情和物流轨迹经 business-service HTTP 契约读取；商品/时间指称先用真实用户订单匹配，歧义时追问，不由模型提供订单 ID。唯一物流查询会写入会话级订单上下文，后续已支持的条件退款计划可以承接该订单。退款提案确认时重查订单归属、状态、金额及政策版本。
-- 退款申请状态查询按服务端认证的 user 和 tenant 限定。未提交提案的原因修改使用 Proposal Version CAS 使旧确认失效；已提交申请的原因修改先形成新提案、用户确认后再调用 business-service，服务端只允许审核中的申请被修改。
-- business-service Mock 在内存模拟订单、物流和售后状态，服务重启会清空售后申请；它不代替生产数据库，也不执行资金退款。接口事实源见 [Mock 契约](../../backend/mock/business_service/contract.md)。
-- 在途订单改址走独立的 `t_change_address_in_transit` 提案：需用户确认，确认后只向 business-mock 登记单次模拟请求；服务端重核订单归属和运输状态，审计记录落既有 `agent_actions`/`audit_logs`。默认 `CS_ADDRESS_CHANGE_MODE=disabled`，真实订单地址与承运方均不受影响。
-- B5 催办记录同样是 business-mock 内存态，重启后 24 小时去重状态清空；客服动作与审计记录仍通过既有 PostgreSQL agent_actions/audit_logs 幂等写入。当前功能只用于模拟流程验收，不宣称真实商家已收到催办。
-- 坐席工作台通过既有实时事件与补偿查询同步队列和会话；人工接管的认领、回复和关闭服从服务端状态机。
-- 管理端客服档案独立于平台用户维护：`/sys/rbac/customer-service/team` 只列出租户内标记为客服部门的成员，角色、容量、启用和接单状态由专用更新接口维护。客服部门类型与主管配置由访问控制的部门管理维护；用户调离客服部门或账号停用时，后端会停用其客服档案并关闭接单状态。
-- 可选演示沙盒仅映射业务查询所用的 customer id，不改变认证身份或权限判断；开关默认关闭。见[演示沙盒说明](../customer-service/demo-sandbox.md)。
+---
 
-模块职责的代码入口是 `backend/customer_service/`，图装配以 `graph_builder.py` 和注册模块为准；本文不复制完整节点或意图清单。
+## 二、 11 大业务动作（Action）状态机与沙盒机制
 
-## 状态与约束
+为保障电商核心业务安全，客服域将所有业务交互严格建模为具备**提案（Proposal） $\rightarrow$ 确认（Confirmation） $\rightarrow$ 授权执行（Execution） $\rightarrow$ 幂等持久化（Idempotency）**的有限状态机：
 
-执行前加载当前会话状态；确认、人工接管和业务状态迁移遵循现有状态机。写操作必须经过现有授权、用户确认/审批和幂等机制。身份及租户范围来自服务端验证后的上下文。
+```mermaid
+stateDiagram-v2
+    [*] --> Proposed: AI 识别用户意图并提取结构化参数
+    Proposed --> Confirmed: 用户前端显式点击确认卡片 (带 Token)
+    Proposed --> Cancelled: 用户明确拒绝或超时作废
+    Confirmed --> Executing: 服务端校验身份与业务门禁并加锁
+    Executing --> Succeeded: Mock/HTTP 网关写入成功并落审计
+    Executing --> Failed: 业务校验不通过 (库存/时效/余额不足)
+    Succeeded --> [*]
+    Failed --> [*]
+    Cancelled --> [*]
+```
 
-客服知识查询与数据库查询分别走现有 RAG 和 SQL 能力，不在客服图中复制这些服务实现。失败、转人工和部分结果按状态契约返回。
+### 11 类专业业务动作全景矩阵
 
-知识底座与检索（B1/A7，2026-11-04）：政策文档事实源 = `docs/customer-service/kb/`（cs_policy 8 篇 + cs_faq 速查，镜像 COPY 随代码分发），`scripts/index_cs_seed_docs.py` 同步 git 源到数据卷后增量索引；cs KB 注册表状态（auth.knowledge_bases）是被检索的前提——inactive 库对 customer 主体不可见（2026-11-04 曾因批量 inactive 致 cs 检索整体失效，已恢复）。坐席端 `GET /cs/knowledge/search` = FAQ 速查层 + RAG 文档层合并（source=faq|rag，cs_faq/cs_policy 双库 top3，subject_type=customer 与用户对话同授权语义，RAG 通道失败逐库降级不 fail 接口）。
+| 动作编号 | 业务动作分类 | 核心业务校验与安全门禁 | 状态流转与持久化表 | 沙盒与开关控制 |
+| :--- | :--- | :--- | :--- | :--- |
+| **B1** | **售后与基础咨询** | 依 RAG 知识库检索官方政策，严格防幻觉 | 状态无需额外持久化，直接输出 Markdown | 知识库检索只读 |
+| **B2** | **会员积分与等级** | 查询当前用户的积分余额、过期日与等级权益 | 读取 `cs_points` 账本 | 演示沙盒只读映射 |
+| **B3** | **优惠券核销校验** | 校验券状态（未用/已用/过期）、门槛金额与品类互斥 | 查询 `cs_coupon`，强校验订单金额限制 | 只读查询 |
+| **B4** | **支付流水与退款** | 检查订单支付状态，强制唯一性防重退（迁移 098） | `cs_payment` 流水表 + `098_cs_refund_order_unique.sql`（`order_id` 唯一锁） | `CS_REFUND_REQUEST_MODE=disabled`<br>`CS_AUTO_DUPLICATE_REFUND_MODE=mock` |
+| **B5** | **在途催办登记** | 校验物流状态，限制同一订单 24 小时内催办频次 | 写入 `cs_urge_requests` 催办记录表 | `135_cs_urge_request_action_type.sql` |
+| **B6** | **价保退差价入账** | 校验价保期、自营商品标价差额；必须双端开启 mock | 写入演示钱包 `mall_wallet`，写 `agent_actions` 审计 | `CS_PRICE_MATCH_MODE=mock`<br>`CS_PRICE_MATCH_WINDOW_DAYS>0` |
+| **B7** | **在途收货改址** | 校验快递是否已出库/签收；已揽收由快递拦截接口校验 | 写入 `cs_address_changes`，记录新旧地址哈希 | `137_cs_address_change_action_type.sql` |
+| **B8** | **发票抬头与申请** | 校验企业税号格式、订单履约状态（完成订单才可开票） | 写入 `cs_invoices` 记录表，支持电票/专票分类 | `138_cs_invoice_business.sql` |
+| **B9** | **客户纠纷投诉** | 严重不满情绪捕获，要求填写诉求明细与联系电话 | 写入 `cs_cases` 纠纷工单，打标严重等级 | 触发转人工升级 |
+| **B10** | **工单流转与转派** | 跨部门协助或复杂疑难问题转交后台专员 | 写入 `cs_tickets`，记录派单轨迹与处理 SLA | 遵循工单状态机 |
+| **B11** | **人工接管 (Handoff)**| AI 无法解决或触发敏感词，将控制权移交坐席 | 更新会话 `status="waiting_human"`，触发派单 Offer | 详见坐席状态机 |
 
-## 维护与验证
+---
 
-- 核心实现：backend/customer_service/ 与 backend/customer_service/experts/。
-- 服务边界：backend/app/api/router.py。
-- 定向测试入口：backend/tests/customer_service/，权限和 API 变化还需选择 backend/tests/api/ 中对应用例。
-- 不复制客服知识库文档作为系统架构规范。
-- 评测集由 `backend/evaluation/datasets/cs/` 与其 validator 管理，类别和样本数以数据清单与校验器为准。
-- 决策层路由（2026-11-02 cs-evaluation-upgrade P3 词表扩圈）：ACCOUNT 域细分规则、物流细分词表及自然表达 patterns 已入 `vocab.py::_CS_DOMAIN_RULES` 与 `fine_router._RULE_INTENT_MAP`；B2 积分/等级、B3 优惠券、B4 支付流水、B5 催办、B6 价保、B7 在途改址、B8 发票查询/申请依序补齐，当前 VOCAB_VERSION 为 `2026-11-06.3`。政策问句仍由 KNOWLEDGE 回答。任何词表改动必须经 `test_cs_eval_gate` 与 `test_cs_decision_replay` 双门禁，零回归才可合并。
+## 三、 坐席工作台实时通信层（WebSocket）与派单状态机
 
-## 派单回收、超时工单与上下文锚定（#558 / #559 / #563 演进）
+坐席端通过 WebSocket 长连接（`useAgentSocket`）实现秒级工单流转与实时消息同步：
 
-- **订单咨询与卡片即时协同（#508, #509, #535）**：支持电商风格订单咨询抽屉（M1）、服务端注入 `order_ref` 传递（M2）与 AI/坐席态发送订单卡在前端本地即时渲染（M3）；会话管理支持整页刷新保留已认领状态（#522），坐席工作台实现顶栏登出、多端互踢自动跳登录（#549）。
-- **时间驱动派单回收器（`backend/customer_service/handoff/dispatch/reaper.py`）**：
-  - `agent_offered` 超过 30 秒未认领自动释放，并将该坐席加入本单永久排除集；超过 `CS_MAX_DISPATCH_ATTEMPTS` 或到达 `total_deadline_at` 时终态关闭派单，并在**同一 PG 事务**内原子创建 `GD-YYYYMMDD-XXXX` 超时留言工单、写用户消息通知与 outbox 事件。
-  - 事务提交后通过有界并发异步任务（`_MAX_SUMMARY_TASKS=4`）执行 LLM 诉求压缩回填（`_enrich_timeout_ticket`），失败降级保留原文；`reap_stale_human_active` 负责 `human_active` 坐席离线自愈。
-  - 维护定时扫描（`maintenance.py::scan_handoff_timeouts`）与运行时兜底（`supervisor.py::_recover_handoff_timeout`）均统一收口至 `reaper.py` 关单事务；工单等待秒数以 `handoff.total_deadline_at - created_at` 为单一事实源。
-- **主管定向重派与锁序约束（`backend/customer_service/handoff/dispatch/offers.py`）**：
-  - `reassign_handoff` 校验目标坐席状态（`enabled && available && accepting && status in ("online", "busy")`），并通过 `count_other_active_assignments` 排除当前工单及已关闭工单的历史未终结 assignment，重置 `attempt_count=0`、顺延 `total_deadline_at`、递增 `assignment_version` CAS；严格遵守 `conversations -> handoffs -> (agent)` 锁序，结合 `SKIP LOCKED` 跳过争用。
-- **上下文锚定**：`graph_builder.py::_register_request_pins` 接入 Context Budget Hook C，保护确认实体与最近订单号不被长对话压缩裁剪。
+### 1. 连接鉴权与断线游标补偿
+- **Ticket 握手鉴权**：连接建立时不直接信任 Cookie，坐席首先通过 REST 接口获取短期一次性票据 `cs_ticket`，在 WS 握手路径 `/ws/cs/{agent_id}?ticket=...` 消费并销毁票据；
+- **序列号游标重放（Seq Cursor）**：每个会话消息均包含严格单调递增的 `seq` 序号。当网络抖动导致重连时，客户端发送 `ack_seq`，服务端自动拉取并补发未确认的消息帧，杜绝丢消息；若重连持续失败，自动平滑降级为轮询模式。
+
+### 2. 坐席 4 态生命周期与接单开关
+坐席状态维护于 `customer_service.cs_agents`：
+- **`online`（空闲在线）**：开启接单开关（`accepting=true`），具备分配候选资格；
+- **`busy`（忙碌）**：当前活跃接待会话达到系统上限配额，暂停新分配；
+- **`away`（小休/离开）**：主动挂起，暂停分配；
+- **`offline`（离线）**：断开连接，所有会话回退或平滑转接。
+
+### 3. 派单 Offer 状态机与 SLA 超时升级
+```
+[用户触发转人工] ──► 进入 waiting_human 全局队列
+                            │
+                            ▼
+                    匹配最优空闲坐席
+                            │
+                            ▼
+                   下发派单 Offer (倒计时 15s)
+                    ┌───────┴───────┐
+                    ▼               ▼
+           [坐席点击认领]     [坐席拒绝 / 15s 超时]
+                    │               │
+                    ▼               ▼
+           进入 active_chat   Offer 回退并记录超时惩罚，
+                              重新分配至下一顺位坐席；
+                              超时累计触发 SLA Warning/Breach
+```
+
+---
+
+## 四、 离线确定性裁判与 Golden 事实安全校验（PR #569）
+
+客服回答直接面对真实消费者，存在“虚构赔偿金额”、“误报发货/到账时效”的严重法律合规风险。平台在 PR #569 中落地了**基于 `forbidden_facts` 的离线确定性语义裁判与 Golden 评测门禁**：
+
+1. **核心痛点与解决思路**：
+   - 依赖 LLM 进行质检打分容易受到“语气温柔但事实胡说”的假象欺骗；
+   - 平台构建了包含**绝对红线禁令规则库（Forbidden Rules）**与人工精标 Golden 数据集（`backend/sql/migrations/153_eval_case_golden.sql`）。
+2. **确定性语义裁判机制**：
+   - 自动扫描客服回答文本，强行匹配禁令特征：
+     - *金额超限禁令*：如未授权擅自承诺“赔付 500 元现金”；
+     - *时效虚构禁令*：如官方政策规定 7 个工作日退款，客服回答承诺“2小时极速到账”；
+     - *政策篡改禁令*：对不支持 7 天无理由退货的特殊商品（如生鲜、虚拟权益）承诺退货。
+   - 命中任何禁令规则，离线裁判引擎直接判定 `verdict="FAIL"` 并标记 `forbidden_facts_violation`，执行**一票否决**，结果直落质检报告表 `cs_qa_reports`。
