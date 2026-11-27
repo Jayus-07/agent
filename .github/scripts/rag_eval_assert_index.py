@@ -7,13 +7,8 @@ import psycopg
 
 def main() -> None:
     expected_dims = int(os.getenv("PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS", "1024"))
-    conn = psycopg.connect(
-        host="localhost",
-        port=5432,
-        user="postgres",
-        password="postgres",
-        dbname=os.environ["MEMORY_PGDATABASE"],
-    )
+    # 自动复用环境变量中的 PGHOST, PGPORT, PGUSER, PGPASSWORD
+    conn = psycopg.connect(dbname=os.environ["MEMORY_PGDATABASE"])
     try:
         with conn.cursor() as cur:
             cur.execute(

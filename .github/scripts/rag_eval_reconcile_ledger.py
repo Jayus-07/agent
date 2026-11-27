@@ -9,13 +9,8 @@ import psycopg
 
 def main() -> None:
     try:
-        conn = psycopg.connect(
-            host="localhost",
-            port=5432,
-            user="postgres",
-            password="postgres",
-            dbname=os.environ["MEMORY_PGDATABASE"],
-        )
+        # 自动复用环境变量中的 PGHOST, PGPORT, PGUSER, PGPASSWORD
+        conn = psycopg.connect(dbname=os.environ["MEMORY_PGDATABASE"])
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT component, model, provider, cost_status, pricing_source, count(*), "
