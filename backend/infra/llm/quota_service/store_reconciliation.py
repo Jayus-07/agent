@@ -14,10 +14,9 @@ from .models import (
     QuotaConfigurationError,
 )
 from .dynamic import (
-    current_record_quota_metric as _record_quota_metric,
-)
-from .dynamic import (
     current_budget_periods as budget_periods,
+    current_insert_threshold_events as _insert_threshold_events,
+    current_record_quota_metric as _record_quota_metric,
 )
 
 
