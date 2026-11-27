@@ -556,9 +556,13 @@ export default function CustomerServicePage() {
   const collapsedMessageCount = collapseMobileHistory
     ? draft.messages.length - MOBILE_HISTORY_VISIBLE_COUNT
     : 0
-  const pinnedOrderMessage = collapseMobileHistory
-    ? [...draft.messages.slice(0, collapsedMessageCount)].reverse().find((message) => orderRefOf(message))
-    : undefined
+  const latestOrderMessage = [...draft.messages].reverse().find((message) => orderRefOf(message))
+  const pinnedOrderMessage =
+    collapseMobileHistory &&
+    latestOrderMessage &&
+    draft.messages.indexOf(latestOrderMessage) < collapsedMessageCount
+      ? latestOrderMessage
+      : undefined
 
   return (
     <div className="flex h-screen flex-col bg-slate-100">
