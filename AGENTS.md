@@ -133,7 +133,7 @@
 5. 禁止强制清理、覆盖其他任务修改或操作共享数据库；涉及冲突先报告。
 6. 所有改动一律走 PR 合并 main（含自己开分支自己合），让 PR 预检覆盖 100% 变更（历史盘点：绕过 PR 的直推是测试/CI 漂移的主要入口）。
 7. 新功能/链路环节合入时，同步把对应测试加进 rag_smoke 定向清单（.github/workflows/rag_smoke.yml），并遵守「改常量→同步守卫断言、删模块→删测试、加依赖→重新 lock、换评测数据→对齐 CI 引用」；全量健康度由每周 Full Regression workflow 监控（失败告警不挡合并）。
-8. **工作树收尾必须有可复核结果**：任务开始和准备结束时都运行 `scripts/worktree_lifecycle.ps1 -Action Audit -RefreshRemote`，按输出逐棵区分主工作树、仍有改动、未证明合并、已合并且干净。PR 合并后，仅在改动与忽略文件已检查、证据已保留、确认无人使用时才运行 `-Action Remove -Path <工作树路径> -Apply -ConfirmInactive`；仅当 Git 能安全确认已合并时才加 `-DeleteBranch`，禁止强删。删除后运行 `-Action VerifyCloseout -Path <已删除路径>`；用户要求只留 main 时额外加 `-RequireOnlyMain`。检查未通过报 `BLOCKED` 并列明原因，不得写成已收尾；脚本默认只盘点，不自动删除、归档证据或同步 main。
+8. **工作树收尾必须有可复核结果**：任务开始和准备结束时都运行 `scripts/worktree_lifecycle.ps1 -Action Audit -RefreshRemote`，按输出逐棵区分主工作树、仍有改动、未证明合并、已合并且干净。PR 合并后，仅在改动与忽略文件已检查、证据已保留、确认无人使用时才运行 `-Action Remove -Path <工作树路径> -Apply -ConfirmInactive`；仅当 Git 能安全确认已合并时才加 `-DeleteBranch`（针对经由 PR 确证通过 Squash Merge 合入的分支，可追加 `-AllowSquashDelete` 允许安全清理本地任务分支），禁止强删。删除后运行 `-Action VerifyCloseout -Path <已删除路径>`；用户要求只留 main 时额外加 `-RequireOnlyMain`。检查未通过报 `BLOCKED` 并列明原因，不得写成已收尾；脚本默认只盘点，不自动删除、归档证据或同步 main。
 
 原则：**独立任务、独立工作树、统一合并、安全清理。**
 

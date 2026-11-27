@@ -39,7 +39,7 @@ jobs:
     timeout-minutes: 150
     steps:
       - name: Checkout source
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
 
@@ -183,7 +183,7 @@ jobs:
           PY
 
       - name: Upload release manifest
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: production-image-digests
           path: production-image-digests.json
