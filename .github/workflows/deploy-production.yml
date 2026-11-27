@@ -20,7 +20,7 @@ permissions:
 
 concurrency:
   group: deploy-production
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   verify-release:

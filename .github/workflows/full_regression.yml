@@ -17,6 +17,10 @@ on:
         default: ""
         required: false
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   matrix-coverage:
     runs-on: ubuntu-latest
@@ -244,6 +248,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Suite result table
         env:
           NEEDS: ${{ toJSON(needs.*) }}
@@ -263,3 +268,11 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
               f.write("\n".join(lines) + "\n")
           PY
+      - name: Create regression issue on failure
+        if: failure() || contains(needs.*.result, 'failure')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEEDS: ${{ toJSON(needs.*) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: python .github/scripts/create_regression_issue.py
