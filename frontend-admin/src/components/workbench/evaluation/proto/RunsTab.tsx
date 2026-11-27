@@ -341,7 +341,7 @@ export default function RunsTab({
       if (targetDomain === 'rag' && !suiteKbId.trim()) {
         throw new Error('RAG 域评测方案必须指定知识库标识。')
       }
-      const requestId = createIdempotencyKey('v2_run')
+      const requestId = createIdempotencyKey()
       const response = await evaluationService.createV2Run({
         suite_version_id: suiteVersionId,
         source: 'eval-center',

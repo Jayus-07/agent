@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/client'
-import { evaluationService } from '@/api/evaluation'
+import { evaluationService, type EvaluationV2Run } from '@/api/evaluation'
 import EvaluationV2RunCaseDetailButton from '../EvaluationV2RunCaseDetailButton'
 import RunsTab from './RunsTab'
 
