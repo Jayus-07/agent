@@ -542,3 +542,67 @@ it('发起评测表单挂载 RAG 五维黄金指标与联合 Ragas 可选评测�
     await cleanup(root, container, queryClient)
   }
 })
+
+it('支持选择评测方案套件并一键发起 V2 综合评测运行', async () => {
+  ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([
+    {
+      suite_id: 'suite-smoke',
+      suite_version_id: 'ver-smoke-1',
+      name: '链路冒烟方案',
+      version: '1',
+      module: 'rag',
+      case_count: 5,
+      kb_id: 'rag_eval_kb',
+      dataset_version: 'ds-v1',
+      thresholds: { pass_rate: 0.9 },
+    } as unknown as Awaited<ReturnType<typeof evaluationService.listSuites>>[number],
+  ])
+  const createV2 = vi.spyOn(evaluationService, 'createV2Run').mockResolvedValue({
+    run: {
+      run_id: 'v2-run-test-id-12345678',
+      suite_version_id: 'ver-smoke-1',
+      module: 'rag',
+      job_status: 'running',
+      total_cases: 5,
+      completed_cases: 0,
+      passed_cases: 0,
+      evaluation_mode: 'offline',
+      prompt_versions: {},
+      created_by: 'super_admin',
+      created_at: '2026-11-27T10:00:00Z',
+    } as EvaluationV2Run,
+    task: {},
+    reused: false,
+  })
+
+  const { root, container, queryClient } = await mountRunsTab({
+    suiteVersionPrefill: 'ver-smoke-1',
+  })
+  try {
+    const suiteSelect = container.querySelector('[aria-label="选择评测方案"]') as HTMLSelectElement
+    expect(suiteSelect).not.toBeNull()
+    expect(suiteSelect.value).toBe('ver-smoke-1')
+
+    const kbInput = container.querySelector('[aria-label="知识库标识"]') as HTMLInputElement
+    expect(kbInput).not.toBeNull()
+    expect(kbInput.value).toBe('rag_eval_kb')
+
+    await clickText(container, '启动方案评测')
+    expect(createV2).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suite_version_id: 'ver-smoke-1',
+        kb_id: 'rag_eval_kb',
+        evaluation_mode: 'offline',
+      })
+    )
+
+    await flushQueries()
+    // 发起成功自动切执行记录
+    expect((container.querySelectorAll('button[role="tab"]')[1] as HTMLButtonElement).getAttribute('aria-selected')).toBe('true')
+  } finally {
+    await cleanup(root, container, queryClient)
+  }
+})
