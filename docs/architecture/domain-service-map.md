@@ -36,7 +36,8 @@
 
 - 服务装配：backend/app/api/router.py
 - Capability 与 Tool 治理：backend/orchestration/router/capabilities.yaml、backend/core/tool_governance/
-- 模型网关：backend/infra/llm/
+- 统一大模型网关：backend/infra/llm/gateway/（PR #573 六大职责子包）
+- 动态 MCP 能力中心：backend/mcp/、mcp_servers/（高德地图 MCP、小红书攻略 MCP）
 - 认证身份：backend/security/、backend/app/api/
 - 业务域源码与测试：backend/<domain>/、backend/tests/<domain>/
 

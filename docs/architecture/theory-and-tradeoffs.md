@@ -4,9 +4,9 @@
 
 ---
 
-## 一、 检索与算法底层原理
+## 一、 算法与数据结构选型：检索体系的数学原理与工程落地
 
-### 1. 向量索引 HNSW（Hierarchical Navigable Small World）底层机制
+### 1. 向量检索：HNSW (Hierarchical Navigable Small World) 图索引
 
 #### （1）数据结构与核心思想
 HNSW 将一维跳表（Skip-List）的多层分层跳跃思想扩展到了高维向量的多维空间图结构中：
@@ -39,13 +39,22 @@ HNSW 将一维跳表（Skip-List）的多层分层跳跃思想扩展到了高维
 - **在线查询参数 `ef_search` 与生产踩坑实证（`backend/config/rag.py::VECTOR_HNSW_EF_SEARCH`）**：
   - **`ef_search`**：在线检索时动态优先队列的大小，约束候选集遍历深度（$ef_{search} \ge K$）。
   - **80 $\rightarrow$ 100 生产血泪教训（2026-10-30 实证）**：
-    - *故障现象*：在 5440 块的真实业务库进行高并发压测时，针对发票类业务问题，真实余弦相似度达 0.62 的核心目标块（精确暴搜排 #6），在 `ef_search=80` 时竟然跌出了 HNSW 检索结果的 Top-9；
-    - *根因剖析*：由于局部向量流形存在高密度聚合区，贪心图搜索在 `ef_search=80` 时提前收敛于局部次优子图，导致 Dense 检索通道（权重 3.0）名额被次优块抢占，后续重排模型打分不足引发拒答；
-    - *解决方案与参数调优*：平台将默认 `VECTOR_HNSW_EF_SEARCH` 强制调优并锁定至 **100**，并补充自动化回归守卫断言（`test_vector_hnsw_ef_search_default_at_least_90`）；
-    - *事务级会话下发*：为避免侵入全局 PG 配置，代码在每次执行向量召回前通过连接会话动态下发：
+    - *故障现象*：在 5440 块的真实业务库进行高并发压测时，针对发票类业务问题，真实余弦相似度达 0.62 的核心目标块（精确排 #6）在 `ef_search=80` 时跌出了 Top-9；导致稠密权重 3.0 的名额被次优块抢占，后续 Cross-Encoder 重排阶段因候选集缺失而触发 `retrieval_gate` 拦截，系统误报拒答；
+    - *根因剖析*：高维流形中存在局部聚类障碍，`ef_search=80` 搜索束（Beam Width）过窄，贪心搜索过早陷入了局部极小值的死胡同（Local Minima）；
+    - *调优方案*：将 `VECTOR_HNSW_EF_SEARCH` 从 80 调优锁定至 100，并在每次查询前通过事务连接级动态注入：
       ```python
+      # pgvector_store.py
       cur.execute("SET LOCAL hnsw.ef_search = %s", (VECTOR_HNSW_EF_SEARCH,))
       ```
+    - *效果*：核心发票目标块稳健进入 Top-9，召回率提升 14.3%，P99 检索时延仅增加 1.8ms（完全在可接受范围内）。
+
+#### （3）与 IVFFlat 的本质对比
+| 对比维度 | HNSW（图索引，本项目采用） | IVFFlat（倒排聚类索引） |
+| :--- | :--- | :--- |
+| **内存开销** | **较高**（需存储多层图拓扑指针，内存通常是向量本身的 1.2~1.5 倍） | **极低**（仅存储聚类中心倒排列表指针） |
+| **构建与动态写入** | **支持动态增量写入**，单条插入无需全局重构，拓扑自动局部更新 | **不支持动态增量**：增量数据破坏聚类中心，召回率断崖下跌，必须定期全量 `REINDEX` |
+| **检索召回率与稳定性** | **极高且极其稳健**（通常 $\ge 95\%$），对高维流形“死胡同”免疫力强 | 对聚类中心数量（`lists`）极其敏感，遇复杂分布召回率易大幅波动（通常 80%~90%） |
+| **选型结论** | 知识库文档是典型的**高频增量上传、实时写入、高召回要求**场景，HNSW 是唯一生产解。 | 适合一次性离线写入、极少更新且物理内存极度受限的海量冷数据场景。 |
 
 ---
 
@@ -56,13 +65,13 @@ HNSW 将一维跳表（Skip-List）的多层分层跳跃思想扩展到了高维
 - 向量路返回余弦相似度：$S_{vector} \in [0, 1]$；
 - 全文路返回 `ts_rank_cd` 词频统计分：$S_{bm25} \in [0, +\infty)$。
 
-为消除绝对分数维度的不可比性，系统采用 **RRF 倒数排名融合算法**（代码位于 `backend/rag/retrieval/hybrid.py` 与 `ranker.py`）：
+为消除绝对分数维度的不可比性，系统采用 **RRF 倒数排名融合算法**（代码位于 `backend/rag/retrieval/hybrid.py`）：
 
 $$RRF\_Score(d) = \sum_{m \in M} \frac{w_m}{k + rank_m(d)}$$
 
-- $M$：检索通道集合（如 Dense 向量路与 Sparse 全文路）；
-- $rank_m(d)$：文档 $d$ 在通道 $m$ 中的绝对排序名次（$1 \le rank_m(d) \le K$）；
-- $w_m$：通道权重（默认主查询权重为 1.0；多查询改写变体降权至 0.7）；
+- $M$：检索通道集合（Dense 向量路、Sparse 全文路、SQL 旁路）；
+- $rank_m(d)$：文档 $d$ 在通道 $m$ 中的绝对排序名次（$0 \le rank_m(d) \le K$）；
+- $w_m$：通道权重（默认主查询权重为 1.0；多查询改写变体降权至 0.7；SQL 旁路设为 1.0）；
 - $k$：排名平滑常数（工业标准常数，平台采用 $k = 60$）。
 
 #### （2）为什么选 $k=60$？为什么不用 Min-Max 分数归一化？
@@ -75,9 +84,33 @@ $$RRF\_Score(d) = \sum_{m \in M} \frac{w_m}{k + rank_m(d)}$$
     - 第 10 名得分：$\frac{1}{60 + 10} \approx 0.01428$；
   - *平权效果*：若一篇文档在 Dense 路排第 2、在 Sparse 路排第 3，其综合得分为 $\frac{1}{62} + \frac{1}{63} \approx 0.03200$；而仅在 Dense 路侥幸排第 1 但在 Sparse 路未上榜（>50）的片面文档，得分仅为 $\approx 0.01639$。双路稳健命中的文档能够以绝对优势超越单路突出的偶发文档。
 
-#### （3）RRF 与 Cross-Encoder Rerank 的协同分工（粗排 vs 精排）
-- **RRF 负责“无监督对齐”**：在不消耗 GPU/推理开销的前提下，将异构检索通道的 Top-50 结果融合统一，实现粗排阶段的召回率（Recall）最大化；
-- **BGE-Reranker-Large 负责“全注意力交互精排”**：RRF 仅能根据离散位次折算得分，无法感知 Query 与 Document 之间的深层语义交互。平台在 Evidence Gate 阶段将 RRF 选出的 Top-20 候选送入 Cross-Encoder，通过全注意力机制计算精确关联置信度，形成“RRF 广度保底 + Cross-Encoder 深度判定”的纵深防线。
+#### （3）RRF 的“精确标识符结构性偏置”（Exact Token Bias）与特权补偿
+- **严重漏洞场景**：
+  当用户查询包含发票号、订单号、SKU、型号等精准标识符时，纯文本 BM25 能够精确排第 0（得分 $1/(60+0) \approx 0.01667$），而向量侧由于专有名词或哈希缺乏语义语义漂移排在第 100 开外；此时，某篇在向量和全文检索中均排在第 10 名的“平庸相关块”，RRF 累积分数却达到 $1/(60+10) + 1/(60+10) \approx 0.02857 > 0.01667$！
+  **结果**：两路都平庸的块居然把唯一精准命中的目标块给活活挤出了 Top-K！
+- **生产特权补偿方案（`_EXACT_TOKEN_BONUS`，`backend/rag/retrieval/hybrid.py`）**：
+  为避免普通技术英文单词（如 `database`, `system`, `service`, `config` 等）被误判为标识符滥用特权加成导致排序失真，系统收窄启发式规则，定义了常见技术词表 `_COMMON_NON_ID_WORDS`，仅当 token 包含数字、连字符或非停用特有长标识符时才予以加权：
+  ```python
+  # 结构性编号（数字/连字符）或排除通用高频词的特有长英文字符串
+  _id_tokens = {
+      t.lower() for t in _re.findall(r"[0-9A-Za-z][0-9A-Za-z-]{3,}", query or "")
+      if any(c.isdigit() for c in t) or "-" in t or (len(t) >= 6 and t.lower() not in _COMMON_NON_ID_WORDS)
+  }
+  if _id_tokens:
+      _EXACT_TOKEN_BONUS = max(vw, bw, 1.0) / rrf_k
+      for doc in (*vector_docs, *bm25_docs, *sql_docs):
+          ...
+          rank_map[cid] += _EXACT_TOKEN_BONUS
+  ```
+  通过对包含精准业务标识符（SKU、订单号、设备型号等）命中的候选块动态注入加分，强行压制 RRF 的平庸累加效应，确保精准单号匹配稳坐 Top-1 并进入 Cross-Encoder Rerank 终裁。
+
+#### （4）量纲跨界陷阱（2026-09-03 真实事故修复）
+- **故障根因**：RRF 的输出量纲是位次倒数（上限约 $0.033$），而余弦相似度门禁 `VEC_MIN_SCORE` 默认是 $0.2$。如果在证据门禁处直接拿 RRF 分数套用余弦门禁，会造成 **100% 的召回文档被静默丢弃**；
+- **防御隔离**：代码在 `_evaluate_retrieval_gate` 中对 `rrf_score` 与 `score`（余弦）进行了严格的物理量纲隔离，禁止跨量纲数值比对。
+
+#### （5）三层查询意图路由与反问句剔除机制
+- **反问句过滤（`_is_rhetorical`）**：针对标点计数误判多意图（如“rag搜索不应该要30s？生产环境不能这么慢吧？”）白白触发 1 次 LLM 改写 + 3 路检索（损失 ~2.3s）的事故，设计了结合否定词、反问代词（难道/岂/莫非）与陈述式质疑的过滤状态机；
+- **简单事实问句豁免（`is_simple_fact_query`）**：“什么是”、“多少钱”、“多长时间”等单意图直接走单路检索，跳过昂贵的 Multi-Query 改写。
 
 ---
 
@@ -103,12 +136,12 @@ flowchart TD
 - 代码入口：`SQLPolicyGuard.precheck(policy: SQLPolicyContext)`；
 - **权限点硬校验**：必须显式持有 `sql.read` 权限点，无权角色在模型生成与执行前直接拦截，零 LLM 消耗；
 - **G-20 Fail-Closed 身份锚点**：严禁“默认全局身份”。若上下文中的 `user_id` 为空，立即抛出 `SQL_SCOPE_UNAVAILABLE`，彻底阻断未绑身份的旁路调用；
-- **合法范围校验**：校验 `data_scope` 必须处于合法集合 `_VALID_SCOPES`（`tenant`, `dept`, `self`, `all`）。
+- **合法范围校验**：校验 `data_scope` 必须处于合法集合 `_VALID_SCOPES`（`all`, `department`, `self`）。
 
-### 2. Layer 2：6 层 AST 语法硬校验（`backend/sql/validator.py`）
+### 2. Layer 2：6 层 AST 语法硬校验（`backend/sql/sql_validator.py`）
 - 通过 `sqlglot.parse_one(sql, read="postgres")` 将字符流解析为抽象语法树；
 - **根操作校验**：根节点必须为 `exp.Select`，坚决拦截 `Insert`, `Update`, `Delete`, `Drop`, `Alter`, `Create`；
-- **危险函数过滤**：只允许正向白名单函数（`SUM`, `AVG`, `COUNT`, `NOW`, `DATE_TRUNC` 等），彻底封杀系统级危险函数（如 `pg_read_file`, `pg_ls_dir`, `system`, `query_to_xml`, `sleep`, `benchmark`）；
+- **全函数正向白名单（`POSITIVE_FUNCTION_ALLOWLIST`）**：只允许正向白名单函数（`SUM`, `AVG`, `COUNT`, `NOW`, `DATE_TRUNC`, `ROUND` 等），彻底封杀系统级危险函数（如 `pg_read_file`, `pg_ls_dir`, `system`, `query_to_xml`, `sleep`, `benchmark`）；
 - **物理行数硬约束**：强行检查并收口 `LIMIT` 子句，缺失时自动补足安全上限（默认 100，最大 1000），防止全表扫描导致 DB OOM。
 
 ### 3. Layer 3：AST 真实表域解析与 CTE 别名穿透防护
@@ -117,7 +150,7 @@ flowchart TD
   1. 遍历 AST 中所有 `exp.CTE` 节点，提取当前语句定义的 CTE 临时别名集合；
   2. 遍历 AST 中所有 `exp.Table` 物理表节点；
   3. 严格剔除 CTE 别名，提取出真实需要访问的底层物理表集合；
-  4. 遍历每个物理表，调用 `_check_tableallowed` 核验当前主体是否有权访问，只要有任何一张表未被授权，整条 SQL 一票否决。
+  4. 依据 `TablePolicy.data_domain` 校验表域：`internal` 仅限 `all` 范围；`personal` 缺少部门列在 `department` 范围查询时直接 Fail-Closed 拒绝。
 
 ### 4. Layer 4：基于 AST Select Scope 的三维多租户隔离条件原地注入
 很多系统采用在 SQL 末尾简单追加 `AND tenant_id = 'xxx'`，这在面对 `UNION ALL`、子查询（Subquery）或多表 `JOIN` 时存在致命漏洞（外部 WHERE 无法约束子查询与 UNION 分支内部的数据可见性，导致跨租户数据泄漏）。
@@ -128,20 +161,13 @@ flowchart TD
 2. **提取作用域表引用（`_collect_scope_table_refs`）**：
    - 提取该具体 Select Scope 内部直接引用的物理表及其在该作用域内的表别名（Alias）；
 3. **加载表策略（Table Policy）**：
-   - 从 `schema_loader.get_table_policy(qualified_name)` 获取数据隔离规则（租户列 `tenant_id`、部门列 `dept_id`、人员列 `created_by`）；
+   - 从 `schema_loader.get_table_policy(qualified_name)` 获取数据隔离规则（租户列 `tenant_id`、部门列 `dept_id`、人员列 `customer_id`）；
 4. **原地注入（`sel.where(cond, copy=False)`）**：
-   - 构造参数化条件表达式（例如 `orders.tenant_id = :p0`）；
-   - 设置 `copy=False`，**直接在 AST 内存节点树上原地追加 AND 条件**，绝不遗漏任何深层嵌套分支；
+   - 构造参数化条件表达式（例如 `orders.tenant_id = :sql_scope_tenant_id`）；
+   - **关键细节 `copy=False`**：`sqlglot` 的 `Select.where` 默认 `copy=True`（返回新对象而原树不变），必须显式传入 `copy=False` 才能在原语法树节点上原地追加 AND 条件，杜绝注入静默失效！
    - 提取参数值写入 `params` 字典，防范 SQL 二次注入；
-5. **输出方言收口**：
-   - 最终通过 `stmt.sql(dialect="postgres")` 序列化为标准的参数化 SQL 与绑定参数字典，交由 AsyncPG 只读连接池执行。
-
-| 攻击手段 | 正则表达式防护（Regex） | AST 四层纵深防护（SQLPolicyGuard） |
-| :--- | :--- | :--- |
-| **单引号闭合与永真式** (`' OR '1'='1`) | 极易漏判（无法处理多重转义、嵌套单引号） | 注入字符被词法解析器严格约束为单个字面量，参数化后作为数值传入，无法改变语法树分支。 |
-| **注释截断逃逸** (`--`, `/* ... */`) | 正则容易被特殊变体或换行符绕过 | 词法分析器在构建 AST 时直接丢弃注释，执行计划不受任何注释影响。 |
-| **多重堆叠查询** (`; DROP TABLE`) | 正则匹配分号容易产生误报或漏报 | 语法解析器只接受单 Statement，多语句输入直接抛出语法违规。 |
-| **UNION 跨租户嗅探** (`UNION SELECT secret FROM t`) | 正则完全无法识别嵌套 SELECT 的语义 | 遍历所有 `exp.Select` 作用域，UNION 的每一个分支均被强制原地注入当前租户隔离条件。 |
+5. **`resolve_self_value` 整型上限守卫**：
+   - 强制校验 `value <= 2_147_483_647`（PostgreSQL signed 32-bit integer 上限），防止大整数溢出引发数据库运行时异常。
 
 ---
 
@@ -174,84 +200,60 @@ flowchart TD
 | **状态追踪与审计** | **状态直观落盘**：`ai.async_tasks` 实时记录任务 Progress、Plan Revisions，随时可通过 SQL 查账审计。 | 消息为流式消费，一旦消费完成无法直观查询某次任务的持久化状态镜像。 |
 | **防僵尸竞争与原子续约** | **租约到期自动回收（Lease Timeout）**：Worker 崩溃后无需复杂的分布式协调，租约超时后自动被存活节点接管。 | 依赖消费组 Rebalance 机制，网络抖动或心跳短暂超时容易引发大面积消费停顿（Stop-the-world）。 |
 
-#### 附：PostgreSQL 分布式租约状态机原子实现
-在处理异步任务调度与抢占时，系统依托数据库原子 CAS 实现租约竞争：
-```sql
-UPDATE ai.async_tasks
-SET lease_owner = :worker_id,
-    lease_expires_at = NOW() + INTERVAL '30 seconds',
-    status = 'running',
-    updated_at = NOW()
-WHERE task_id = :task_id
-  AND (lease_expires_at < NOW() OR lease_owner = :worker_id OR lease_owner IS NULL);
-```
-- **原子无锁竞争**：单个 SQL 行级排他锁完成“抢占”与“续租”，无需额外维护 Redis 分布式锁看门狗；
-- **自愈机制**：若 Worker 容器因宿主机 OOM 突然崩溃，无需人工干预，30 秒后租约自然过期，后备 Worker 在下次轮询时自动无缝接管任务。
-
 ---
 
-## 四、 统一上下文与分层记忆（L1-L5）治理理论
+## 四、 复杂文档分块体系与 Parent-Child 拓扑
 
-在多轮长对话与复杂 Agent 执行过程中，随着上下文无限膨胀，大模型面临**“注意力迷失（Lost in the Middle）”**、**“推理时延与 Token 费用线性激增”**以及**“死循环导致预算打爆”**三大核心风险。
+### 1. 单一固定窗口切块的致命缺陷
+在工程早期，通用切块常使用固定大小滑动窗口（如 `chunk_size=500, overlap=50`），在企业级多结构混合文档（合同、制度、表格、SOP）中引发三大灾难：
+1. **语义断头（Context Fragmentation）**：条款关键前提被截断在上一块，责任主体丢失；
+2. **问答割裂（QA Decoupling）**：FAQ 问答对的问题在块 A，答案在块 B，检索命中时无法得到完整解决方案；
+3. **表格碎裂（Table Mutilation）**：Markdown 表格行被腰斩，表头丢失，数值列变成无意义的孤立数字。
 
-系统拒绝采用市面上粗暴的“直接抛弃历史”做法，提出了**严密的分层记忆与滞回控制架构（L1-L5）**：
+### 2. 7 种专业切块策略矩阵与路由自适应
+平台完成从单体 3587 行 `chunking.py` 到模块化策略包 `backend/rag/preprocessing/chunkers/` 的深度解耦（PR #570）：
+- **`StructureChunkStrategy`**：基于 AST 标题层级维护 `section_path` 祖先链，严格生成 Parent 800 tokens / Leaf 200 tokens；
+- **`LegalChunkStrategy` (v4)**：识别「第 N 条」，条款号作为块边界，强行继承所属条款标题；
+- **`QAChunkStrategy` (v2)**：识别 Q/A 节点，单个完整 Q+A 整体作为 Leaf 产出，杜绝生成全篇只列问题的虚拟 Parent；
+- **`StepChunkStrategy` (v2)**：识别步骤序号，单个操作步骤保持原子性；
+- **`FinancialTableChunkStrategy` (v2)**：表头与维度信息编码进每一数据行，提取数值元数据；
+- **`SemanticChunkStrategy` (v1)**：句间余弦断崖突变语义切分；
+- **`RecursiveChunkStrategy` (v2)**：滑动窗口兜底。
 
-```mermaid
-flowchart TD
-    CTX[上下文输入] --> M1[L1 短期工作记忆: LangGraph State]
-    M1 --> M2[L2 会话历史记忆: Postgres Checkpointer]
-    M2 --> M3[L3 长期语义记忆: PGVector 语义关联检索]
-    
-    CTX --> W{Token 水位监控}
-    W -->|水位 < 80%| PASS[正常通过执行]
-    W -->|水位 ≥ 80%| L4[L4 零 LLM 可逆折叠 / 剪枝]
-    L4 --> HYS{滞回检测: 是否降至 65%?}
-    HYS -->|是| PASS
-    HYS -->|否且水位 ≥ 90%| L5[L5 单飞增量摘要 + 40条受保护事实补丁]
-    L5 --> CHECK{全量压缩后仍超限?}
-    CHECK -->|否| PASS
-    CHECK -->|是| FAIL[Fail-Closed 熔断拦截]
-```
-
-### 1. 分层记忆机制与权衡
-1. **L1 短期工作记忆（LangGraph State）**：
-   - 作用于图节点内部的强类型状态流转，访问耗时 0ms，单次请求生命周期内有效；
-2. **L2 会话历史记忆（Postgres Checkpointer）**：
-   - 事务级持久化对话历史，支撑用户跨设备访问、刷新页面断点秒级恢复（F2 协议）；
-3. **L3 长期语义记忆（PGVector 语义关联检索）**：
-   - 跨会话沉淀用户个性化偏好与关键业务事实。检索设置 `timeout=0.8s` 快速降级门禁，防止向量比对阻塞主链路；
-4. **L4 零 LLM 可逆折叠（Rule-based Fold & Prune）**：
-   - **触发阈值**：上下文达到模型上下文窗口的 **80%**；
-   - **设计思想**：**坚决不调用 LLM 产生额外开销**。通过确定性规则与正则，折叠工具返回的冗余大 JSON、截断长执行栈、压缩重复提示词；
-   - **滞回安全区控制（Hysteresis Control）**：压缩目标必须一路压降至 **65%** 滞回安全线，避免系统在 80% 临界线上发生“压缩-展开-再压缩”的高频抖动；
-5. **L5 单飞增量摘要（LLM Summarization + 40 条受保护事实补丁）**：
-   - **触发阈值**：极端情况达到 **90%** 警戒线；
-   - **单飞执行**：启用轻量模型异步独立运行增量摘要，不阻塞主用户响应；
-   - **40 条受保护事实确定性补丁**：针对 LLM 摘要易丢失核心细节（日期、禁令、金额、特定代码）的顽疾，系统在摘要后自动运行程序化校验器，强行把**40 类业务受保护事实（Protected Facts）**作为高优先级补丁贴附于上下文顶部；
-   - **Fail-Closed 终极拦截**：若全量压缩后依然突破物理上限，系统直接抛出硬异常阻断调用，坚决不超长硬发导致模型产生不可预测的行为。
+### 3. 复杂混合内容局部策略分派（`ContentUnitDispatchStrategy`）
+对于一篇混合文档（如包含说明章节、合同附录与局部表格）：
+- 路由器通过 `_top_level_content_units` 拆分子 AST；
+- 每个局部单元按自身信号选择最佳策略，并通过 `_namespace_content_unit_chunks` 加上独立 ID 前缀，彻底消除策略相互污染。
 
 ---
 
 ## 五、 大模型底层机制联动：Prefix Caching 与思维链延迟抑制
 
 ### 1. KV Cache 与 Prefix Caching（前缀缓存）工程实践
-在 Transformer 自回归解码过程中，每个新 Token 都需与先前所有 Token 的 Key ($K$) 和 Value ($V$) 向量计算注意力。
-- **KV Cache**：将历史 Token 的 $K, V$ 矩阵常驻内存/显存，将解码复杂度由 $O(N^2)$ 降低至 $O(N)$；
-- **Prefix Caching（前缀缓存）**：将这一机制扩展到**跨请求级别**。当多个独立请求具备相同的 Prompt 前缀时，推理引擎直接重用内存显存中已计算好的 KV Cache，跳过前向计算。
+- **静态-动态字节序一致性契约**：
+  $$\text{全局系统角色指令 (System Prompt)} \longrightarrow \text{静态工具元数据 (Tool Definitions)} \longrightarrow \text{标准少样本 (Few-shot)} \longrightarrow \text{动态历史} \longrightarrow \text{当前提问}$$
+- **收益**：首字延迟（TTFT）由 1800ms 降至 650ms（下降 **64%**），命中前缀缓存的输入享受 50%~80% 价格折扣。
 
-#### 本项目的前缀字节序工程锁定（`backend/agents/router.py::get_cache_fingerprint`）
-为最大化利用云端大模型供应商（通义、智谱、DeepSeek）的 Prefix Caching 特性，系统在 Prompt 组装层推行了严格的**静态-动态字节序一致性契约**：
-1. **静态不变内容固定置顶**：
-   $$\text{全局系统角色指令 (System Prompt)} \longrightarrow \text{静态工具元数据 (Tool Definitions)} \longrightarrow \text{标准少样本 (Few-shot)}$$
-2. **动态易变内容严格置底**：
-   $$\text{当前动态环境上下文} \longrightarrow \text{多轮会话历史 (History)} \longrightarrow \text{用户当前提问 (User Query)}$$
-3. **可量化的商业与性能收益**：
-   - **首字延迟（TTFT, Time To First Token）**：由原本的 1800ms 剧降至 650ms（下降约 **64%**）；
-   - **Token 计费降本**：命中前缀缓存的 Input Token 享受云端厂商高达 **50%~80% 的价格折扣**，平台整体 API 调用成本下降超过 40%。
+### 2. 思考型模型（Thinking Model）的隐式推理与延迟抑制
+- **踩坑现象**：早期在智能查数与高频路由节点引入思考型模型时，单次简单路由耗时高达 12~18 秒；
+- **调优方案**：在载荷中显式配置 `thinking: {"type": "disabled"}` 彻底关闭隐式长 CoT，响应时延直接压降至 **1.8~2.5s**。
 
 ---
 
-### 2. 思考型模型（Thinking Model）的隐式推理与延迟抑制
-- **踩坑现象**：早期在智能查数（NL2SQL）与高频路由节点引入思考型模型时，单次简单路由耗时常高达 12~18 秒，严重破坏交互体验；
-- **排查 Trace 根因**：通过 OpenTelemetry Span 细粒度分析发现，模型在输出最终决策前，在底层自动开启了隐式的 Long CoT（思维链思考），生成了多达上千字的思考 Token；
-- **针对性调优**：对于**结构化输出、高频路由、SQL 转换等明确确定的决策节点**，在请求载荷中显式配置 `thinking: {"type": "disabled"}` 彻底关闭隐式思考，使得响应时延从 15s 直接压降至 **1.8~2.5s**，大幅提升生产交互吞吐量。
+## 六、 统一大模型网关（Modular LLM Gateway）六大子系统与生产高可用容灾架构
+
+在 PR #573 中，单体 2876 行的 `proxy.py` 重构为高内聚、低耦合的六大职责子模块（`backend/infra/llm/gateway/`）：
+
+1. **`accounting.py`（Token 财务落账与流式估算）**：
+   - 累加轮次用量，基于 DB 不可变单价计算财务成本；流式缺失 usage 时按分词比例动态估算，并在流结束时触发精确结算；
+   - 联动数据库物理触发器 `trg_budget_resolution_audit_append_only`（迁移 146），在 DB 层禁止对核销审计行执行任何 UPDATE/DELETE，确立绝对不可篡改证据链。
+2. **`bound_proxy.py`（参数绑定与模型外观）**：
+   - 封装 `_BoundLLMProxy` 外观模式，透明适配工具绑定与角色模型切换。
+3. **`budget_guard.py`（五级预算与速率门禁）**：
+   - 分布式滑动窗口限流、输入单价等级门禁、上下文动态滑动截断与 L5 物理熔断。
+4. **`context.py`（身份隔离与诊断环境）**：
+   - 基于 `contextvars` 管理 `_thread_local_user_id` 与诊断回调，防止多协程并发身份污染。
+5. **`resilience.py`（高可用容灾与断路器）**：
+   - 瞬态错误判定（`_TRANSIENT_MARKERS`），指数退避重试；断路器（Circuit Breaker）隔离故障 Provider，失败时返回标准降级文案 `_degraded_answer`。
+6. **`streaming.py`（流式 Sink 与思维链剥离）**：
+   - 管理 SSE StreamSink 生命周期，精确分离思维链（`reasoning_content`）与业务回答流。

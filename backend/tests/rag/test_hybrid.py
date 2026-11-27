@@ -187,3 +187,26 @@ def test_identifier_exact_hit_boost_rescues_bm25_unique_row(monkeypatch):
 
     ids = [d.metadata["chunk_id"] for d in result]
     assert "b-exact" in ids, f"精确行必须进入 rerank 视野，实际: {ids}"
+
+
+def test_common_words_do_not_trigger_id_bonus(monkeypatch):
+    """验证常见英文词（如 database/system/service）不会被误作为业务精确标识符触发加权。"""
+    collector = MagicMock()
+    monkeypatch.setattr("backend.rag.retrieval.hybrid.get_trace_collector", lambda: collector)
+
+    # 构造文档
+    d1 = _doc({"chunk_id": "c1", "doc_id": "d1"})
+    d1.page_content = "This document discusses database and system architecture."
+    d2 = _doc({"chunk_id": "c2", "doc_id": "d2"})
+    d2.page_content = "Other content without keywords."
+
+    vector = MagicMock()
+    vector.retrieve.return_value = [d2, d1]
+    bm25 = MagicMock()
+    bm25.invoke.return_value = [d2, d1]
+
+    # 查询包含常见词 database 和 system
+    result = _hybrid_retrieve_impl("Tell me about database and system", vector, bm25, k=2)
+    # 此时没有特权标识符加成，排序应保持原生融合结果（d2 在前，d1 在后）
+    assert result[0].metadata["chunk_id"] == "c2"
+    assert result[1].metadata["chunk_id"] == "c1"

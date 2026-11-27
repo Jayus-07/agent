@@ -100,7 +100,7 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 - Tracer: `backend/observability/tracer.py`（`TraceCollector`；`contextvars` + `bind_graph_node` / `set_scope_root` / `bind_external_parent_trace_id` 解决 LangGraph 并行与跨服务父子归因）
 - 持久化（主存储）: `backend/observability/trace_store_pg.py`（PostgreSQL 为唯一主存储；SQLite 轨已删除）
 - OTLP 镜像出口: `backend/observability/otel_exporter.py`（`OtelSpanMirror` 挂载在 `trace_collector` listener 回调，受 `OTEL_TRACE_OTLP_ENABLED` 与 `OTEL_EXPORTER_OTLP_ENDPOINT` 双开关控制，通过 `_ExplicitIdGenerator` + `ContextVar` 保持与自研 `trace_id`/`span_id` 确定性映射，异步 fire-and-forget 导出）
-- 统一 LLM Span 出口: `backend/observability/llm_call_span.py`（在 `_LLMProxy` 的 `_record_tokens` / `_settle_estimated_stream_usage` 统一生成 `llm_call` Span，与 `llm_usage` 同源同值不双计）
+- 统一 LLM Span 出口: `backend/observability/llm_call_span.py`（在统一网关 `backend/infra/llm/gateway/` 的 `accounting.py` 与 `streaming.py` 中通过 `_record_tokens` / `_settle_estimated_stream_usage` 统一生成 `llm_call` Span，与 `llm_usage` 同源同值不双计，并支持 TTFT 首字延迟归因与 `reasoning_content` 思维链耗时统计）
 - API: `backend/app/api/routes/observability.py`；DTO: `routes/_trace_dto.py`
 - 授权: `backend/app/api/routes/_trace_authz.py`
 - `knowledge_index` Trace 的标题和索引阶段 Span 名称使用正式逻辑路径中的文件名；候选索引不把随机暂存文件名作为页面标题。
