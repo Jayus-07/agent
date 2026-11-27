@@ -394,6 +394,12 @@ class PgVectorKnowledgeStore(KnowledgeStore):
                 discard = True
             raise
         finally:
+            if not discard and not getattr(conn, "closed", False):
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("RESET hnsw.ef_search;")
+                except Exception:
+                    discard = True
             self._pool.putconn(conn, close=discard)
 
     # ---- 建表（幂等）----

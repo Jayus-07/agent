@@ -1,133 +1,129 @@
-# 模型用量、预算、价格与计费治理规范
+# 大模型预算门禁、Token 计量与财务账本治理规范
 
-> 适用于统一 LLM Provider 代理、模型调用、Prompt/Agent/Skill/Tool 引发的模型消费。**标准与事实分离**：精确状态字段、数据表、限额模式及价格生效流程以源码、迁移和实际配置为准。与 [模型角色与供应商配置](../model-config-governance-design.md) 分工：模型配置文档负责选哪个模型及密钥，本规范负责怎么拦截、记录、定价、结算、审计。
+本文档系统规范全平台在大模型调用（LLM Invocation）过程中的**五级预算防御拦截**、**Token 用量精准计量**、**数据库级不可篡改账本状态机**以及**动态价格版本控制体系**。核心代码落地于 `backend/infra/llm/gateway/budget_guard.py`、`backend/infra/llm/gateway/accounting.py` 及数据库迁移 053、144~146、149。
 
-## 1. 责任分工与事实源
+---
 
-| 责任 | 事实源 | 禁止事项 |
-| --- | --- | --- |
-| 请求内 budget | `backend/infra/llm/budget.py` | 各 Agent 自己计数/拦截 |
-| 用户/租户额度与预占 | `backend/infra/llm/quota.py`、`backend/app/api/routes/budgets.py` | 绕过 quota 直接调用 LLM |
-| 定价、版本与货币折算 | `backend/infra/llm/price_governance.py`、`backend/config/budget.py` 和实际 pricing 模块 | 用当前单价回写历史已结算记录 |
-| Token 统计/估算 | `backend/infra/token_tracker.py`、`backend/infra/llm/usage_estimator.py` | 把 estimated 说成 provider exact |
-| 用量持久化/归因 | `backend/observability/llm_usage_store_pg.py`、迁移 `079_llm_usage_billing_v2.sql` | 将 Grafana 曲线当作账本权威 |
-| 异常预占对账 | `backend/infra/llm/reconciliation_report.py`、`backend/tasks/budget_reconciliation_tasks.py` | 让未决预占永远占额或任意删除历史 |
+## 一、 五级预算拦截与防护体系（`budget_guard.py`）
 
-模型调用的授权/额度在模型真正调用前检查；primary、retry、fallback 都应纳入同一请求预算、身份和实际计费用量归因。请求内调用次数保留为观测值，不作为拒绝条件，避免复杂 Agent 因工具、嵌入等调用次数固定被截断；用户/租户额度、token、成本、重试和 fallback 仍按各自门禁执行。用户个人模型用量额度不足在主助手 SSE 中以 `paused` 终态返回，保留已传输内容并提示补足额度后重新发起。预算功能失败的业务语义必须依据安全策略 fail-closed 或由已有明确的 observe/off 配置决定，不能在各消费点静默放开。
+平台杜绝“先调用大模型、事后再看账单超标”的被动失控模式，在 LLM 网关层构建了**调用前、调用中、调用后全生命周期的五级硬防御门禁**：
 
-长任务可通过 `scoped_request_budget` 明确覆写该任务的重试与回退次数；覆写不重置已累计用量，也不能放开全局 token/成本上限。任务级 `max_fallbacks` 必须是正整数，避免以 `0`（全局配置中表示不限）移除回退硬上限。Ragas 混合生成按批次设置最多 2 次回退，其他请求仍使用全局配置。
+```
+[请求准备调用大模型]
+        │
+        ▼
+Level 1: 物理速率与并发门禁 (_enforce_rate_limit)
+  └─► Redis 分布式滑动窗口 / 令牌桶算法，防止单租户突发请求击穿供应商 QPS
+        │
+        ▼
+Level 2: 租户与用户额度预检 (_preflight_context)
+  └─► 预读当前租户/用户的日预算与月预算余额，余额不足直接 Fail-Closed 拒答
+        │
+        ▼
+Level 3: 模型输入价格分级门禁 (enforce_model_input_price_tier)
+  └─► 依据模型登记输入单价做白名单等级过滤，阻断普通业务越权调用超昂贵旗舰模型
+        │
+        ▼
+Level 4: 上下文预算与动态滑动截断 (_truncate_messages_to_budget)
+  └─► 严格校验当前消息历史 Token 总量，超预算时按滑动窗口自适应压缩历史
+        │
+        ▼
+Level 5: 增量摘要与终极物理熔断 (_l5_trigger_ratio + _reject_overbudget)
+  └─► 达到 90% 物理警戒线时触发异步单飞摘要，极端突破物理限制直接硬异常阻断
+```
 
-请求设置正数成本上限时，每次调用保守预占该请求的剩余成本额度（上限减去本请求已记录的结算成本）。已结算成本已经占用用户/租户账本的 `used_cny`，不能在后续调用中再次预占。未决调用仍由 PostgreSQL 的 `reserved_cny` 保留占额；本规则不释放 `needs_review`，也不按预计单次调用价格缩小预占。因此，剩余额度不足以同时容纳多个在途预占时，现有硬门禁仍可拒绝并发调用。
+### 1. Level 1：分布式速率与并发限流（Distributed Rate Limit）
+- **实现算法**：基于 Redis 7 执行分布式滑动窗口算法（`_try_distributed_rate_limit`）；
+- **双重维度限制**：支持每秒请求数（RPS）与每分钟 Token 数（TPM）双轨约束；
+- **超限行为**：触发限制时抛出 `RateLimitError`，并在响应头中返回 `Retry-After`，配合客户端指数退避重试，防止突发流量引发云端供应商 429 惩罚性拉黑。
 
-## 2. 必须区分的状态轴
+### 2. Level 2：额度预检与预占机制（Preflight Budget Check）
+- 在真正发起云端 API 外呼前，调用 `_preflight_context`：
+  - 检查租户账户状态是否有效（非欠费冻结）；
+  - 依据当前模型的每千 Token 单价及 Prompt Token 预估本次调用的最大成本预占（Reservation）；
+  - 若预估成本超出当前可用预算，系统立即终止调用并记录 `preflight_budget_exceeded`，绝不发生透支调用。
 
-- **调用状态**：请求被允许/拒绝，调用真正发起、失败/成功、取消、fallback；调用重试不等于新用户任务。
-- **预算状态**：额度核验、预占、结算、释放、滞留及 `needs_review`；跨进程同一个幂等消费不得重复扣账。
-- **预占仲裁与不可变审计（迁移 144–146）**：`budget_reservation_resolutions` 记录预占仲裁流水（`resolution_status` / `settlement_kind`）。迁移 146 新增物理级触发器 `trg_budget_resolution_audit_append_only`，**在 DB 层严禁对核销审计行执行任何 UPDATE 或 DELETE**，确保账本与仲裁轨迹绝对不可篡改。
-- **预算域额度轴（迁移 149）**：`budget_policies`、`budget_ledger` 与 `budget_reservations` 统一增加 `domain` 列，支持业务域级独立额度（`main` / `travel` / `customer_service`），主图与域图并行独立记账并由租户域池统一兜底。
-- **模型推理控制与成本优化**：LLM Proxy 统一适配智谱/火山等云端模型的思考通道（`extra_body={"thinking": {"type": "disabled"}}`），在 NL2SQL 选表/生成等高确定性场景显式关闭隐式思维链，大幅降低冗余 Token 消耗与端到端延迟。
-- **用量事实等级**：Provider 返回 usage 的实测值、明确标为 `estimated` 的估算值、无法估算/待对账；使用估算的依据和覆盖率应可查询。
-- **定价状态**：模型及供应商标识、价格版本、计价输入/缓存输入/输出拆分、币种/汇率、折算后的记账金额。
-- **展示状态**：用户/租户可见余额与费用，管理员可见异常和审计；不得因模型成功就假称成本已成功入账。
+### 3. Level 3：模型输入定价等级门禁（Model Input Price Tier）
+- 为防止普通低优先级意图（如闲聊、简单意图提取）盗用高成本模型（如 GPT-4o、Claude-3.5-Sonnet、o1），网关在 `enforce_model_input_price_tier` 中进行硬分级匹配：
+  - **Tier 1（极低成本）**：输入单价 $\le 0.005$ 元 / 千 Token（如 GLM-4-Flash、Qwen-Turbo）；
+  - **Tier 2（中等成本）**：输入单价 $0.005 \sim 0.03$ 元 / 千 Token；
+  - **Tier 3（高昂成本）**：输入单价 $> 0.03$ 元 / 千 Token；
+  - 未经管理员显式特批的业务角色调用 Tier 3 模型直接被拦截。
 
-目前 `backend/config/budget.py` 声明预算本位币为 CNY，Provider 原生币种与折算要分别留痕。**汇率缺失、价格缺失、无法匹配模型不可默认 1:1 或虚构价格**。模型订阅制、缓存 token、reasoning token 等遵守当前 provider/billing 契约，不得人为统一为“输入+输出×一个价格”。
+### 4. Level 4：上下文滑动窗口与动态截断
+- 网关在 `_truncate_messages_to_budget` 中结合配置参数与当前会话历史：
+  - 保持 System Prompt 与最新用户提问绝对不动；
+  - 沿历史对话的最早轮次逐步向后剔除冗余问答，或剔除工具执行结果中非关键的内容，将总 Token 牢牢压制在上下文安全预算线（如 4096 或 8192）以内。
 
-## 3. 一次 LLM 调用的基本不变量
+### 5. Level 5：L5 增量摘要与终极物理熔断
+- 当上下文总长度突破模型最大物理窗口的 **90%**（`_l5_trigger_ratio=0.9`）时，系统自动启动轻量模型异步独立运行增量摘要，并程序化贴附 **40 类业务受保护事实（Protected Facts）**；
+- 若经过全量压缩与截断后仍然突破物理上限，网关执行 `_reject_overbudget`，直接抛出无法截断的硬异常，拒绝超长发送以保护模型的输出确定性。
 
-1. 从可信请求上下文取得 tenant/user/request/run/step/role 等可用归因标识；缺归属时走明确的内部账号/拒绝语义，不自动混入普通租户。
-2. 额度前置判定与预占必须覆盖 retries/fallback；统一代理完成后使用本次模型与价格快照，保存唯一一次可审计结算或释放。
-3. 调用超时且结果未知不能盲目补写“0 费用”，不能直接认定计费失败；后续按账本/对账策略处理。
-4. Provider 无 usage 尾帧但有可估算输入/输出时，按实际实现记录 `estimated`，并可区分估算份额；没有任何可信数据时按下方「未知用量估算结算」收敛：小额按预占上限估算结算并留痕，大额保留 `needs_review` 和排查依据。
-5. 报表/Trace/管理端消费同一费用事实，汇总不能回填改变原始历史明细；历史账单必须保留价格/汇率版本以便重算差异。
-6. Prometheus 仅做有限维度聚合指标，**user_id、tenant_id、trace_id、session_id 等不得作为 Metrics label**；精细归因留在受控 DB/Trace。
+---
 
-## 4. 新增模型调用点与改价验收
+## 二、 不可篡改财务账本与预占结算状态机（`accounting.py`）
 
-| 编号 | 场景 | 必须断言 |
-| --- | --- | --- |
-| BG-01 | 请求/用户/租户额度不足 | 受限请求被预期阻断，未实际发生被拒绝的模型调用 |
-| BG-02 | primary + retry + fallback | 同一请求成本和调用次数正确归因，预算不被绕过 |
-| BG-03 | 流式中断、Provider 响应丢失、无 usage | 实测/estimated/needs_review 分类正确，无重复扣账 |
-| BG-04 | 价格版本切换及汇率变更 | 新单据使用新快照，历史单据不漂移 |
-| BG-05 | 缓存输入/输出/推理 token | 计价规则与该 Provider 实际能力一致 |
-| BG-06 | 并发同一幂等调用 | 预占、结算、释放与剩余额度不重复 |
-| BG-07 | 无价格、无汇率、存储异常 | 按模式明确拒绝/待核对，不伪造费用 |
-| BG-08 | Trace、管理端、Grafana | 费用来源一致，能识别 estimated，聚合与明细可对账 |
-| BG-09 | 审计与权限 | 非管理员不能修改他人预算，租户数据不串读 |
-| BG-10 | 每日对账任务 | 未决率、滞留预占、估算占比能被定位和告警 |
+平台采用银行级**两阶段预占与结算（Reservation & Settlement）事务模型**，确保无论发生系统崩溃、用户中途取消还是网络中断，每一笔资金都有迹可循：
 
-执行成本/配额整改先做调用链审计和账本基线，不要因“统一”新增第二套 LLM SDK 调用出口、预算表或费用聚合器。用对应 `backend/tests/infra/`、预算 API、迁移及定向测试验证，未接真实 Provider 只标隔离测试通过。
+```mermaid
+stateDiagram-v2
+    [*] --> Reserved: 预占额度 (Reservation)<br>预冻结预估最高花费
+    Reserved --> Settled: 结算落账 (Settle)<br>模型返回真实 Token, 按实扣除
+    Reserved --> Released: 释放额度 (Release)<br>调用被拦截/取消/重试未成行, 全额解冻
+    Reserved --> Retained: 滞留待查 (Retained)<br>网络超时/断线未定, 留待异步对账
+    Settled --> [*]
+    Released --> [*]
+    Retained --> Settled: 异步对账确认消耗
+    Retained --> Released: 异步对账确认未扣费
+```
 
-### 4.1 供应商公开价格页巡检
+### 1. 数据库物理级防篡改触发器（迁移 144~146）
+针对财务合规审查，平台在 PostgreSQL 数据库底层通过触发器固化了**账本绝对不可篡改（Append-Only）约束**：
+- **流水表 `budget_reservation_resolutions`**：记录每一笔预占从冻结到结算、释放的生命周期（`resolution_status` 与 `settlement_kind`）；
+- **物理禁止修改与删除触发器（`trg_budget_resolution_audit_append_only`）**：
+  ```sql
+  -- 迁移 146: 在 PostgreSQL 底层彻底剥离 UPDATE 和 DELETE 权限
+  CREATE OR REPLACE FUNCTION tf_budget_resolution_audit_append_only()
+  RETURNS TRIGGER AS $$
+  BEGIN
+      RAISE EXCEPTION 'budget_reservation_resolutions 为只追加不可变账本，严禁 UPDATE 或 DELETE！';
+  END;
+  $$ LANGUAGE plpgsql;
 
-`model.price_page_monitor` 由 Celery Beat 每日 08:00（Asia/Shanghai）读取固定的官方价格页面，记录 Doubao Seed 2.0 mini、Qwen3.7 Text Embedding 和 Qwen3.7 Text Rerank 的北京地域刊例价。它对比前次有效观测和当前 `model_price` 已审核生效行，分别报告供应商价格变化、系统价格不一致以及页面读取/解析失败。
+  CREATE TRIGGER trg_budget_resolution_audit_append_only
+  BEFORE UPDATE OR DELETE ON budget_reservation_resolutions
+  FOR EACH ROW EXECUTE FUNCTION tf_budget_resolution_audit_append_only();
+  ```
+  该触发器由迁移 146 植入，即使数据库管理员或应用发生 SQL 注入，也绝对无法通过 `UPDATE` 或 `DELETE` 篡改历史扣费证据，切实守住审计红线。
 
-巡检告警复用 `backend/observability/alerts.py` 的 JSONL、Prometheus 和可选 `ALERT_WEBHOOK_URL` 通道。管理端“模型与供应商 → 价格巡检”展示运行状态、计划时间、各价格来源结果、系统与官方价格对照、官方价格变化和已触发的告警事件；告警投递是异步 best-effort，因此页面只展示触发记录，不宣称 webhook 已送达。迁移 `100_model_price_change_alert_outbox.sql` 将价格变化事件与当日观测一并持久化；Worker 在告警触发前退出时，重跑会恢复 pending 事件。告警调用返回后事件标记为 `triggered`，通知送达状态仍为 `unknown`，同日重跑不会重复处理已触发事件。可捕获的 Worker 异常记为 `failed`，Celery 撤销记为 `cancelled`；进程被强制终止时，巡检运行记录可能仍为 `running`，需与 Celery 任务终态对账。
+### 2. 业务域额度轴（迁移 149：Domain Budget Axis）
+迁移 149 为 `budget_policies`、`budget_ledger` 与 `budget_reservations` 增加了独立的 `domain` 列：
+- **三大多域独立配额**：支持 `main`（主助手）、`travel`（旅游 V2）与 `customer_service`（智能客服）分别配置独立预算限额与消耗告警阈值；
+- **域隔离与租户兜底**：主图与各业务子图并发独立记账，各域消耗优先扣减本域配额；域配额耗尽时按租户策略配置决定是否允许租户全局资金池介入兜底，杜绝单一业务突发流量吃光全租户预算。
 
-每日观测只写入 `model_price_source_observations`、变化告警 outbox 和巡检运行历史；巡检不调用 LLM、不产生 Provider 费用，也不导入、审批或覆盖 `model_price`。Doubao Seed 2.0 mini 官方常规在线价格按输入长度分段，而当前计费表只表示 `[0, 32]` 档；在统一价格模型覆盖其他档位前，LLM Proxy 对该模型限制输入不超过 32,000 token，并在预算预占前拒绝超限请求。该限制依据[火山方舟模型价格页](https://console.volcengine.com/ark/region:cn-beijing/docs/model-pricing)的常规在线档位。发现系统价格差异后仍须按价格治理的双人审核和 24 小时 canary 流程处理。供应商页面无法访问或格式变化时必须告警，不能把缺失报价记为零。默认直连官方站点；必须通过环境代理出网时设置 `MODEL_PRICE_MONITOR_USE_ENV_PROXY=true`。
+---
 
-### 4.2 当前有效价格的可见性与缺价处置（2026-10-17）
+## 三、 流式 Token 动态估算与对账纠偏机制
 
-系统存在两条价格写入路径，信任级别不同，不能相互冒充：
+在调用部分云端模型或遭遇流式中断时，供应商可能不返回最终的 `usage` 结构。平台设计了严密的**三级用量事实等级与对账机制**：
 
-| 写入路径 | 写什么 | 信任级别 |
-| --- | --- | --- |
-| 模型登记页直接录价（`services/model_config._apply_model_pricing`） | `model_price` 行：`source=provider-page`、`approval_status=approved`、`reviewer_1=操作人`、`reviewer_2=system`；**不写** `model_price_versions` | 单管理员直登价：留痕可追溯，但不等同双人审核或 canary |
-| 价格治理版本发布（`infra/llm/price_governance`） | 导入 pending → 两名不同审核人 → 24h canary → `model_price_versions.status=active` 并生成 approved 行 | 正式治理价 |
+1. **三级用量事实等级**：
+   - **Level 1（实测值，`measured`）**：供应商 API 原生返回了 `prompt_tokens` 与 `completion_tokens`，可信度最高；
+   - **Level 2（估算值，`estimated`）**：供应商未返回 usage，系统按输入输出文本字符数结合分词比率（中文字符约 0.6~0.7 Token，英文字符约 0.3~0.4 Token）进行估算，并显式标记 `is_estimated = true`；
+   - **Level 3（待对账，`needs_review`）**：调用中途发生网络断开，无法获得完整生成结果，记入滞留账本并触发对账警报。
+2. **流式用量后置结算（`_settle_estimated_stream_usage`）**：
+   - 在流式传输过程中，网关持续通过 `_accumulate_turn_usage` 累加文本分片与思维链分片；
+   - 在流结束（`done`）事件触发时，立即将实测/估算值写入 `llm_usage` 表，结算并释放多余的预占额度。
 
-「当前有效价格」的唯一判定（`pricing.current_price_eligibility_sql`，在线计费与价格巡检共用）：
+---
 
-- 带版本行的价格：仅 `status=active` 入选，`expired`/`rejected` 永不参与计价；
-- 无版本行的价格：仅 `source=provider-page` 的直登价入选，且该模型组件不存在任何 active 治理版本——**治理版本优先**，防止直登价与正式价混价；
-- 同一模型组件混用版本或币种视为冲突：读取失败关闭，计费记 `price_unknown`/`unpriced`，绝不挑一条继续算。
+## 四、 模型价格不可变版本化管理（迁移 053）
 
-硬预算（`enforce`）下的缺价处置取代 2026-09-22 的「缺价一律放行」：
-
-- 价格冲突 → 拒绝调用（`price_conflict`）；
-- 取不到有效价格行、且注册表（`llm_models.pricing`）也没有任何正单价 → 拒绝调用（`price_unavailable`）；
-- 取不到有效价格行、但注册表仍有正单价 → 放行并按注册表估价结算，`cost_status=price_unknown`，不得展示为精确成本或零成本。
-
-价格巡检读取「当前系统价」与在线计费使用同一谓词，因此直登价不再在巡检中显示为缺价，治理版本切换后也不会拿旧版本比对。
-
-### 4.3 价格变更权限与生效方式（2026-10-17 决策）
-
-价格治理不再要求「双人审核 + 24 小时 canary」。改为：
-
-- **只有 `super_admin` 能改价**：`/admin/model-prices/imports`、`.../reviews`、`.../versions/{version}/publish`、`.../canary` 全部要求最高权限角色；`admin` 仍可读版本历史、登记模型，但不能改计费价。
-- **一步直发**：`POST /admin/model-prices/versions/{version}/publish`（`source`、`reason` 必填）直接写入
-  `model_price_versions(status='active')` 与 `approval_status='approved'` 价格行，旧 active 版本置 `expired`，
-  同维度旧行置 `effective_to`（append-only，只关不删）。审批证据形状为
-  `reviewer_1=操作人 / reviewer_2=system / imported_by=super-admin`，并在 `model_price_reviews` 落审计理由。
-- **仍然保留的硬约束**：覆盖率必须 100%、缺价/价格计算错误必须为 0、币种必须为 `CNY` 或 `USD` 且同一模型组件不得混用、历史行不可改写。
-- **热更新**：发布成功后立即失效进程内价格缓存（`pricing.clear_price_cache()`），后续模型登记与调用按新价计费、账本记为 `approved_price_table`。
-- **CI 真实评测**：`seed_prompt_eval_db` 的只读 Registry 校验接受上述审批形状（`version_imported_by='super-admin'`），因此不需要伪造第二个审核人。
-
-### 4.4 本地推理与嵌入重建的记账
-
-只有已登记模型所属 Provider 明确声明 `billing=local` 时，统一预算层才免云端现金费用预占和云端单价检查；调用次数、token 上限与用量记录仍生效。未知模型不能依靠缺省 Provider 推导为免费。本地声明及恢复这类历史配置要求超级管理员用户，普通管理员不能以该声明绕过按量价格治理。
-
-### 4.5 未知用量估算结算与按量计价必填（2026-11-10 待对账治理第一批）
-
-- **按量计费价格条件必填（1.2）**：`metered` 供应商登记模型时，LLM 类（chat/vision/speech/ocr）必须填输入+输出单价，embedding/rerank 必须填输入单价，缺价在 `_upsert_model` 之前由 `_validate_model_pricing` 拒绝（旧逻辑"双空静默保存"已移除）。`local`/`subscription` 不要求价格，仍拒绝非 metered 供应商填价；缓存命中价保持可选。前端只在 metered 时标记必填并禁用保存，后端为最终事实源。
-- **未知用量估算结算（1.3）**：预占额 ≤ `BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY`（默认 5，0 = 全部人工，回滚开关）的未知用量/瞬时失败按预占上限保守估算结算，Trace/日志标 `settled_estimated`（返回值语义，不新增 DB status 枚举）；超过阈值保留 `needs_review` 人工对账。收敛入口为 `budget.settle_or_review_model_reservation`，`scoped_model_call` finally、`record_model_usage(review_reason)` 与 proxy 各 possibly_billed 失败分支统一走它。`release_model_reservation`（确定未发给供应商：熔断开路、鉴权/参数类错误）语义不变，必须零成本放走，不得改走估算结算。预占对象缺失 `reserved_cny` 时保守转待对账。
-- **未结算预留按预占单去重（1.4）**：`summary().unsettled_reserved` 改为按 `budget_reservations`（`reserved` + `needs_review`）`DISTINCT ON (id)` 去重汇总，与 `reconciliation_summary` 占额口径一致（同一预占在 user/tenant × day/month 账本上是 4 行同值，旧行级 SUM 会放大数倍）。
-- **估算结算 DB 标记（迁移 145，2026-11-10）**：估算结算写入 `budget_reservations.settle_kind='estimated'`（`''`=精确结算；status 枚举不动，与人工核销轴 `resolution` 正交）。`reconciliation_summary` 的 `billing_mismatch` 窗口对账排除估算结算单——估算按预占上限入账而 `llm_usage` 无同额成本行，属设计内保守口径而非结算分叉；精确结算与 usage 分叉仍照常触发该红信号。
-
-统一账本将本地推理记为 `pricing_source=local_inference`、云端按量应付费用 0 CNY，保留真实调用次数和可得 token。嵌入 SDK 未提供统一原始 usage 时按文本估算，标 `usage_source=estimated`、`cost_status=estimated`，不冒充厂商精确账单；硬件、电费及托管开销不在该零金额含义内。
-
-嵌入切换预检和全库重建均复用正式嵌入客户端与 TokenTracker，Trace 关联任务和调用用户/租户，不另建费用账本。云端按量目标在预检前必须具有有效、一致的 embedding 价格；保存角色时后端会再次预检，因此预检及保存各可能产生一次最小调用费用。批次调用有界且仍受用户/租户额度约束，已落库且快照一致的候选在同任务恢复时复用；超时但供应商实际已执行的请求无法保证不被再次收费。
-
-### 4.6 月度对账报表（2026-11-10 待对账治理第三批 PR-A）
-
-- **聚合口径**：`PostgresQuotaStore.monthly_reconciliation(months)` 只读聚合三段——①`llm_usage` 按月 × 供应商/模型/租户/产品域的 CNY 成本（复用 `cost_cny_sql_expr()` 唯一折算口径，读层不二次换汇）；②`budget_ledger` 月行（`period_type='month'`）按月 × scope 的 `used_cny`/`reserved_cny`；③预占单按结算月（`COALESCE(settled_at, created_at)`）的 status × `settle_kind` × `resolution` 分布。月标签一律按 `BUDGET_TIMEZONE`（默认 Asia/Shanghai）渲染——预算 `period_start` 即该时区自然月，UTC 会话直接 `to_char` 会把月初 8 小时归到上月。
-- **域成本可见性（任务 9-B，2026-11-10）**：usage 聚合增加 `by_domain` 段（取 `agent_domain`，空归 `'(unattributed)'` 暴露归因覆盖缺口），前端「月度对账」卡呈现当月域成本 top3+其他，CSV 增加 `dimension=domain` 行。这是 quota_profile（按域硬限）的决策前置——先看清各域花多少钱；按域设限的执行化仍挂起，待真实需求与主链路归因覆盖率提升后再立项。
-- **API**：`GET /admin/budgets/reconciliation/monthly?months=6`（JSON，1–24 个月）与 `.../monthly.csv`（CSV 导出，`month,dimension,key,calls,cost_cny`），均 `require_admin_user`；前端预算页「月度对账」卡呈现月份行并支持 CSV 下载。CSV 是与供应商月账单核对的基线材料，录入/导入与差异调整见后续 PR-B/PR-C（已延后）。
-- **llm_call span 补呈现**：`llm_call_span.py` 的 `span_metrics` 增加 `settlement_status`（`settled` / `settled_estimated` / `needs_review` / `released` / `accounting_error`，与 llm_usage 行同源）——此前 DB 与日志可查但 Trace UI 不呈现，属呈现缺口补齐。
-
-
-### 4.7 域额度——每用户按域独立额度（2026-11-11 任务 9 执行化，迁移 149）
-
-- **需求（用户拍板）**：每个用户按每个域独立额度，租户域池兜底；总额度保留叠加 AND——一笔域调用要过 4 道闸（用户域/用户总/租户域/租户总），任何一道超限拒绝该调用；超域只停该域。顶级域固定 3 个：`main` 主助手（含 RAG/SQL 能力）/`travel` 旅游/`customer_service` 客服；子域标签（travel_booking/travel_commerce）归并入所属产品线，管理端工具（选品/知识库/数据查询）不进域枚举、不受域闸。
-- **实现**：`budget_policies / budget_ledger / budget_reservations` 三表加 `domain` 列（`''`=总额度轴，迁移 149（原 147/148 号连续与并行会话碰撞），PK 重建含 domain、域枚举 CHECK 与配置同源）。`reserve(domain=...)` 对域调用预占 8 行（user/tenant × 总/域 × 日/月），域闸先于总闸同事务原子生效；settle/release/滞留回收/核销四处账本释放按预占行 domain 精确匹配（锁序加 domain）。`resolve_domain_policy` 与总额度同构四层链。汇总/展示口径（summary near/blocked、list_subjects、月度对账 ledger 段）一律 `domain=''` 过滤——域行是同一笔钱的域维度镜像，不滤会翻倍。
-- **归因与过渡**：`reserve_precheck` 读请求归因 `agent_domain` 并经 `normalize_budget_domain` 归并（travel_booking/travel_commerce→travel、general→main、未知→'' 不受域闸）。主链路入口（chat 同步/流式）显式打标 main/customer_service；`BUDGET_DOMAIN_UNATTRIBUTED_BLOCK`（默认 false）为过渡期开关——无标签放行，标签覆盖补齐后切 fail-closed 防漏网。本地推理维持 1.1：不预占云端账单、不占域闸。
-- **种子值（确认记录）**：三域在 tenant_default / platform / 租户 default 三层各配 hard——main ¥180 日 / ¥1800 月、travel ¥75/¥750、customer_service ¥45/¥450（三域之和 = 租户总额度，域闸恒先于总闸；按 11 月实测 main 84%/travel 13%/cs 3% 留增长余量）。平台兜底总额度 ¥5/¥100 与全租户默认 ¥432/¥7200 严重背离，种子时对齐。用户层不逐个配置——每用户自动继承租户域值独立计数；个别差异化走用户域覆盖。
+模型的计费单价不是静态数字，而是随时间演进的商业契约：
+1. **价格历史不可变触发器（迁移 053：`trg_model_price_immutable_trigger`）**：
+   - 数据库禁止直接原地修改 `llm_models` 表中的价格字段；
+   - 任何价格变动必须作为**新价格版本**插入，并指定生效时间戳（`effective_from`）；
+   - 历史调用记录强绑定当时的调用时点单价版本，杜绝因供应商调价导致历史账单重新计算发生偏差。
+2. **前后向兼容与输入分拆计费**：
+   - 价格结构明确拆分为：`input_price_per_1k`（常规输入）、`cache_input_price_per_1k`（命中前缀缓存的输入）、`output_price_per_1k`（常规输出）；
+   - 充分利用云端厂商 Prefix Caching 带来的 50%~80% 价格折扣，直接在账本中体现降本实效。

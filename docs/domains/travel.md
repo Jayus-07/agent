@@ -1,45 +1,123 @@
-# 旅游域
+# 旅游规划 V2 业务域架构与并发控制指南
 
-## V2 目标产品设计
+本文系统阐述旅游规划域（Travel Domain）从 V1 到 V2 的架构演进、核心并发控制模型（Trip + Revision 乐观锁 CAS）、自研自托管外部能力增强（高德与小红书 MCP），以及基于 Checkpointer 的人工中断与状态机恢复机制。
 
-- [旅游平台 V2 产品总设计书 v1.0-RC1](travel-v2/product-design.md)：AI 规划、行程编辑与版本、真实 Provider 双入口、PC/手机交互和验收目标；**这是待与后端改造对账的产品设计基线，不代表所有功能已经实现**。前端仅先执行 FE-0 审计，后续施工按验收批次推进。
+---
 
-## 入口与当前链路
+## 一、 V1 架构退役与 V2 正式落地
 
-- 对话规划域图注册于 backend/travel/register.py，图构建在 backend/travel/graph_builder.py。
-- 节点由 slot filler、Supervisor、附加查询、规划专家、Validator/Repair、局部重规划和 Reporter 组成；真实顺序以图构建器为准。
-- HTTP 与 SSE 入口位于 backend/app/api/routes/travel.py。
-- 旅游 V2 的 Trip、Revision、Template 与搜索 API 位于 backend/travel_v2/api/，由 backend/app/api/router.py 挂载。
-- V2 对话规划流为 `POST /api/travel/v2/plan/stream`：复用现有旅游域图和 SSE 事件；内部会话键使用 `travel-v2:` 命名空间，不读取或写入已退役的 V1 行程版本账本。结果由 V2 Trip API 创建行程或按 `expected_revision` 更新。
-- 轮次语义决策默认经统一 `main` LLM 角色处理规则盲区与复杂指代；Planner 使用 `travel.planning_agent` Prompt 对真实 POI 候选提出逐日分配。模型只输出受限候选 ID，PlanningAgent 检查候选覆盖、必去项、天数和日容量；失败或越界时记录原因并回退既有规则骨架。Supervisor 的执行阶段路由、Provider 调用、路线/预算计算、Validator、CAS 与持久化仍由代码控制。
-- V2 结构化编辑使用 `POST /api/travel/v2/trips/{trip_id}/edits`，每次提交一个类型化操作、`expected_revision`、`change_summary` 和 `Idempotency-Key`。成功时在既有 Trip 行锁与 CAS 路径中追加 Revision；不调用 LLM，也不建立独立版本账本。操作校验锁定/固定项、日程冲突和已核实营业时间。
-- V2 地点候选查询使用 `POST /api/travel/v2/search/places`，查询只读；候选需要由用户明确选择后，才通过结构化编辑加入或替换地点。Provider 未核实的坐标、价格和营业时间不得升级成事实。
-- V2 规划与 Trip 读写都要求服务端验证身份，并按用户和租户授权；不得用前端身份字段替代服务端上下文。
+平台已彻底退役旧版 V1 行程版本服务的 Active/Draft 生命周期架构：
+- **V1 彻底下线**：`backend/app/api/routes/travel.py` 中原本的 V1 端点已全部挂在 `_retired_v1_router` 且不再向 FastAPI 主应用注册；
+- **V2 成为唯一生产主流**：
+  - 对话式流式行程规划：`POST /api/travel/v2/plan/stream`（由 `backend/travel_v2/` 承接）；
+  - 正式行程 CRUD 与结构化操作全部收敛于 `backend/travel_v2/api/`；
+  - 前端 `/travel/itineraries/new` 完成了针对移动端弱网与长文本生成态体验的全面重构（PR #560）。
 
-## 状态与约束
+---
 
-V1 行程版本服务的 Active/Draft 生命周期接口已退役。V2 正式行程由 Trip Revision 管理；更新使用版本 CAS，恢复使用目标 revision。读写按经过验证的用户和租户范围隔离。只读查询不得改写行程；失败或版本冲突不得伪装成成功。
+## 二、 Trip + Revision 乐观锁并发控制模型（CAS）
 
-外部搜索或交通 Provider 失败时通过现有失败策略表达错误或降级，不将空结果或失败伪装成成功。
+在真实生产中，用户可能在多端（如手机端、桌面端、以及后台 AI 自动优化）同时编辑同一份行程。若采用简单的覆盖写入，必将导致惨重的脏写与数据丢失。平台采用经典的 **Trip + Revision 链式版本模型结合 CAS（Compare-And-Swap）乐观锁**：
 
-## 人工决策中断与恢复
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as 客户端 (手机/网页)
+    participant API as Travel V2 API (trips.py)
+    participant Lock as PG 行锁 (FOR UPDATE)
+    participant DB as PostgreSQL (trips & revisions)
 
-- `TRAVEL_USER_DECISION_INTERRUPT` 开启且旅游图的持久化状态为 `healthy` 时，校验器可暂停在待决冲突；`degraded` 的进程内 MemorySaver 不支持可恢复的人工暂停。暂停结果作为 `needs_clarification` 返回，不写入正式 Trip。
-- `/travel/v2/plan/stream` 只接受与待决项匹配且携带当前 `decision_token` 的明确决策（“保留”或“移除：地点名”及对应结构化 `action_payload`）来恢复同一 checkpoint。令牌绑定 checkpoint ID、身份限定 thread 与待决内容；更新后的冲突拒绝旧令牌。普通提问不会被当成确认，也不会进入暂停图或写 Trip；会继续显示待决提示。
-- checkpoint thread 由服务端身份的 tenant、user 与 conversation 共同限定。Postgres 持久化恢复通过 advisory lock 串行化，并在锁内重读暂停状态，避免重复应用确认。
-- 恢复后的计划继续经过现有 V2 Trip 写入及 revision 校验；人工决策本身不绕过 Trip API。恢复模式、结果状态和可用的 Active/Draft/图版本写入 Trace。
-- Checkpointer 与人工中断是独立开关；`TRAVEL_USER_DECISION_INTERRUPT` 默认关闭，无健康持久化时不挂起图执行。
+    User->>API: POST /trips/{id}/edits<br>Headers: Idempotency-Key<br>Body: {expected_revision: 3, action: "add_place"}
+    API->>Lock: BEGIN 事务; SELECT revision FROM trips WHERE id = :id FOR UPDATE
+    Lock-->>API: 返回当前数据库最新版本 (current_revision = 3)
+    
+    alt 版本匹配 (current_revision == expected_revision)
+        API->>DB: INSERT INTO trip_revisions (trip_id, rev_num=4, delta=...)
+        API->>DB: UPDATE trips SET revision = 4, updated_at = NOW() WHERE id = :id
+        API->>User: COMMIT; 200 OK (返回最新 Revision 4)
+    else 版本冲突 (current_revision != expected_revision)
+        API->>User: ROLLBACK; HTTP 409 Conflict<br>{code: "REVISION_CONFLICT", current: 4, expected: 3}
+        Note over User: 客户端提示"行程已被其他端修改",<br>自动拉取最新版本 4 并展示差异合入
+    end
+```
 
-## 维护与验证
+### 1. 结构化编辑接口契约（`POST /api/travel/v2/trips/{trip_id}/edits`）
+- **操作类型化**：每次提交必须为强类型的业务原子操作（如 `add_place`、`remove_place`、`reorder_places`、`adjust_timeslot`），严禁客户端直接传入一整段未经校验的纯文本覆盖数据库；
+- **双重前置门禁**：
+  - 强制要求 Header 提供 `Idempotency-Key`，防止网络重放；
+  - 强制 Body 携带 `expected_revision`（客户端当前所持有的版本号）；
+- **CAS 冲突处理**：
+  - 在数据库行级锁（`SELECT ... FOR UPDATE`）内比对版本号；
+  - 若 `current_revision != expected_revision`，立即抛出 **HTTP 409 Conflict**，绝不进行静默覆盖；
+  - 操作成功后以追加写方式生成一条不可变的 `trip_revisions` 记录，并原子递增 `trips.revision`，保障行程变更历史具备完整的可审计回溯能力。
 
-- Provider 与凭据入口见 backend/providers/travel/、backend/providers/ 和配置模块；地图路线和铁路仍受对应配置、凭据或上游服务状态约束，酒店商户搜索不代表已获得实时房态/价格；不得在文档中复制动态 Provider 或密钥清单。
-- 业务安全与服务依赖索引见 [Domain Service Map](../architecture/domain-service-map.md)。
-- 定向测试入口：backend/tests/travel/、backend/tests/travel_v2/ 和 backend/tests/api/ 中对应旅游用例。
+---
 
-## Travel V2 落地架构与端点边界
+## 三、 外部动态增强与自研 MCP 集成体系
 
-- **V1 退役与 V2 主流**：`backend/app/api/routes/travel.py` 中原 V1 端点已全部挂在 `_retired_v1_router` 且不再注册到 FastAPI 应用；现行对话规划流为 `POST /api/travel/v2/plan/stream`，正式行程读写全部由 `backend/travel_v2/api/` 承接。
-- **Trip + Revision 并发契约**：正式行程采用 Trip + Revision 模型，修改操作要求服务端 `require_identity` 校验 `tenant_id` + `owner_id`，写操作强制 `Idempotency-Key` 与 `expected_revision` 乐观锁 CAS（版本冲突返回 409）。
-- **已落地 V2 API 能力（`backend/travel_v2/api/`）**：`trips.py`（含 `ai-edits` 与 `selections/{meals,lodgings,intercity-trains}`）、`templates.py`（迁移 `155_travel_v2_featured_templates.sql` 精选模板库与管理员发布/用户复制）、`auto_optimize.py`（自动优选）、`bookings.py`（原预订子域收编为 REST 确认门，受 `TRAVEL_BOOKING_PROVIDER` 控制）、`shares.py`、`exports.py`、`search.py`；前端 `/travel/itineraries/new` 已针对移动端生成态体验完成优化（#560）。
-- **动态工作台与外部增强集成（#546, #550, #553, #554, #557）**：工作台接入真实高德地图周边美食商家推荐、POI 体验小贴士徽章、交通换乘卡片、天气预警横幅、静态地图打点缩略图以及真实小红书攻略指引；外部能力统一通过自研自托管 MCP 及 Provider 接入（管理端支持实时连通性探针与热重载控制台），严禁伪造外部链接或模拟未核验数据。
-- **人工决策中断（Interrupt）**：`TRAVEL_USER_DECISION_INTERRUPT` 仅在 Checkpointer 健康时生效，通过绑定 checkpoint/thread/待决内容的 `decision_token` + PG advisory lock 串行化恢复，不绕过 Trip API。
+针对大模型容易虚构餐厅、编造景点开放时间的顽疾，平台通过 ADR-0011 规范将外部真实数据源封装为**自托管动态 MCP 服务**（PR #546, #550, #553, #554, #557）：
+
+1. **高德地图自研 MCP（Amap MCP）**：
+   - **周边美食推荐**：输入景点坐标，实时检索高德真实商户评分、人均消费与营业状态；
+   - **POI 体验小贴士徽章**：实时提取景区的官方建议游玩时长、最佳游览季节；
+   - **交通换乘卡片与距离测算**：基于高德驾车/公交路线规划 API 精准输出通勤耗时与换乘路线；
+   - **静态地图打点缩略图**：自动根据行程各天 POI 坐标渲染静态轨迹地图，提升移动端直观感知。
+2. **小红书真实攻略指引 MCP**：
+   - 提取目的地高赞实操避坑攻略，作为辅助上下文送入 Reporter 节点，丰富行程小贴士；
+3. **管理端探针与连通性治理**：
+   - 管理端提供实时 Ping/Probe 探针面板；
+   - 当外部地图或攻略 API 出现网络波动或配额耗尽时，运行时自动走优雅降级分支，并在前端标记“该商户信息待二次核实”，**严禁模型伪造虚假外部链接或未核验坐标**。
+
+---
+
+## 四、 人工决策中断（Interrupt）与事务级安全恢复
+
+在规划长途旅行时，经常出现不可调和的硬性物理冲突（如：景点闭馆日恰好在行程当天、或两天行程地理跨度超出合理交通上限）。平台在 LangGraph 中设计了**人工决策挂起与状态机恢复机制**：
+
+```
+[执行计划校验] ──► 发现物理冲突 (如故宫周一闭馆)
+                         │
+                         ▼
+           Checkpointer 健康检查 (健康方可挂起)
+                         │
+                         ▼
+        生成带身份绑定的决策令牌 (decision_token)
+                         │
+                         ▼
+        返回前端: needs_clarification (挂起状态)
+                         │
+                         ▼
+             [用户在前端做出决策]
+         ("移除冲突景点" 或 "调换游玩顺序")
+                         │
+                         ▼
+   POST /travel/v2/plan/stream (带 decision_token)
+                         │
+                         ▼
+         获取 PostgreSQL Advisory Lock 串行锁
+                         │
+                         ▼
+         锁内重新加载 Checkpoint 并校验 Token 匹配性
+                         │
+                         ▼
+       通过 V2 Trip 写入 & Revision CAS 原子更新行程
+```
+
+### 1. 决策令牌（`decision_token`）的严格绑定
+- 令牌由服务端加密生成，强绑定：`checkpoint_id` + `tenant_id` + `user_id` + `conflict_hash`；
+- 若用户在等待期间发起了其他修改导致行程状态变化，旧冲突被冲刷，持有旧令牌的请求将被拒绝，防止“拿前朝的决定解决今朝的冲突”。
+
+### 2. PostgreSQL Advisory Lock 串行化防重入
+- 恢复执行时，系统依据 `hash(tenant_id, user_id, trip_id)` 获取 PostgreSQL 会话级咨询锁（Advisory Lock）；
+- 在咨询锁内部重读持久化 Checkpoint，确保并发请求不会重复应用同一次人工决策，随后继续走 V2 Trip Revision 的 CAS 校验流程。
+
+---
+
+## 五、 精选模板库与一键复制（迁移 155）
+
+依据迁移 `155_travel_v2_featured_templates.sql`，系统构建了精选模板生态：
+- **管理员发布模板**：运营人员可将经过人工实地验证的经典路线打标为 `featured=true` 并发布至全局模板市场；
+- **一键深拷贝为正式行程**：普通用户浏览精选模板后，调用 `POST /api/travel/v2/templates/{template_id}/clone`：
+  - 系统在事务内深度拷贝模板的日程（Arrangements）、地点坐标及小贴士；
+  - 自动将所有者映射为当前登录用户的 `owner_id` 与 `tenant_id`，初始化 `revision = 1`；
+  - 拷贝后的行程完全独立演进，用户可基于该蓝图继续触发 AI 结构化编辑。

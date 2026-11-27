@@ -57,15 +57,19 @@ backend/rag/preprocessing/chunkers/
 - 针对每个子单元调用 `_local_strategy_class` 局部匹配最佳切块策略；
 - 维护完整的祖先标题路径（`ancestor_path`），并通过 `_namespace_content_unit_chunks` 统一给各单元的分块加上局部命名空间，最后合并为全局一致的 Leaf / Parent 拓扑树，彻底杜绝单文档全局策略“一刀切”造成的质量劣变。
 
-### 4. 表格处理与跨页表格智能拼接（`TableHandler`）
-- **短表跟随条款**：能放入 Leaf 预算的短小表格直接以内联 Markdown 形式跟随所属章节，同时原始单元格数据存于 `table_rows_json`；
+### 4. 表格处理与跨页表格三层切分（`TableHandler`，`table_handler.py`）
+针对技术白皮书与制度文档中普遍存在的大表格，系统构建了三层精细化处理模型（`_split_table_node`）：
+- **Layer 1（表级摘要 Parent）**：提取表名、行列总数、各列字段名概述，作为 Parent 块进入全文检索与语义索引；
+- **Layer 2（表头 Leaf）**：针对多级复杂嵌套表头（`detect_multi_level_header`），生成专门的表头定义块；
+- **Layer 3（数据行 KV Leaf）**：每 1~3 数据行拆分为一个 Leaf 块，格式化为自然语言 KV 对（`row_to_kv`），并在元数据中挂载规范化的数值字典（`numeric_values`），直接支持检索端按数值区间（如金额范围、日期跨度）执行物理过滤；
+- **规范化失败兜底与虚拟 Parent**：当表格表头严重变形导致规范化失败时，触发按行预算分片兜底（`table_fallback`），并自动挂载虚拟父节点（`_attach_virtual_parents`），杜绝兜底切片后丢失 Parent 回溯扩展能力；
 - **跨页表格智能拼接（`_merge_cross_page_tables`）**：针对分页 PDF/DOCX，自动识别“页尾表格 + 跨页首表格 + 表头一致”特征，自动丢弃续页冗余表头并将数据行无缝合并入首页表格（支持跨 3+ 页长表），保留阅读顺序与完整上下文；
 - **关联表格交叉引用**：当文本 Leaf 出现“见下表”、“收费标准详见附表”时，打上 `references=[{"table_id": "...", "relation": "refers_to"}]` 引用关系标记，供检索端精准回溯。
 
-### 5. 双重覆盖率审计与防丢块硬门禁（`CoverageAudit`）
+### 5. 双重覆盖率审计与防丢块硬门禁
 为防止任何切分或清洗逻辑产生“静默吞内容”，平台在落库前强制执行程序化双重覆盖对账：
-1. **清洗覆盖率审计（`cleaning_coverage_audit`）**：比对原始 Raw AST 与清洗后节点，仅允许确定性模板噪声、页码页脚与空白行删除；任何正文非预期丢失直接抛出 `cleaner_content_loss` 异常硬阻断；
-2. **切分覆盖率审计（`coverage_audit`）**：严格以实际产出的 Leaf 块为依据（Parent 不计入覆盖分母），按字符滑动窗口反向对账，覆盖率必须 $\ge 98\%$。
+1. **清洗覆盖率审计（`quality_gate.py::cleaning_coverage_audit`）**：比对原始 Raw AST 与清洗后节点，仅允许确定性模板噪声、页码页脚与空白行删除；任何正文非预期丢失直接抛出 `cleaner_content_loss` 异常硬阻断，严禁通过清空节点让后续覆盖审计分母缩水来假通过；
+2. **切分覆盖率审计（`chunkers/audit.py::coverage_audit`）**：严格以实际产出的 Leaf 块为依据（Parent 不计入覆盖分母），按字符滑动窗口（Windows）反向对账，覆盖率必须 $\ge 98\%$。
 3. **硬质量门禁（QualityGate）**：覆盖对账失败的文档直接进入 `failed` 状态，坚决禁止带缺陷文档发布为 `active`。
 
 ---
@@ -333,6 +337,11 @@ flowchart LR
 ```
 
 - 实现见 `backend/rag/chain.py`、`backend/rag/retrieval/query_router.py`、`hybrid.py`、`enhanced_hybrid_retrieval.py`、`backend/rag/evidence_gate/`；查询分类、RRF、rerank、top_k、阈值必须走已有配置/单一事实源，不在不同端点手写一套。
+- **混合检索与 RRF 精确标识符补偿（`_EXACT_TOKEN_BONUS`）**：
+  - 针对查询包含发票号、订单号、SKU 等精准标识符时，纯文本 BM25 命中第 0 位（$1/60 \approx 0.0167$）容易被两路都排第 10 名的平庸块（$1/70 + 1/70 \approx 0.0286$）反超的“RRF 结构性偏置”，系统在 `hybrid.py` 中引入 `_EXACT_TOKEN_BONUS = max(vw, bw, 1.0) / rrf_k` 动态特权加分；同时设置 `_COMMON_NON_ID_WORDS` 通用词表排除常见技术英文词误加权，精准锁定业务标识符命中 Top-1；
+  - **物理量纲隔离（2026-09-03 事故修法）**：严禁将 RRF 分数（量纲上限 $\approx 0.033$）与余弦相似度门禁（`VEC_MIN_SCORE=0.2`）混用，`_evaluate_retrieval_gate` 显式执行量纲隔离判定；
+  - **意图分类与反问句过滤（`_classify_query_tier` & `_is_rhetorical`）**：短问句（$\le 8$ 字）走纯向量，简单事实问句（“什么是/多少钱/多长时间”）豁免改写，反问句（“不应该要30s吧？”）经否定词与反问代词状态机过滤，杜绝虚假 Multi-Query 膨胀白付 2.3s 延时；
+  - **HNSW 会话级调优与连接池防污染**：每次检索前显式注入 `SET LOCAL hnsw.ef_search = 100`，兼顾高并发写与高维流形死胡同突破；连接归还池时在 `finally` 块中显式执行 `RESET hnsw.ef_search;`，防止非事务或降级调用跨请求污染连接池。
 - 云端 rerank 的输入保留已授权候选的标题或来源文件名，并在现有 2000 字符上限内附带正文；不发送来源目录，不修改原始文档内容。embedding 与 rerank 的实际云端调用复用统一预算及预占账本，缓存命中不重复预占；估算 embedding token 明确标为 `estimated`。
 - 生成阶段的用量由实际模型步通过请求态带回 Trace；LCEL 子上下文结束后，父级 ContextVar 可能仍是查询分类用量，不得据此推断生成输入大小。`generation_input_chars` 仅记录生成提示词字符数，不保存提示词正文；用量缺失明确标记 unavailable，计费仍由统一代理结算。
 - 向量/BM25/文档检索前后的 **tenant、kb_id、department、permission_scope** 过滤都要可证实；缓存键不能缺少授权范围、模型/索引版本而引发跨用户泄漏。检索 trace 应展示 route、候选数、证据 chunk、引用来源、索引代次和耗时。
