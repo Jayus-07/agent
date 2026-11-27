@@ -514,6 +514,35 @@ class RAGPipeline:
         # 人名索引只存 doc_id，不存正文；启动时构建一次可避免首次查询才付出
         # doc_db 全量读取成本。命中后仍会经过 Stage 2 授权、过滤和 Evidence Gate。
         self.person_index = self._build_person_index()
+        self._init_rag_chain()
+
+    def _init_rag_chain(self):
+        """初始化 RAGChain 及代次热刷新状态。无论使用 GIN 还是 Legacy BM25 均需构建。"""
+        if ENABLE_MEMORY:
+            from backend.memory import memory_manager
+            _mem = memory_manager
+        else:
+            _mem = None
+        self.lc_chain = RAGChain(
+            doc_db=self.doc_db,
+            vectordb=self.vectordb,
+            chunk_retriever=self.chunk_retriever,
+            bm25=self.bm25,
+            person_index=self.person_index,
+            memory_manager=_mem,
+        )
+        # C 阶段（跨进程热刷新）：记录已加载代次 + 陈旧标记 + 刷新互斥。
+        # Worker 发布新快照后，API/rag-service 靠每请求版本检查（廉价读
+        # PUBLISHED 指针）发现代次变化，一次性整组替换检索对象引用。
+        bm25_store = getattr(self, "bm25_store", None)
+        published_generation = getattr(bm25_store, "published_generation", None) if bm25_store else None
+        self._loaded_bm25_generation = (
+            published_generation() if callable(published_generation) else ""
+        )
+        self._refresh_lock = threading.Lock()
+        self.is_index_stale = False
+        logger.info(
+            f"[RAG] 检索索引代次已记录: {self._loaded_bm25_generation[:12] or '∅'}")
 
     def _init_legacy_bm25_retriever(self, read_only: bool = False) -> None:
         """旧版单机 rank_bm25 + pickle 持久化初始化逻辑。"""
@@ -658,31 +687,6 @@ class RAGPipeline:
                 f"[RAG] BM25 索引从磁盘加载成功 "
                 f"({bm25_store.doc_count()} 文档, hash={bm25_store.get_content_hash()})，跳过重建"
             )
-
-        if ENABLE_MEMORY:
-            from backend.memory import memory_manager
-            _mem = memory_manager
-        else:
-            _mem = None
-        self.lc_chain = RAGChain(
-            doc_db=self.doc_db,
-            vectordb=self.vectordb,
-            chunk_retriever=self.chunk_retriever,
-            bm25=self.bm25,
-            person_index=self.person_index,
-            memory_manager=_mem,
-        )
-        # C 阶段（跨进程热刷新）：记录已加载代次 + 陈旧标记 + 刷新互斥。
-        # Worker 发布新快照后，API/rag-service 靠每请求版本检查（廉价读
-        # PUBLISHED 指针）发现代次变化，一次性整组替换检索对象引用。
-        published_generation = getattr(bm25_store, "published_generation", None)
-        self._loaded_bm25_generation = (
-            published_generation() if callable(published_generation) else ""
-        )
-        self._refresh_lock = threading.Lock()
-        self.is_index_stale = False
-        logger.info(
-            f"[RAG] 检索索引代次已记录: {self._loaded_bm25_generation[:12] or '∅'}")
 
     def remove_documents_from_bm25(self, doc_ids: list[str], file_paths: list[str] | None = None) -> None:
         """运行时删除文档后，从 BM25 索引移除对应 chunk 并全量重建。

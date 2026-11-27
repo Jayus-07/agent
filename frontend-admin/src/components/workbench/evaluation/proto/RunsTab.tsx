@@ -71,11 +71,26 @@ interface UnifiedRunRow {
   v2Run?: EvaluationV2Run
 }
 
-export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onGoCompare }: { promptPrefill?: { key: string; version: string } | null; focusRunId?: string | null; domain?: DomainFilter; onGoCompare?: (runId: string) => void }) {
+export default function RunsTab({
+  promptPrefill,
+  suiteVersionPrefill,
+  focusRunId,
+  domain = 'all',
+  onGoCompare,
+}: {
+  promptPrefill?: { key: string; version: string } | null
+  suiteVersionPrefill?: string
+  focusRunId?: string | null
+  domain?: DomainFilter
+  onGoCompare?: (runId: string) => void
+}) {
   const queryClient = useQueryClient()
   const allowed = atLeast('super_admin')
   const [runPane, setRunPane] = useState<RunPane>('launch')
   const [historyPage, setHistoryPage] = useState(0)
+  const [suiteVersionId, setSuiteVersionId] = useState('')
+  const [suiteKbId, setSuiteKbId] = useState('')
+  const [suiteMode, setSuiteMode] = useState('offline')
   const [relKey, setRelKey] = useState('')
   const [relVersion, setRelVersion] = useState('')
   const [relMode, setRelMode] = useState('self+ragas')
@@ -93,6 +108,37 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+
+  const suitesQuery = useQuery({
+    queryKey: ['admin', 'evaluation-v2-suites-options'],
+    enabled: allowed,
+    queryFn: () => evaluationService.listSuites(),
+  })
+  const suites = suitesQuery.data ?? []
+  const domainSuites = useMemo(() => {
+    if (domain === 'all') return suites
+    return suites.filter(s => moduleToDomain(s.module) === domain)
+  }, [suites, domain])
+
+  const selectedSuite = useMemo(() => {
+    return suites.find(s => s.suite_version_id === suiteVersionId)
+  }, [suites, suiteVersionId])
+
+  useEffect(() => {
+    if (suiteVersionPrefill) {
+      setSuiteVersionId(suiteVersionPrefill)
+    }
+  }, [suiteVersionPrefill])
+
+  useEffect(() => {
+    if (selectedSuite) {
+      if (selectedSuite.kb_id) {
+        setSuiteKbId(selectedSuite.kb_id)
+      } else if (moduleToDomain(selectedSuite.module) === 'rag' && !suiteKbId) {
+        setSuiteKbId('rag_eval_kb')
+      }
+    }
+  }, [selectedSuite])
 
   const optionsQuery = useQuery({
     queryKey: ['admin', 'evaluation-center-run-options'],
@@ -286,6 +332,32 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
     } catch (cause) { setError(cause instanceof Error ? errMessage(cause) : '发起发布评测失败') }
     finally { setBusy(false) }
   }
+
+  const startSuiteRun = async () => {
+    setBusy(true); setError(''); setMessage('')
+    try {
+      if (!suiteVersionId) throw new Error('请选择要执行的评测方案。')
+      const targetDomain = selectedSuite ? moduleToDomain(selectedSuite.module) : ''
+      if (targetDomain === 'rag' && !suiteKbId.trim()) {
+        throw new Error('RAG 域评测方案必须指定知识库标识。')
+      }
+      const requestId = createIdempotencyKey()
+      const response = await evaluationService.createV2Run({
+        suite_version_id: suiteVersionId,
+        source: 'eval-center',
+        evaluation_mode: suiteMode,
+        ...(targetDomain === 'rag' || suiteKbId.trim() ? { kb_id: suiteKbId.trim() } : {}),
+        request_id: requestId,
+      })
+      setMessage(`评测方案运行已启动：Run ID ${response.run.run_id.slice(0, 8)}。任务已入队执行，可在下方记录中跟踪。`)
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'evaluation-v2-runs'] })
+      setRunPane('history')
+    } catch (cause) {
+      setError(cause instanceof Error ? errMessage(cause) : '发起方案评测失败')
+    } finally {
+      setBusy(false)
+    }
+  }
   const cancel = async (run: EvaluationV2Run) => {
     setBusy(true); setError('')
     try {
@@ -325,6 +397,73 @@ export default function RunsTab({ promptPrefill, focusRunId, domain = 'all', onG
     </div>
 
     {runPane === 'launch' ? <section id="evaluation-run-launch" role="tabpanel" aria-label="发起评测" className="space-y-4">
+      <Card
+        title="运行评测套件 (V2 综合方案)"
+        subtitle="选择预设评测方案及版本，一键启动端到端全链路自动化测评（支持离线比对、语义判分与 Ragas 量化指标）。"
+      >
+        <div className="grid gap-3 lg:grid-cols-[1.6fr_1fr_1fr_auto]">
+          <select
+            aria-label="选择评测方案"
+            value={suiteVersionId}
+            onChange={e => setSuiteVersionId(e.target.value)}
+            className={ctl}
+          >
+            <option value="">选择评测方案套件</option>
+            {domainSuites.map(s => (
+              <option key={s.suite_version_id || s.name} value={s.suite_version_id}>
+                {s.name} · v{s.version} ({domainLabel(moduleToDomain(s.module))} · {s.case_count} 题)
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="套件评测方式"
+            value={suiteMode}
+            onChange={e => setSuiteMode(e.target.value)}
+            className={ctl}
+          >
+            {Object.entries(MODE_LABELS).map(([value, labelText]) => (
+              <option key={value} value={value}>{labelText}</option>
+            ))}
+          </select>
+
+          <input
+            aria-label="知识库标识"
+            type="text"
+            placeholder="知识库标识（RAG 必填，如 rag_eval_kb）"
+            value={suiteKbId}
+            onChange={e => setSuiteKbId(e.target.value)}
+            className={ctl}
+          />
+
+          <button
+            type="button"
+            className={ctlPrimary}
+            disabled={busy || !suiteVersionId}
+            onClick={() => void startSuiteRun()}
+          >
+            <Play size={13} className="mr-1 inline" aria-hidden="true" />启动方案评测
+          </button>
+        </div>
+
+        {selectedSuite && (
+          <div className="mt-3 space-y-1 rounded-md bg-bg-elevated px-3 py-2 text-[11px] leading-5 text-text-secondary" aria-label="套件方案概要">
+            <p className="font-medium text-text-primary">{selectedSuite.name}（版本：v{selectedSuite.version}）</p>
+            <p>
+              业务领域：<span className="font-medium text-text-primary">{domainLabel(moduleToDomain(selectedSuite.module))}</span> ·
+              用例题量：<span className="font-medium text-text-primary">{selectedSuite.case_count} 题</span> ·
+              绑定数据集：<span className="font-medium text-text-primary">{selectedSuite.dataset_version}</span>
+              {selectedSuite.kb_id && <> · 预设知识库：<span className="font-medium text-text-primary">{selectedSuite.kb_id}</span></>}
+            </p>
+            {selectedSuite.thresholds && Object.keys(selectedSuite.thresholds).length > 0 && (
+              <p className="text-text-muted">
+                通过门禁阈值：{Object.entries(selectedSuite.thresholds).map(([k, v]) => `${k} ≥ ${(Number(v) * 100).toFixed(0)}%`).join('，')}
+              </p>
+            )}
+          </div>
+        )}
+      </Card>
+
       <Card title="发起评测" subtitle={'必填仅"被测 Prompt + 候选版本"；对比基线、评测题集、判分方式与门禁口径由系统按域自动推导。'}>
         <div className="grid gap-3 lg:grid-cols-[1.4fr_auto_auto_auto]">
           <select aria-label="发布评测 Prompt" value={relKey} onChange={e => setRelKey(e.target.value)} className={ctl}>
