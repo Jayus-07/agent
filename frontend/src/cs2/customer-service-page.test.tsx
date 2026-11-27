@@ -238,6 +238,117 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     expect(c.textContent).toContain('好的，请说明订单号')
   })
 
+  it('移动端长会话收起较早消息，并把被收起的订单卡固定在当前业务卡片区', async () => {
+    const messages = [
+      {
+        message_id: 'order-card',
+        sender_type: 'user',
+        content: '【订单咨询】订单号 MO-MOBILE1｜布艺沙发｜¥123.00｜待发货',
+        content_type: 'card',
+        attachments: [{ type: 'order_ref', order_no: 'MO-MOBILE1' }],
+        created_at: '2026-11-22T10:00:00Z',
+      },
+      ...Array.from({ length: 21 }, (_, index) => ({
+        message_id: `message-${index + 1}`,
+        sender_type: index % 2 === 0 ? 'assistant' : 'user',
+        content: `${index < 15 ? '较早' : '最近'}对话消息 ${index + 1}`,
+        content_type: 'text',
+        attachments: null,
+        created_at: `2026-11-22T10:${String(index + 1).padStart(2, '0')}:00Z`,
+      })),
+    ]
+    cs2Api.fetchMyConversations.mockResolvedValueOnce([
+      {
+        conversation_id: 'conv-long',
+        summary: '长会话',
+        conversation_status: 'active',
+        handling_mode: 'ai',
+        created_at: '2026-11-22T10:00:00Z',
+        messages,
+      },
+    ])
+    cs2Api.fetchPendingSnapshot.mockResolvedValueOnce({
+      proposal_id: 'p-mobile', version: 1, action_type: 'refund_request',
+      masked_target: '订单 ···LE1', summary: '提交退款申请', reason: '移动端同屏验收',
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      state: 'pending', confirmable: true, refund_review_mode: 'sandbox',
+    })
+    cs2Api.listMyTickets.mockResolvedValueOnce({
+      items: [{ ticket_id: 'ticket-mobile', title: '移动端验收工单' }],
+      total: 1,
+    })
+
+    const c = await mount()
+    await openConversation(c, '长会话')
+    await act(async () => {})
+
+    const history = c.querySelector<HTMLElement>('#cs2-mobile-history')
+    expect(history).not.toBeNull()
+    expect(history?.textContent).toContain('订单 MO-MOBILE1')
+    expect(history?.textContent).toContain('订单卡')
+    expect(history?.textContent).toContain('最近对话消息 21')
+    expect(history?.textContent).not.toContain('较早对话消息 1')
+    expect(history?.querySelector('[aria-label="最近订单卡"]')).not.toBeNull()
+    expect(c.textContent).toContain('确认退款')
+    expect(c.textContent).toContain('我的工单（1）')
+
+    const toggle = c.querySelector<HTMLButtonElement>('button[aria-controls="cs2-mobile-history"]')
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => toggle?.click())
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true')
+    expect(history?.textContent).toContain('较早对话消息 1')
+    expect(history?.querySelector('[aria-label="最近订单卡"]')).toBeNull()
+  })
+
+  it('最新订单卡仍在可见历史时，不固定较早订单卡', async () => {
+    const orderMessage = (messageId: string, orderNo: string) => ({
+      message_id: messageId,
+      sender_type: 'user',
+      content: `【订单咨询】订单号 ${orderNo}｜订单商品｜¥123.00｜待发货`,
+      content_type: 'card',
+      attachments: [{ type: 'order_ref', order_no: orderNo }],
+      created_at: '2026-11-22T10:00:00Z',
+    })
+    const messages = [
+      orderMessage('order-old', 'MO-OLD1'),
+      ...Array.from({ length: 15 }, (_, index) => ({
+        message_id: `between-${index + 1}`,
+        sender_type: index % 2 === 0 ? 'assistant' : 'user',
+        content: `较早对话消息 ${index + 1}`,
+        content_type: 'text',
+        attachments: null,
+        created_at: '2026-11-22T10:01:00Z',
+      })),
+      orderMessage('order-new', 'MO-NEW2'),
+      ...Array.from({ length: 5 }, (_, index) => ({
+        message_id: `recent-${index + 1}`,
+        sender_type: index % 2 === 0 ? 'user' : 'assistant',
+        content: `最近对话消息 ${index + 1}`,
+        content_type: 'text',
+        attachments: null,
+        created_at: '2026-11-22T10:02:00Z',
+      })),
+    ]
+    cs2Api.fetchMyConversations.mockResolvedValueOnce([
+      {
+        conversation_id: 'conv-order-switch',
+        summary: '切换订单的长会话',
+        conversation_status: 'active',
+        handling_mode: 'ai',
+        created_at: '2026-11-22T10:00:00Z',
+        messages,
+      },
+    ])
+
+    const c = await mount()
+    await openConversation(c, '切换订单的长会话')
+    const history = c.querySelector<HTMLElement>('#cs2-mobile-history')
+
+    expect(history?.textContent).toContain('MO-NEW2')
+    expect(history?.textContent).not.toContain('MO-OLD1')
+    expect(history?.querySelector('[aria-label="最近订单卡"]')).toBeNull()
+  })
+
   it('历史会话中转人工按钮可用（有消息）', async () => {
     const c = await mount()
     await openConversation(c, '退款咨询')
