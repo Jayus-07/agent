@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+FROM python:3.10-slim
+
+LABEL org.opencontainers.image.title="Agent Platform CI Base Image" \
+      org.opencontainers.image.description="Pre-installed Python 3.10 runtime with all locked test dependencies for ultra-fast CI runs" \
+      org.opencontainers.image.source="https://github.com/Jayus-07/agent"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# 安装系统编译链、git 与 postgresql 客户端
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    libpq-dev \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+# 预打包 Python 锁定依赖（包含 CPU 版 PyTorch）
+COPY requirements-lock.txt .
+RUN pip install --upgrade pip && \
+    pip install -r requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+CMD ["bash"]
