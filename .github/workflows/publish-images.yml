@@ -33,13 +33,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  build-and-push:
+    name: Build and publish ${{ matrix.target.name }} image
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: backend
+            context: .
+            file: ./Dockerfile
+            scope: backend
+          - name: frontend
+            context: ./frontend
+            file: ./frontend/Dockerfile
+            scope: frontend
+          - name: admin
+            context: ./frontend-admin
+            file: ./frontend-admin/Dockerfile
+            scope: frontend-admin
+          - name: cs
+            context: ./frontend-cs
+            file: ./frontend-cs/Dockerfile
+            scope: frontend-cs
     steps:
       - name: Checkout source
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
 
@@ -67,90 +88,89 @@ jobs:
             echo "build_time=$build_time"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build and publish backend image
-        id: backend
+      - name: Prepare target build configuration
+        id: target_config
+        shell: bash
+        run: |
+          target="${{ matrix.target.name }}"
+          {
+            echo "build_args<<EOF"
+            if [[ "$target" == "backend" ]]; then
+              echo "GIT_COMMIT=${{ steps.meta.outputs.short_sha }}"
+              echo "BUILD_TIME=${{ steps.meta.outputs.build_time }}"
+              echo "GIT_DIRTY=false"
+            elif [[ "$target" == "frontend" ]]; then
+              echo "API_URL=http://apisix:9080"
+              echo "NEXT_PUBLIC_ADMIN_URL=${{ vars.PRODUCTION_ADMIN_URL || 'https://admin.anyanyan.me' }}"
+              echo "NEXT_PUBLIC_CS_URL=${{ vars.PRODUCTION_CS_URL || 'https://cs.anyanyan.me' }}"
+            elif [[ "$target" == "admin" ]]; then
+              echo "API_URL=http://apisix:9080"
+            elif [[ "$target" == "cs" ]]; then
+              echo "API_URL=http://apisix:9080"
+              echo "NEXT_PUBLIC_WS_ORIGIN=${{ vars.PRODUCTION_CS_WS_ORIGIN }}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish image
+        id: build
         uses: docker/build-push-action@v7
         with:
-          context: .
-          file: ./Dockerfile
+          context: ${{ matrix.target.context }}
+          file: ${{ matrix.target.file }}
           push: true
-          tags: ${{ steps.meta.outputs.image_base }}:backend-${{ github.sha }}
+          tags: ${{ steps.meta.outputs.image_base }}:${{ matrix.target.name }}-${{ github.sha }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
-            com.agent-platform.git-dirty=false
-          build-args: |
-            GIT_COMMIT=${{ steps.meta.outputs.short_sha }}
-            BUILD_TIME=${{ steps.meta.outputs.build_time }}
-            GIT_DIRTY=false
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
+            ${{ matrix.target.name == 'backend' && 'com.agent-platform.git-dirty=false' || '' }}
+          build-args: ${{ steps.target_config.outputs.build_args }}
+          cache-from: type=gha,scope=${{ matrix.target.scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target.scope }}
           provenance: false
 
-      - name: Build and publish web image
-        id: frontend
-        uses: docker/build-push-action@v7
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.image_base }}:frontend-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
-          build-args: |
-            API_URL=http://apisix:9080
-            NEXT_PUBLIC_ADMIN_URL=${{ vars.PRODUCTION_ADMIN_URL || 'https://admin.anyanyan.me' }}
-            NEXT_PUBLIC_CS_URL=${{ vars.PRODUCTION_CS_URL || 'https://cs.anyanyan.me' }}
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
-          provenance: false
+      - name: Save image digest
+        shell: bash
+        run: |
+          mkdir -p digests
+          echo "${{ steps.build.outputs.digest }}" > "digests/${{ matrix.target.name }}.txt"
 
-      - name: Build and publish admin image
-        id: admin
-        uses: docker/build-push-action@v7
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
         with:
-          context: ./frontend-admin
-          file: ./frontend-admin/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.image_base }}:admin-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
-          build-args: |
-            API_URL=http://apisix:9080
-          cache-from: type=gha,scope=frontend-admin
-          cache-to: type=gha,mode=max,scope=frontend-admin
-          provenance: false
+          name: digest-${{ matrix.target.name }}
+          path: digests/${{ matrix.target.name }}.txt
+          retention-days: 1
 
-      - name: Build and publish customer service image
-        id: cs
-        uses: docker/build-push-action@v7
+  manifest:
+    name: Generate and upload release manifest
+    needs: [build-and-push]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download all digest artifacts
+        uses: actions/download-artifact@v4
         with:
-          context: ./frontend-cs
-          file: ./frontend-cs/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.image_base }}:cs-${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
-          build-args: |
-            API_URL=http://apisix:9080
-            # 未设置 vars.PRODUCTION_CS_WS_ORIGIN 时传空值：前端回退页面同源
-            # （wss://<当前访问域名>/ws/），不把生产域名锁死进镜像。
-            NEXT_PUBLIC_WS_ORIGIN=${{ vars.PRODUCTION_CS_WS_ORIGIN }}
-          cache-from: type=gha,scope=frontend-cs
-          cache-to: type=gha,mode=max,scope=frontend-cs
-          provenance: false
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Prepare manifest metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_base="ghcr.io/${GITHUB_REPOSITORY,,}"
+          build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "image_base=$image_base"
+            echo "build_time=$build_time"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Write image digest manifest
         env:
           IMAGE_BASE: ${{ steps.meta.outputs.image_base }}
           BUILD_TIME: ${{ steps.meta.outputs.build_time }}
-          BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
-          FRONTEND_DIGEST: ${{ steps.frontend.outputs.digest }}
-          ADMIN_DIGEST: ${{ steps.admin.outputs.digest }}
-          CS_DIGEST: ${{ steps.cs.outputs.digest }}
         run: |
           python - <<'PY'
           import json
@@ -159,14 +179,15 @@ jobs:
           from pathlib import Path
 
           image_base = os.environ["IMAGE_BASE"]
-          digests = {
-              "backend": os.environ["BACKEND_DIGEST"],
-              "frontend": os.environ["FRONTEND_DIGEST"],
-              "admin": os.environ["ADMIN_DIGEST"],
-              "cs": os.environ["CS_DIGEST"],
-          }
-          if any(not re.fullmatch(r"sha256:[0-9a-f]{64}", value) for value in digests.values()):
-              raise SystemExit("Buildx 未返回有效镜像摘要")
+          digests = {}
+          for name in ["backend", "frontend", "admin", "cs"]:
+              file_path = Path(f"digests/{name}.txt")
+              if not file_path.exists():
+                  raise SystemExit(f"Missing digest file for {name}")
+              val = file_path.read_text(encoding="utf-8").strip()
+              if not re.fullmatch(r"sha256:[0-9a-f]{64}", val):
+                  raise SystemExit(f"Invalid digest for {name}: {val}")
+              digests[name] = val
 
           manifest = {
               "commit": os.environ["GITHUB_SHA"],
@@ -183,7 +204,7 @@ jobs:
           PY
 
       - name: Upload release manifest
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: production-image-digests
           path: production-image-digests.json

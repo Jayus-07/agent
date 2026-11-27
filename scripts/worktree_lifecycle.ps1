@@ -20,7 +20,10 @@ param(
 
     [switch]$ConfirmInactive,
 
-    [switch]$DeleteBranch
+    [switch]$DeleteBranch,
+
+    # 配合 DeleteBranch：当通过 PR 确证已 Squash Merge 到 main 且 head 匹配时，允许安全清理本地分支
+    [switch]$AllowSquashDelete
 )
 
 Set-StrictMode -Version Latest
@@ -169,7 +172,7 @@ function Test-CommitMerged {
         'merge-base', '--is-ancestor', $Worktree.Head, $OriginMain
     )
     if ($ancestor.ExitCode -eq 0) {
-        return [pscustomobject]@{ Merged = $true; ByAncestor = $true; Evidence = 'HEAD 已包含在 origin/main 历史中' }
+        return [pscustomobject]@{ Merged = $true; ByAncestor = $true; ByPR = $false; Evidence = 'HEAD 已包含在 origin/main 历史中' }
     }
 
     if ($Worktree.Branch -and (Get-Command gh -ErrorAction SilentlyContinue)) {
@@ -192,9 +195,10 @@ function Test-CommitMerged {
                 } | Select-Object -First 1
                 if ($matchingPullRequest) {
                     return [pscustomobject]@{
-                        Merged    = $true
+                        Merged     = $true
                         ByAncestor = $false
-                        Evidence  = "PR #$($matchingPullRequest.number) 已合并到 main，且 PR 头提交与工作树 HEAD 一致"
+                        ByPR       = $true
+                        Evidence   = "PR #$($matchingPullRequest.number) 已合并到 main，且 PR 头提交与工作树 HEAD 一致"
                     }
                 }
             } catch {
@@ -206,6 +210,7 @@ function Test-CommitMerged {
     return [pscustomobject]@{
         Merged     = $false
         ByAncestor = $false
+        ByPR       = $false
         Evidence   = '无法证明该提交已进入 origin/main；若 PR 使用 squash/rebase，请先确认 gh 已登录并且 PR 头提交未变化'
     }
 }
@@ -219,7 +224,7 @@ function Get-Inventory {
     $rows = [System.Collections.Generic.List[object]]::new()
     foreach ($worktree in (Get-WorktreeRecords -RepositoryRoot $RepositoryRoot)) {
         $status = Get-WorktreeStatus -WorktreePath $worktree.Path
-        $mergeProof = [pscustomobject]@{ Merged = $false; ByAncestor = $false; Evidence = '未检查' }
+        $mergeProof = [pscustomobject]@{ Merged = $false; ByAncestor = $false; ByPR = $false; Evidence = '未检查' }
 
         if ($worktree.Branch -eq 'main') {
             $state = 'MAIN'
@@ -438,8 +443,13 @@ try {
         throw '当前终端正在该工作树目录中；请先切换到其他目录再执行删除。'
     }
 
+    $forceDelete = $false
     if ($DeleteBranch -and $target.Raw.Branch -and -not $target.MergeProof.ByAncestor) {
-        throw '已确认 PR 合并，但分支 HEAD 不是 origin/main 的祖先（常见于 squash merge）；为避免强删，本次只允许保留本地分支并移除工作树。'
+        if ($AllowSquashDelete.IsPresent -and $target.MergeProof.ByPR -and $target.MergeProof.Merged) {
+            $forceDelete = $true
+        } else {
+            throw '已确认 PR 合并，但分支 HEAD 不是 origin/main 的祖先（常见于 squash merge）；为避免强删，本次只允许保留本地分支并移除工作树（若确认已合入 PR，可追加 -AllowSquashDelete 开关清理本地分支）。'
+        }
     }
 
     # 2026-11-21：不用 $PSCmdlet.ShouldProcess —— ConfirmImpact='High' 会让它
@@ -459,10 +469,12 @@ try {
     }
 
     if ($DeleteBranch -and $target.Raw.Branch) {
-        $delete = Invoke-Git -WorkingDirectory $repositoryRoot -Arguments @('branch', '-d', $target.Raw.Branch)
+        $branchDeleteArg = if ($forceDelete) { '-D' } else { '-d' }
+        $delete = Invoke-Git -WorkingDirectory $repositoryRoot -Arguments @('branch', $branchDeleteArg, $target.Raw.Branch)
         if ($delete.ExitCode -ne 0) {
             throw "工作树已移除，但 Git 未能安全删除本地分支；分支已保留：$($delete.Text)"
         }
+        Write-Output ("PASS: 已安全删除本地分支：{0}" -f $target.Raw.Branch)
     }
 
     if (Test-Path -LiteralPath $target.Path) {
