@@ -7,6 +7,69 @@
 - 全文检索引擎默认由 `FULLTEXT_ENGINE="pg_gin"` 控制，使用 **PostgreSQL `tsvector` + GIN 倒排索引**（`156_rag_vectors_tsv_gin.sql`、`backend/rag/retrieval/pg_fulltext_retriever.py::PGFullTextRetriever`），写入 `rag_vectors` 时行级原子分词落库（`jieba.cut_for_search` + `to_tsvector('simple', ...)`），检索侧以 `ts_rank_cd` 打分对齐 `bm25_score` 协议并支持增量更新；旧单机 `BM25Store`（pickle 快照）仅在显式配置 `FULLTEXT_ENGINE="bm25"` 或测试传入时启用。
 - 主链路时延与缓存优化：`RAGChain._prepare` 调用记忆加载设置 `timeout=1.5s`（L3 `0.8s` 超时快速降级），防止记忆向量化阻塞主链路；`backend/rag/embedding_singleton.py` 对 `embed_query` 输入做 `.strip()` 规范化后再计算请求内缓存 key。
 
+## 策略驱动分块体系（Chunkers 模块化架构）
+
+平台完成从单体 3587 行 `chunking.py` 到模块化策略包 `backend/rag/preprocessing/chunkers/` 的深度解耦重构（遵循 Strategy 与 Facade 模式，门面保持 100% 向后兼容与 AST 契约）：
+
+```
+backend/rag/preprocessing/chunkers/
+├── base.py                   # 基础切块策略 BaseChunkStrategy、ChunkContext、SplitGroup
+├── router.py                 # 结构信号驱动路由器 ChunkStrategyRouter + 局部单元分派 ContentUnitDispatchStrategy
+├── table_handler.py          # 表格专用处理器 TableHandler（Markdown保留/单元格矩阵/跨页合并/引用打标）
+├── stamper.py                # 切块元数据与来源打标器 ChunkStamper（页码回映射/位置跨度/命名空间）
+├── audit.py                  # 双重覆盖率审计 CoverageAudit（字符覆盖率对账/清洗覆盖率对账）
+└── strategies/               # 7 种单一职责专业切块策略
+    ├── recursive.py          # RecursiveChunkStrategy（无结构滑动切块兜底）
+    ├── structure.py          # StructureChunkStrategy（文档章节层级树与 Parent-Child）
+    ├── legal.py              # LegalChunkStrategy（合同与法条：严格条款编号与标题继承）
+    ├── qa.py                 # QAChunkStrategy（局部 Q/A 问答对识别与原子绑定）
+    ├── step.py               # StepChunkStrategy（SOP、操作指南、编号列表原子块）
+    ├── financial.py          # FinancialTableChunkStrategy（财务指标与数值表格）
+    └── semantic.py           # SemanticChunkStrategy（句间向量余弦断崖语义切分）
+```
+
+### 1. 7 种专业切块策略矩阵与适用边界
+
+| 切块策略 | 适用场景与文档类型 | 核心切分规则与边界保护 | Token 预算与产出形态 |
+| :--- | :--- | :--- | :--- |
+| **`StructureChunkStrategy`** | 标准层级文档（技术文档、产品白皮书、通用制度） | 依 AST 标题层级（H1-H6）构建章节树；维护完整的祖先标题路径（`section_path`）；单章节超长时沿语义边界拆分。 | **Parent 800 tokens**（章节级）<br>**Leaf 200 tokens**（句子边界） |
+| **`LegalChunkStrategy`** (v4) | 商业合同、法律法规、合规制度 | 严格识别「第 N 条 / 款 / 项」编号；同一条款超长拆分时，强制子块继承所属条款标题与条款号，杜绝条款断头；禁止跨条款合并。 | **Leaf 200~300 tokens**<br>完整合同进入 Document Parent |
+| **`QAChunkStrategy`** (v2) | 常见问答手册、客服 FAQ、知识库问答对 | 精确识别局部 `**Q1:问题**` 与 `A1:答案`；将单个完整 Q+A 整体作为独立 Leaf 产出，杜绝将问题与答案割裂为两个块；**不为整篇 FAQ 生成只列问题的虚拟 Parent**，防止命中后拉取全篇无意义问题列表。 | **Leaf 覆盖完整 Q+A 对**<br>（超长答案依预算切分并附带问题前缀） |
+| **`StepChunkStrategy`** (v2) | 标准作业程序（SOP）、用户操作手册、流程指引 | 识别「步骤1/2/3」、「一、二、三」等有序标题；单个操作步骤内部保持原子性，禁止在步骤关键操作动作中途截断；操作前置条件与后续动作强关联绑定。 | **Leaf 150~250 tokens**<br>父块覆盖完整流程工序 |
+| **`FinancialTableChunkStrategy`** (v2) | 上市公司财报、财务报表、经营数据看板 | 提取数值密集型表格；将表头与维度信息（单位/币种/报告期）编码进每一数据行分块；针对复杂大表自动计算行列统计元数据。 | **Row-group Leaf 150~250 tokens**<br>挂载 `table_id` 与行号跨度 |
+| **`SemanticChunkStrategy`** (v1) | 纯长篇叙事、缺少 Markdown/标题格式的连续文本 | 计算相邻句子嵌入向量的余弦相似度；在相似度曲线发生骤降（断崖突变点）处执行语义断句切割，确保每个分块内部意图高度凝聚。 | **动态切分**（受最小/最大 Token 窗口硬约束） |
+| **`RecursiveChunkStrategy`** (v2) | 格式损坏文档、无结构 TXT、格式未识别兜底 | 递归多级分隔符切割（段落 `\n\n` $\rightarrow$ 换行 `\n` $\rightarrow$ 句号 `。` $\rightarrow$ 空格）；保证滑动窗口重叠（Overlap 20~40 tokens），作为平台终极稳健兜底。 | **Leaf 200 tokens**<br>（自动生成文档级虚拟 Parent） |
+
+### 2. 结构驱动自适应路由（`ChunkStrategyRouter`）
+平台摒弃了依赖不可靠的文件后缀或用户声明的粗暴映射，采用**基于 AST 结构信号直判机制（v3）**：
+- **严格优先级判决链**：
+  $$\text{问答对（QA）} \longrightarrow \text{强法律条款（Legal）} \longrightarrow \text{表格（Table）} \longrightarrow \text{步骤（Step）} \longrightarrow \text{层级章节（Structure）} \longrightarrow \text{递归兜底（Recursive）}$$
+- **强信号豁免门限**：
+  - AST 检出 $\ge 1$ 处局部 Q/A 配对直接启用 `QAChunkStrategy`；
+  - 检出 $\ge 3$ 处「第 N 条」规范编号直接启用 `LegalChunkStrategy`；
+  - 检出 $\ge 3$ 处「一、二、三」步骤标题直接启用 `StepChunkStrategy`；
+- **决策全链路可审计（`ChunkRouteDecision`）**：
+  - 每次路由生成结构化可审计报告，记录 `doc_type`、`completeness`、`strategy`、`strategy_version`、`signals`、降级原因与处理范围，随质检记录进入 Trace，支撑管理端排查与评测归因。
+
+### 3. 混合文档的局部内容单元分派机制（`ContentUnitDispatchStrategy`）
+现实企业文档往往极其复杂（例如一份《服务协议》前部为法律条款、中部为配置操作 SOP、尾部附带收费标准表格与常见问答 FAQ）：
+- 系统通过 `_recursive_content_units(ast)` 依 AST 嵌套层级递归拆解出局部的独立内容单元；
+- 针对每个子单元调用 `_local_strategy_class` 局部匹配最佳切块策略；
+- 维护完整的祖先标题路径（`ancestor_path`），并通过 `_namespace_content_unit_chunks` 统一给各单元的分块加上局部命名空间，最后合并为全局一致的 Leaf / Parent 拓扑树，彻底杜绝单文档全局策略“一刀切”造成的质量劣变。
+
+### 4. 表格处理与跨页表格智能拼接（`TableHandler`）
+- **短表跟随条款**：能放入 Leaf 预算的短小表格直接以内联 Markdown 形式跟随所属章节，同时原始单元格数据存于 `table_rows_json`；
+- **跨页表格智能拼接（`_merge_cross_page_tables`）**：针对分页 PDF/DOCX，自动识别“页尾表格 + 跨页首表格 + 表头一致”特征，自动丢弃续页冗余表头并将数据行无缝合并入首页表格（支持跨 3+ 页长表），保留阅读顺序与完整上下文；
+- **关联表格交叉引用**：当文本 Leaf 出现“见下表”、“收费标准详见附表”时，打上 `references=[{"table_id": "...", "relation": "refers_to"}]` 引用关系标记，供检索端精准回溯。
+
+### 5. 双重覆盖率审计与防丢块硬门禁（`CoverageAudit`）
+为防止任何切分或清洗逻辑产生“静默吞内容”，平台在落库前强制执行程序化双重覆盖对账：
+1. **清洗覆盖率审计（`cleaning_coverage_audit`）**：比对原始 Raw AST 与清洗后节点，仅允许确定性模板噪声、页码页脚与空白行删除；任何正文非预期丢失直接抛出 `cleaner_content_loss` 异常硬阻断；
+2. **切分覆盖率审计（`coverage_audit`）**：严格以实际产出的 Leaf 块为依据（Parent 不计入覆盖分母），按字符滑动窗口反向对账，覆盖率必须 $\ge 98\%$。
+3. **硬质量门禁（QualityGate）**：覆盖对账失败的文档直接进入 `failed` 状态，坚决禁止带缺陷文档发布为 `active`。
+
+---
+
 ## 工业级 Parent-Child 层级切分与回溯增强
 
 为彻底解决传统固定切块（Fixed-size Chunking）在“切片太小缺少上下文导致模型答非所问”与“切片太大幅度稀释向量相似度导致召回不准”之间的两难困境，系统在切分与检索两端深度实现了工业级 **Parent-Child 两级分块与回溯扩展机制**：
@@ -51,16 +114,38 @@
                                                     触发二次自救检索
 ```
 
-1. **反思触发时机（Gate 3 与 LLM 自报协议）**：
-   - 系统在 Prompt 中约束 LLM 在回答头部以隐藏注释附带元数据 `<!--META{"can_answer": bool, "citations": [...], "confidence": float, "reason": "..."}-->`；
-   - 若 LLM 自报 `can_answer: false`（原因通常为 `no_evidence` 证据不足或 `low_relevance` 相关性低），系统调用 `_handle_llm_reject` 并不立刻向用户吐出失败，而是区分**“知识库真没有”**与**“检索没找对”**。
-2. **动态自救闭环（`backend/rag/chain.py::_try_self_correct`）**：
-   - 调用 `SelfCorrectionStrategy.try_rewrite`，结合原始提问与拒答根因生成精炼改写词（Rewrite Query）；
-   - 以改写后的 Query 重新触发全套准备与执行流水线（`_prepare` + `_execute`）；
-   - **二次生成双重安全门禁**：改写救活生成的答案依然强制通过 `_verify_claims`（程序化逐条核验数字/日期/金额，绝不允许自纠错成为绕过安全防护的侧门）；
-3. **步数熔断与防死循环管控**：
-   - `SelfCorrectionStrategy` 严格受 `max_retries`（默认 1~2 次）硬上限限制；
-   - 每次重试均在 OpenTelemetry Trace 中独立记录 `SelfCorrection` Span；一旦用尽重试次数或改写后仍无法满足事实核验，系统立即收敛至统一拒答路径 `_reject`，杜绝死循环、Token 溢出与延迟不可控。
+### 1. Evidence Gate 三道分级防线体系（`backend/rag/evidence_gate/`）
+- **Gate 1：检索置信度门禁（`retrieval_gate`）**：
+  - 检查 PGVector 余弦相似度与 GIN `ts_rank_cd` 倒排检索的融合分数；若两路均无有效召回，直接触发快速降级，不浪费后续昂贵的模型调用；
+- **Gate 2：重排置信度门禁（`rerank_gate`）**：
+  - 送入 Cross-Encoder（BGE-Reranker-Large 或云端重排）；若候选块最高得分低于安全阈值（默认 0.35），判定为“检索弱相关”，提前拦截无证据回答；
+- **Gate 3：LLM 自报协议与反思判定（`llm_gate`）**：
+  - Prompt 强制约束模型在输出头部嵌入结构化元数据注释：
+    `<!--META{"can_answer": bool, "citations": ["E1", "E2"], "confidence": float, "reason": "no_evidence" | "ambiguous" | "success"}-->`
+  - 当 LLM 自报 `can_answer: false` 时，系统调用 `_handle_llm_reject`，并不直接粗暴拒答，而是区分**“知识库真没有”**与**“检索词没命准”**，向 `SelfCorrectionStrategy` 移交控制权。
+
+### 2. 自反思状态机与变体缓存复用机制（`SelfCorrectionStrategy`）
+- **变体缓存跨轮复用（`_cached_rewrites`）**：
+  - 生产实证中，改写 LLM 一次外呼通常会产出 2~3 条候选改写词，首条候选变体在二次检索重排后可能恰好落在低分区间（如实测变体 A 打分 0.24、变体 B 打分 0.57 并存）；
+  - 为避免重复调用改写 LLM 导致费用翻倍与时延激增，`SelfCorrectionStrategy` 在内存中缓存变体列表（`_cached_rewrites`）；当触发下一轮重试时，直接按序号取出下一条已生成变体发起检索，大幅节省 Token 与 RT。
+- **重试步数与熔断预算**：
+  - 严格受 `SELF_CORRECTION_ENABLED` 与 `SELF_CORRECTION_MAX_RETRIES`（默认 1~2 次）硬上限限制；
+  - 每次重试均在 OpenTelemetry 中记录独立的 `SelfCorrection` Span（记录来源变体、改写词、耗时与收益）；重试超限后优雅收敛至统一拒答路径 `_reject`。
+
+### 3. 程序化 Claim 事实核验器（`ClaimVerifier`：零容忍正则引擎）
+业界依赖 LLM-as-Judge 进行幻觉检验容易被“句意通顺但数字胡编”的假象蒙蔽。平台在 LLM 校验之前，前置部署了纯程序化的 `ClaimVerifier`（`backend/rag/evidence_gate/claim_verifier.py`）：
+- **四大类确定性事实正则提取**：
+  - **时长时效**（`_TIME_FACT_RE`）：`(\d+(?:\.\d+)?)\s*(小时|分钟|秒|天|日|工作日|周|个月|月|年|日内)`；
+  - **百分比**（`_PERCENT_RE`）：`(\d+(?:\.\d+)?)\s*[%％]`；
+  - **金额数值**（`_AMOUNT_RE`）：`(?:[￥¥$€£]\s*)?(\d+(?:\.\d+)?)\s*(元|美元|欧元|人民币|美金|万|亿)`；
+  - **日期时间**（`_DATE_RE`）：`(?:\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?|\d{1,2}月\d{1,2}日)`；
+- **标准化归一化**：
+  - 剔除字符间空格与全角空格，全角数字/符号统一转半角（如 `２４ 小时` $\rightarrow$ `24小时`），杜绝格式差异引发误判；
+- **引用锚点精确比对**：
+  - 依据回答中的 `[E1]`, `[E2]` 引用，将回答按句子拆分为 `(claim_text, cited_index)`；
+  - 抽取 Claim 中的确定性事实集合，并比对对应候选 Chunk 原文提取的事实集合：
+    $$\text{Missing Facts} = \text{Facts}(Claim) - \text{Facts}(Chunk)$$
+  - 若 $\text{Missing Facts} \neq \emptyset$，判定该 Claim 存在事实篡改（`numeric_fact_not_supported`），**执行一票否决拦截**，且该程序化判定不可被任何 LLM Judge 覆盖！切实守住合同金额、理赔时效与履约日期的安全底线。
 
 ---
 

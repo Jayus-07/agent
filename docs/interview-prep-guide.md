@@ -126,8 +126,35 @@
 - **反思自救回路（`backend/rag/chain.py::_try_self_correct`）**：
   - **LLM 自报协议（Gate 3）**：Prompt 约束模型在输出头部附带隐藏元数据注释 `<!--META{"can_answer": false, "reason": "no_evidence"}-->`；
   - **区分“真没有”与“没找对”**：模型自报无法回答时，`SelfCorrectionStrategy` 并不直接放弃，而是结合原问题与拒答根因调用 `try_rewrite` 动态生成改写 Query，触发二次自救检索；
-  - **二次生成双重安全门禁**：二次生成的答案依然强制通过程序化 `ClaimVerifier` 核验数字/日期/金额，绝不允许自纠错成为绕过安全防护的后门；
+  - **变体缓存跨轮复用**：改写 LLM 一次产出多条变体，存入内存缓存 `_cached_rewrites`，跨轮重试依次取出变体重检，不再重复调用 LLM 产生额外开销；
+  - **二次生成双重安全门禁**：二次生成的答案依然强制通过程序化 `ClaimVerifier`（正则核验时长、金额、日期、百分比）零容忍核验，绝不允许自纠错成为绕过安全防护的后门；
   - **严格步数熔断（`can_retry()`）**：受 `max_retries`（默认 1~2 次）硬限制，重试均在 OpenTelemetry 中独立记录 `SelfCorrection` Span；重试仍不达标立即收敛至统一拒答路径 `_reject`，彻底杜绝死循环与延迟失控。
+
+### 卡片 14：基于 AST 的四层纵深 SQL 安全与多租户隔离架构（`SQLPolicyGuard`）
+- **核心痛点**：外层正则或简单拼接 `WHERE tenant_id = 'xxx'` 在面对 `UNION ALL`、深层子查询（Subquery）或多表 JOIN 时存在致命漏洞（外部 WHERE 根本无法约束子查询与 UNION 分支内部的数据可见性，导致跨租户数据泄漏）。
+- **四层纵深防御体系（`backend/sql/policy.py`）**：
+  - **Layer 1 权限门（Fail-Closed）**：显式校验 `sql.read` 权限点；`user_id` 缺失直接阻断，杜绝未绑定身份的旁路调用；
+  - **Layer 2 6层 AST 硬校验（`sqlglot`）**：根节点必须为只读 `exp.Select`，禁止 DDL/DML，只允许正向白名单函数（拦截 `pg_read_file`, `sleep`, `benchmark`），强制 `LIMIT` 安全上限（默认 100，最大 1000）；
+  - **Layer 3 真实物理表解析（`_collect_table_refs`）**：严格解析 AST 中的物理表节点，剔除 `exp.CTE` 别名伪装，对每一个物理表进行角色权限匹配，任一表未授权一票否决；
+  - **Layer 4 基于 Select Scope 的三维租户条件原地注入**：遍历 AST 中所有的 `exp.Select` 作用域（含子查询与 UNION 分支），提取直接引用的物理表与别名，读取 `schema_loader.get_table_policy(table)`，调用 `sel.where(cond, copy=False)` 原地在 AST 节点树追加参数化隔离条件并提取 `params` 字典，防范 SQL 二次注入与跨租户逃逸。
+
+### 卡片 15：混合检索底层原理：HNSW 拓扑调优（80→100 实证）与 RRF 量纲隔离
+- **核心痛点**：稠密余弦打分 $[0, 1]$ 与稀疏全文打分 $[0, +\infty)$ 机制截然不同，无法直接归一化加权；高维向量空间存在拓扑聚合，图搜索容易收敛于局部次优解。
+- **HNSW 参数调优与 80 $\rightarrow$ 100 生产踩坑（`backend/config/rag.py`）**：
+  - 建库参数 `m=16, ef_construction=64` 兼顾内存与图连通性；
+  - **80 $\rightarrow$ 100 生产实证**：在 5440 块知识库压测中，真实余弦相似度 0.62 的核心发票块（精确排 #6）在 `ef_search=80` 时跌出 top9，导致 dense 3.0 权重名额被次优块挤占；平台将 `VECTOR_HNSW_EF_SEARCH` 调优锁定至 100，并在检索时通过 `SET LOCAL hnsw.ef_search = 100` 事务级会话下发；
+- **RRF (Reciprocal Rank Fusion) 倒数排名融合（`backend/rag/retrieval/hybrid.py`）**：
+  - 公式：$RRF(d) = \sum \frac{w_m}{60 + rank_m(d)}$；
+  - 完全剥离绝对分数值，仅按相对排名融合，天生免疫长文档 BM25 分数飙高压制向量路的量纲漂移；
+  - 配合 Cross-Encoder（BGE-Reranker-Large）做二次全注意力交互精排，形成“RRF 广度粗排 + Cross-Encoder 深度判定”双保险。
+
+### 卡片 16：复杂文档结构驱动切分：7 种策略自适应路由、跨页表格合并与覆盖率审计
+- **核心痛点**：单一切块策略无法适应企业级多结构混合文档（法律条款、FAQ、操作 SOP、财报表格），易发生条款断头、Q/A 分离或静默丢内容。
+- **模块化策略矩阵（`backend/rag/preprocessing/chunkers/`）**：
+  - 7 种专业策略：`Structure`（层级章节与 Parent-Child）、`Legal`（条款号严格绑定与标题继承）、`QA`（局部问答对原子化绑定）、`Step`（SOP 操作步骤原子块）、`Financial`（数值表格与维度行块）、`Semantic`（句间余弦断崖突变）、`Recursive`（滑动窗口兜底）；
+  - **局部内容单元分派（`ContentUnitDispatchStrategy`）**：按 AST 嵌套层级递归拆解局部单元，各自匹配独立最佳策略并统一命名空间；
+  - **跨页表格智能拼接（`_merge_cross_page_tables`）**：自动合并分页 PDF/DOCX 的续页表格数据行，保留完整阅读顺序；
+  - **双重覆盖率审计（`audit.py`）**：`cleaning_coverage_audit`（防清洗造假）+ `coverage_audit`（Leaf 覆盖率 $\ge 98\%$ 对账），覆盖缺口触发硬异常阻断发布。
 
 ---
 
@@ -150,9 +177,19 @@
    - **答**：“我们是具备 **动态反思自纠错（Self-Correction Loop）的 Agentic RAG**：
      - 当 LLM 自报证据不足（`no_evidence`）或置信度低于阈值时，系统不直接向用户抛出拒答，而是调用 `SelfCorrectionStrategy` 动态改写 Query 触发二次检索；
      - 为了杜绝死循环和成本失控，我们设置了 `max_retries=1~2` 硬熔断，并且二次救活的答案依然必须经过程序化 `ClaimVerifier` 逐字核验数字和日期；一旦重试仍失败，优雅降级为统一拒答，P99 延迟始终锁定在安全预算内。”
-4. **Q：为什么把原本的选品漏斗下线了？**
+4. **Q：智能查数中你们是怎么防 SQL 注入和多租户数据越权的？**
+   - **答**：“我们绝不用脆弱的正则过滤，而是基于 `sqlglot` 抽象语法树构建了 **四层纵深防护（`SQLPolicyGuard`）**：
+     - 第一层权限门，显式校验 `sql.read` 与必须携带 `user_id`，空身份直接 Fail-closed 阻断；
+     - 第二层 6 层语法硬校验，只允许只读 `exp.Select` 和白名单函数，拦截危险函数与强加物理 LIMIT；
+     - 第三层表白名单，严格剥离 CTE 别名伪装，对全语法树引用的真实物理表逐个校验角色访问权限；
+     - 第四层也是最核心的——**基于 Select Scope 的三维租户条件原地注入**：因为简单的外层追加 `WHERE` 根本管不到 `UNION ALL` 和深层子查询，我们遍历语法树中所有 `exp.Select` 作用域，按 Scope 提取表别名，调用 `sel.where(cond, copy=False)` 原地注入参数化的 `tenant_id = :p0` 条件并提取参数字典，彻底杜绝任何跨租户逃逸与二次注入。”
+5. **Q：混合检索中你们是怎么解决不同检索器打分量纲不一致的？HNSW 调优踩过什么坑？**
+   - **答**：“我们采用了 **RRF 倒数排名融合算法结合 Cross-Encoder 精排**：
+     - 针对 PGVector 余弦分和 PG 全文检索分无法直接相加的问题，RRF 完全抛弃绝对分数，依据 $1/(60+rank)$ 相对位次融合，平缓了首位支配效应，免疫长文档词频堆叠引起的打分量纲漂移；
+     - 在 HNSW 上我们踩过一个很深的坑：在 5440 块库做压测时，发票目标块排精确余弦 #6，但在 `ef_search=80` 时被局部流形死胡同挤出了 Top-9，导致 dense 3.0 权重名额被次优块抢占后重排拒答。后来我们将 `VECTOR_HNSW_EF_SEARCH` 调优到 100 并加了守卫断言，每次查询前通过 `SET LOCAL hnsw.ef_search = 100` 事务级下发，彻底解决了漏召回问题。”
+6. **Q：为什么把原本的选品漏斗下线了？**
    - **答**：“早期确实做过选品漏斗和竞品监控的探索，但随着平台往生产级演进，我发现业务战线拉得太长会稀释稳定性。后来我做了架构收敛（#484），把选品漏斗下线，集中精力把 **RAG（GIN 倒排+发布 CAS）、NL2SQL（AST 参数化安全+延迟优化）、智能客服（派单状态机）和旅游 V2（乐观锁+中断恢复）** 这四块真正打穿到生产可用。”
-5. **Q：这个项目里你用 AI 辅助写了多少？遇到过什么最难调的坑？**
+7. **Q：这个项目里你用 AI 辅助写了多少？遇到过什么最难调的坑？**
    - **答**：“我把 AI 当成高频编码搭档，重复性的前端页面、CRUD 和测试模板让 AI 生成提效；但**架构边界、状态机和并发锁序必须自己把控**。比如之前踩过两个很深的坑：一个是单机 BM25 pickle 在 4C8G 容器里并发发布时抢锁甚至 OOM，最后下决心重构成 PG 原生 `tsvector + GIN` 行级增量索引；另一个是思考型模型做 NL2SQL 路由和生成时动辄十几秒，排查 Trace 后发现是模型默认开启了隐式 thinking，显式关闭后直接压到了 2–3 秒。”
-6. **Q：如果记不清某个具体文件里的参数名怎么办？**
+8. **Q：如果记不清某个具体文件里的参数名怎么办？**
    - **答**：“具体配置常量我都收口在 `backend/config/` 和管理端 `sys_config` 热配置表里了，手头一时记不清精确的字段名，但它的**机制和边界**是……（直接切到上面卡片的架构原理）。”
