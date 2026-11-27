@@ -333,6 +333,8 @@ jobs:
             backend/tests/memory/test_message_codec.py \
             backend/tests/rag/test_chunk_pages_locality.py \
             backend/tests/rag/test_chunkers_modular_architecture.py \
+            backend/tests/services/test_model_config_modular_architecture.py \
+            backend/tests/evaluation_v2/test_repository_modular_architecture.py \
             backend/tests/test_citation_formatter.py \
             backend/tests/api/test_evaluation_runs_list.py \
             backend/tests/api/test_cs_knowledge_search_rag.py \
