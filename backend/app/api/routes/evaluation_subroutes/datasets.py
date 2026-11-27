@@ -63,6 +63,10 @@ def _current_verify_evidence_anchors(*args: Any, **kwargs: Any) -> Any:
     fn = getattr(facade, "verify_evidence_anchors", None) or verify_evidence_anchors
     return fn(*args, **kwargs)
 
+def _current_load_unanswered_entry(*args: Any, **kwargs: Any) -> Any:
+    fn = getattr(facade, "_load_unanswered_entry", None) or _load_unanswered_entry
+    return fn(*args, **kwargs)
+
 @router.get("/import-template")
 async def download_import_template(
     module: str = Query(default="rag"),
@@ -495,7 +499,7 @@ async def intake_unanswered(
     原候选）、source_ref.origin 查重（同一条坏例跨请求只回流一次，命中返回
     200 + duplicate=true 不再创建）、审核层既有防重查询。"""
     _role(actor, "admin")
-    entry = await asyncio.to_thread(_load_unanswered_entry, body.entry_id)
+    entry = await asyncio.to_thread(_current_load_unanswered_entry, body.entry_id)
     if entry is None:
         raise HTTPException(404, "未答问题条目不存在")
     question = str(entry["question"] or "").strip()
