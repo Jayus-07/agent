@@ -172,7 +172,7 @@ function Test-CommitMerged {
         'merge-base', '--is-ancestor', $Worktree.Head, $OriginMain
     )
     if ($ancestor.ExitCode -eq 0) {
-        return [pscustomobject]@{ Merged = $true; ByAncestor = $true; Evidence = 'HEAD 已包含在 origin/main 历史中' }
+        return [pscustomobject]@{ Merged = $true; ByAncestor = $true; ByPR = $false; Evidence = 'HEAD 已包含在 origin/main 历史中' }
     }
 
     if ($Worktree.Branch -and (Get-Command gh -ErrorAction SilentlyContinue)) {
@@ -195,9 +195,10 @@ function Test-CommitMerged {
                 } | Select-Object -First 1
                 if ($matchingPullRequest) {
                     return [pscustomobject]@{
-                        Merged    = $true
+                        Merged     = $true
                         ByAncestor = $false
-                        Evidence  = "PR #$($matchingPullRequest.number) 已合并到 main，且 PR 头提交与工作树 HEAD 一致"
+                        ByPR       = $true
+                        Evidence   = "PR #$($matchingPullRequest.number) 已合并到 main，且 PR 头提交与工作树 HEAD 一致"
                     }
                 }
             } catch {
@@ -209,6 +210,7 @@ function Test-CommitMerged {
     return [pscustomobject]@{
         Merged     = $false
         ByAncestor = $false
+        ByPR       = $false
         Evidence   = '无法证明该提交已进入 origin/main；若 PR 使用 squash/rebase，请先确认 gh 已登录并且 PR 头提交未变化'
     }
 }
@@ -222,7 +224,7 @@ function Get-Inventory {
     $rows = [System.Collections.Generic.List[object]]::new()
     foreach ($worktree in (Get-WorktreeRecords -RepositoryRoot $RepositoryRoot)) {
         $status = Get-WorktreeStatus -WorktreePath $worktree.Path
-        $mergeProof = [pscustomobject]@{ Merged = $false; ByAncestor = $false; Evidence = '未检查' }
+        $mergeProof = [pscustomobject]@{ Merged = $false; ByAncestor = $false; ByPR = $false; Evidence = '未检查' }
 
         if ($worktree.Branch -eq 'main') {
             $state = 'MAIN'
