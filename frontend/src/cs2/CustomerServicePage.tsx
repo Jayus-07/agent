@@ -44,6 +44,9 @@ const QUICK_ENTRIES = [
   { icon: '📝', title: '投诉建议', hint: '物流时效投诉', text: '我要投诉，物流太慢了' },
 ] as const
 
+const MOBILE_HISTORY_VISIBLE_COUNT = 6
+const MOBILE_HISTORY_COLLAPSE_THRESHOLD = 8
+
 /** 后端 sender_type → cs2 角色 */
 function roleOf(senderType: string): Cs2Message['role'] {
   if (senderType === 'human_agent') return 'agent'
@@ -82,6 +85,7 @@ export default function CustomerServicePage() {
   } | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const [foldKey, setFoldKey] = useState(0)
+  const [expandedMobileHistoryId, setExpandedMobileHistoryId] = useState<string | null>(null)
   // M1：订单选择抽屉（淘宝式「发订单给客服」）
   const [orderSheetOpen, setOrderSheetOpen] = useState(false)
   const [preselectOrderNo, setPreselectOrderNo] = useState<string | null>(null)
@@ -546,6 +550,19 @@ export default function CustomerServicePage() {
       })),
     [sessions],
   )
+  const mobileHistoryExpanded = expandedMobileHistoryId === draft.id
+  const collapseMobileHistory =
+    draft.messages.length > MOBILE_HISTORY_COLLAPSE_THRESHOLD && !mobileHistoryExpanded
+  const collapsedMessageCount = collapseMobileHistory
+    ? draft.messages.length - MOBILE_HISTORY_VISIBLE_COUNT
+    : 0
+  const latestOrderMessage = [...draft.messages].reverse().find((message) => orderRefOf(message))
+  const pinnedOrderMessage =
+    collapseMobileHistory &&
+    latestOrderMessage &&
+    draft.messages.indexOf(latestOrderMessage) < collapsedMessageCount
+      ? latestOrderMessage
+      : undefined
 
   return (
     <div className="flex h-screen flex-col bg-slate-100">
@@ -586,9 +603,41 @@ export default function CustomerServicePage() {
               </>
             )}
 
-            {draft.messages.map((m) => (
-              <MessageBubble key={m.id} message={m} />
-            ))}
+            {draft.messages.length > MOBILE_HISTORY_COLLAPSE_THRESHOLD ? (
+              <>
+                <div className="hidden flex-col gap-2.5 md:flex">
+                  {draft.messages.map((m) => (
+                    <MessageBubble key={m.id} message={m} />
+                  ))}
+                </div>
+                <div className="flex flex-col gap-2.5 md:hidden">
+                  <button
+                    type="button"
+                    className="min-h-11 self-start rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-600 hover:border-indigo-300 hover:text-indigo-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500"
+                    aria-expanded={mobileHistoryExpanded}
+                    aria-controls="cs2-mobile-history"
+                    onClick={() => setExpandedMobileHistoryId(mobileHistoryExpanded ? null : draft.id)}
+                  >
+                    {mobileHistoryExpanded
+                      ? '收起较早对话'
+                      : `展开较早对话（${collapsedMessageCount} 条）`}
+                  </button>
+                  <div id="cs2-mobile-history" className="flex flex-col gap-2.5">
+                    {(mobileHistoryExpanded
+                      ? draft.messages
+                      : draft.messages.slice(-MOBILE_HISTORY_VISIBLE_COUNT)
+                    ).map((m) => (
+                      <MessageBubble key={m.id} message={m} />
+                    ))}
+                    {pinnedOrderMessage && (
+                      <MessageBubble key={`mobile-pinned-${pinnedOrderMessage.id}`} message={pinnedOrderMessage} pinned />
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (
+              draft.messages.map((m) => <MessageBubble key={m.id} message={m} />)
+            )}
 
             {/* AI 回复未生成（SSE 断流/空回包，error 事件已由 reducer 兜底为系统提示）：
                 展示友好提示 + 一键重试，替代生硬的「（空）」占位。人工服务态不显示
@@ -1039,7 +1088,7 @@ function orderRefOf(message: Cs2Message): { order_no: string } | null {
   return orderNo ? { order_no: orderNo } : null
 }
 
-function MessageBubble({ message }: { message: Cs2Message }) {
+function MessageBubble({ message, pinned = false }: { message: Cs2Message; pinned?: boolean }) {
   // 空回复且本轮已结束（SSE 断流/空回包）：不渲染空泡和「（空）」占位，
   // 页面的友好重试卡已接管；streaming 中的空占位泡保留（配合 typing 点点）
   if (!message.content && !message.streaming) return null
@@ -1069,8 +1118,14 @@ function MessageBubble({ message }: { message: Cs2Message }) {
   const orderRef = orderRefOf(message)
 
   return (
-    <div className={`flex min-w-0 max-w-[78%] flex-col gap-0.5 [overflow-wrap:anywhere] ${align}`}>
-      {message.role !== 'system' && (
+    <div
+      className={pinned
+        ? 'mx-auto flex w-full max-w-md min-w-0 flex-col gap-0.5 [overflow-wrap:anywhere]'
+        : `flex min-w-0 max-w-[78%] flex-col gap-0.5 [overflow-wrap:anywhere] ${align}`}
+      role={pinned ? 'group' : undefined}
+      aria-label={pinned ? '最近订单卡' : undefined}
+    >
+      {message.role !== 'system' && !pinned && (
         <div className={`flex items-center gap-1.5 text-[11px] text-slate-400 ${message.role === 'user' ? 'justify-end' : ''}`}>
           {message.role === 'assistant' && (
             <span className="grid h-5 w-5 place-items-center rounded-full bg-indigo-600 text-white" aria-hidden>
@@ -1082,7 +1137,7 @@ function MessageBubble({ message }: { message: Cs2Message }) {
         </div>
       )}
       {orderRef ? (
-        <div className="rounded-2xl rounded-br-md border border-indigo-300 bg-white px-3 py-2.5 text-slate-800">
+        <div className={`rounded-2xl border border-indigo-300 bg-white px-3 py-2.5 text-slate-800 ${pinned ? '' : 'rounded-br-md'}`}>
           <div className="flex items-center gap-1.5">
             <span className="grid h-5 w-5 place-items-center rounded-full bg-indigo-50 text-[11px]" aria-hidden>📦</span>
             <b className="text-[13px]">订单 {orderRef.order_no}</b>
