@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import time
+from decimal import Decimal, InvalidOperation
 
 from backend.customer_service.response.contracts import (
     EXPERT_RESPONSE_POLICY,
@@ -59,6 +60,220 @@ def _metrics_inc(counter_name: str, labels: dict) -> None:
         pass
 
 
+_ORDER_STATUS_LABELS = {
+    "pending": "待付款",
+    "paid": "待发货",
+    "shipped": "已发货",
+    "completed": "已完成",
+    "cancelled": "已取消",
+    "unknown": "暂无法确认",
+}
+_CURRENCY_SYMBOLS = {
+    "CNY": "¥",
+    "USD": "$",
+    "EUR": "€",
+    "JPY": "¥",
+    "HKD": "HK$",
+}
+
+
+def _requested_order_formats(user_message: str) -> set[str]:
+    """识别订单查询中用户明确要求的输出格式。"""
+    formats: set[str] = set()
+    table_match = re.search(r"表格|table", user_message, re.IGNORECASE)
+    if table_match and not _has_local_format_negation(
+        user_message, table_match.start(),
+    ):
+        formats.add("table")
+    bullet_match = re.search(
+        r"项目符号|分点|逐条|列表格式|按列表|bullet\s*points?",
+        user_message,
+        re.IGNORECASE,
+    )
+    if bullet_match and not _has_local_format_negation(
+        user_message, bullet_match.start(),
+    ):
+        formats.add("bullets")
+    next_steps_match = re.search(
+        r"下一步|接下来|后续|next\s*steps?",
+        user_message,
+        re.IGNORECASE,
+    )
+    if next_steps_match and not _has_local_format_negation(
+        user_message, next_steps_match.start(),
+    ):
+        formats.add("next_steps")
+    return formats
+
+
+def _has_local_format_negation(user_message: str, match_start: int) -> bool:
+    prefix = user_message[max(0, match_start - 20):match_start]
+    return re.search(
+        r"(?:不要|不用|别|不需要|无需|不必|不想要|请勿|避免)"
+        r"(?:(?:再)?(?:使用|用|采用|给我|提供)){0,2}"
+        r"(?:markdown|md)?\s*$",
+        prefix,
+        re.IGNORECASE,
+    ) is not None
+
+
+def _order_facts(expert_result: dict) -> list[dict]:
+    facts = build_fact_set(expert_result)
+    orders = facts.get("orders")
+    if isinstance(orders, list) and orders:
+        return [order for order in orders if isinstance(order, dict)]
+    order = facts.get("order")
+    return [order] if isinstance(order, dict) and order else []
+
+
+def _order_cell(value: object) -> str:
+    text = str(value or "暂未提供")
+    return re.sub(r"\s+", " ", text).replace("|", r"\|")
+
+
+def _order_amount(order: dict) -> str:
+    amount = order.get("total_amount")
+    if amount is None:
+        return "暂无法确认"
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError):
+        return "暂无法确认"
+    if not value.is_finite() or value < 0:
+        return "暂无法确认"
+    currency_value = order.get("currency")
+    currency = str(currency_value or "").upper()
+    symbol = _CURRENCY_SYMBOLS.get(currency)
+    amount_text = format(value, "f")
+    if "." not in amount_text:
+        amount_text += ".00"
+    elif len(amount_text.rsplit(".", 1)[1]) == 1:
+        amount_text += "0"
+    if symbol:
+        return f"{symbol}{amount_text}"
+    if not currency:
+        return f"{amount_text}（币种未提供）"
+    if currency == "UNKNOWN":
+        return f"{amount_text}（币种未知）"
+    return f"{amount_text} {currency}"
+
+
+def _render_order_format_fallback(
+    formats: set[str],
+    expert_result: dict,
+) -> str | None:
+    """用已核验订单事实提供格式化兜底，不调用模型或补造业务信息。"""
+    orders = _order_facts(expert_result)
+    if not orders:
+        return None
+
+    rows = []
+    for order in orders:
+        rows.append({
+            "order_no": _order_cell(order.get("order_no")),
+            "product": _order_cell(order.get("product_names")),
+            "amount": _order_amount(order),
+            "status": _ORDER_STATUS_LABELS.get(
+                str(order.get("status") or "unknown"),
+                _order_cell(order.get("status")),
+            ),
+        })
+
+    sections: list[str] = []
+    if "table" in formats:
+        lines = [
+            "| 序号 | 订单号 | 商品 | 金额 | 状态 |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        lines.extend(
+            f"| {index} | {row['order_no']} | {row['product']} | "
+            f"{row['amount']} | {row['status']} |"
+            for index, row in enumerate(rows, start=1)
+        )
+        sections.append("\n".join(lines))
+
+    if "bullets" in formats:
+        sections.append("\n".join(
+            f"- 订单号：{row['order_no']}；商品：{row['product']}；"
+            f"金额：{row['amount']}；状态：{row['status']}。"
+            for row in rows
+        ))
+
+    if "next_steps" in formats:
+        order_numbers = "、".join(
+            row["order_no"] for row in rows
+            if row["order_no"] != "暂未提供"
+        )
+        scope = f"订单 {order_numbers}" if order_numbers else "已查询的订单"
+        sections.append(
+            f"- 现在：在“我的订单”核对{scope}的商品和当前状态。\n"
+            "- 后续：如需继续查询或处理售后，请告诉我对应订单号和具体问题，"
+            "我会先按记录核对。"
+        )
+
+    return "\n\n".join(sections)
+
+
+def _requested_bullet_count(user_message: str) -> int | None:
+    match = re.search(
+        r"(\d{1,2}|[一二三四五六七八九十])\s*(?:条|点)",
+        user_message,
+    )
+    if match is None:
+        return None
+    value = match.group(1)
+    if value.isdigit():
+        return int(value)
+    if value == "十":
+        return 10
+    return "一二三四五六七八九".find(value) + 1
+
+
+def _matches_order_formats(
+    answer: str,
+    formats: set[str],
+    expert_result: dict,
+    user_message: str,
+) -> bool:
+    if "table" in formats:
+        lines = answer.splitlines()
+        has_table = any(
+            "|" in line
+            and index + 1 < len(lines)
+            and re.fullmatch(
+                r"\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*",
+                lines[index + 1],
+            )
+            for index, line in enumerate(lines)
+        )
+        if not has_table:
+            return False
+        if any(
+            order.get("order_no") and str(order["order_no"]) not in answer
+            for order in _order_facts(expert_result)
+        ):
+            return False
+
+    if "bullets" in formats:
+        bullet_count = len(re.findall(r"(?m)^\s*[-*•]\s+", answer))
+        requested_count = _requested_bullet_count(user_message)
+        if requested_count is not None and bullet_count < requested_count:
+            return False
+        if bullet_count == 0:
+            return False
+        if any(
+            order.get("order_no") and str(order["order_no"]) not in answer
+            for order in _order_facts(expert_result)
+        ):
+            return False
+
+    if "next_steps" in formats and not (
+        "现在" in answer and ("后续" in answer or "下一步" in answer)
+    ):
+        return False
+    return True
+
+
 def compose_reply(
     expert_name: str,
     draft: str,
@@ -86,6 +301,17 @@ def compose_reply(
         _tag_trace(cs_response_source="template")
         return draft, "template"
 
+    order_formats: set[str] = set()
+    order_format_fallback = None
+    order_user_message = ""
+    if expert_name == "query" and route.get("intent") == "t_order_status":
+        order_user_message = str(state.get("user_message", "") or "")
+        order_formats = _requested_order_formats(order_user_message)
+        if order_formats:
+            order_format_fallback = _render_order_format_fallback(
+                order_formats, expert_result,
+            )
+
     # knowledge：RAG 上游已是 LLM 生成 + 证据门禁，直通（source=llm）
     if policy is ResponsePolicy.LLM_UPSTREAM:
         _metrics_inc("cs_response_total", {"source": "llm"})
@@ -94,11 +320,24 @@ def compose_reply(
 
     # action / handoff / 未登记 expert / 开关关：模板直出（P0-19）
     if policy is ResponsePolicy.TEMPLATE or not CS_RESPONSE_COMPOSER_ENABLED:
+        if (
+            order_format_fallback
+            and not _matches_order_formats(
+                draft, order_formats, expert_result, order_user_message,
+            )
+        ):
+            _metrics_inc("cs_response_total", {"source": "template"})
+            _tag_trace(cs_response_source="template")
+            return order_format_fallback, "template"
         _metrics_inc("cs_response_total", {"source": "template"})
         _tag_trace(cs_response_source="template")
         return draft, "template"
 
     if not draft.strip():
+        if order_format_fallback:
+            _metrics_inc("cs_response_total", {"source": "template"})
+            _tag_trace(cs_response_source="template")
+            return order_format_fallback, "template"
         _metrics_inc("cs_response_total", {"source": "template"})
         _tag_trace(cs_response_source="template")
         return draft, "template"
@@ -114,7 +353,7 @@ def compose_reply(
         _tag_trace(cs_response_source="llm_fallback",
                    cs_response_fallback_reason="llm_error",
                    cs_response_latency_ms=elapsed_ms)
-        return draft, "llm_fallback"
+        return order_format_fallback or draft, "llm_fallback"
 
     rendered, prompt_version = outcome
 
@@ -138,7 +377,25 @@ def compose_reply(
             cs_response_fallback_reason="fact_guard_fail",
             cs_response_latency_ms=elapsed_ms,
         )
-        return draft, "llm_fallback"
+        return order_format_fallback or draft, "llm_fallback"
+
+    if (
+        order_format_fallback
+        and not _matches_order_formats(
+            rendered.answer, order_formats, expert_result, order_user_message,
+        )
+    ):
+        _metrics_inc("cs_response_total", {"source": "llm_fallback"})
+        _metrics_inc(
+            "cs_response_llm_fallback_total", {"reason": "format_mismatch"},
+        )
+        _tag_trace(
+            cs_response_source="llm_fallback",
+            cs_response_guard_result="rejected_format_mismatch",
+            cs_response_fallback_reason="format_mismatch",
+            cs_response_latency_ms=elapsed_ms,
+        )
+        return order_format_fallback, "llm_fallback"
 
     _metrics_inc("cs_response_total", {"source": "llm"})
     _tag_trace(
