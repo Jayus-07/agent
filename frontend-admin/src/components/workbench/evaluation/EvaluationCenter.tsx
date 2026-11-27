@@ -56,6 +56,9 @@ export default function EvaluationCenter() {
 
   // 数据集面板内部视图模式：36 份基准语料中心 vs 传统用例集
   const [datasetSubView, setDatasetSubView] = useState<'corpus' | 'cases'>('corpus')
+  const [suiteVersionPrefill, setSuiteVersionPrefill] = useState<string>('')
+  const urlSuiteVersionId = searchParams.get('suite_version_id') || ''
+  const effectiveSuiteVersionId = suiteVersionPrefill || urlSuiteVersionId
 
   // 默认平台基准得分（接驳五维黄金量化指标与 Ragas 进阶实测）
   const benchmarkScores = useMemo(() => ({
@@ -160,12 +163,26 @@ export default function EvaluationCenter() {
             {datasetSubView === 'corpus' ? (
               <CorpusEvalCorrelator onLaunchEval={() => selectTab('runs')} />
             ) : (
-              <DatasetsTab onGoRuns={() => selectTab('runs')} onGoTraces={() => selectTab('traces')} />
+              <DatasetsTab
+                onGoRuns={suiteVersionId => {
+                  if (suiteVersionId) setSuiteVersionPrefill(suiteVersionId)
+                  selectTab('runs')
+                }}
+                onGoTraces={() => selectTab('traces')}
+              />
             )}
           </div>
         )}
         {activeTab === 'traces' && <div className="mx-auto max-w-[1200px] px-5 py-5"><FailedTracesTab /></div>}
-        {activeTab === 'runs' && <div className="mx-auto max-w-[1200px] px-5 py-5"><RunsTab promptPrefill={promptPrefill} domain={domain} /></div>}
+        {activeTab === 'runs' && (
+          <div className="mx-auto max-w-[1200px] px-5 py-5">
+            <RunsTab
+              promptPrefill={promptPrefill}
+              suiteVersionPrefill={effectiveSuiteVersionId}
+              domain={domain}
+            />
+          </div>
+        )}
       </section>
     </div>
   </div>

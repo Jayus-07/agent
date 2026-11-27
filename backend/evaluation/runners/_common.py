@@ -137,7 +137,19 @@ def _copied_base(pipeline, k: int):
     """
     import copy as _copy
 
-    base = pipeline.lc_chain.chunk_retriever_base
+    chain = getattr(pipeline, "lc_chain", None)
+    if chain is not None and hasattr(chain, "chunk_retriever_base"):
+        base = chain.chunk_retriever_base
+    else:
+        from backend.rag.retrieval.retrievers import ChunkLevelRetriever
+
+        base = ChunkLevelRetriever(
+            doc_db=pipeline.doc_db,
+            vectordb=pipeline.vectordb,
+            chunk_retriever=pipeline.chunk_retriever,
+            bm25=pipeline.bm25,
+            person_index=getattr(pipeline, "person_index", None),
+        )
     copied = base.model_copy(deep=False) if hasattr(base, "model_copy") else _copy.copy(base)
     copied.k = k
     return copied
