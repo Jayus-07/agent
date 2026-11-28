@@ -106,6 +106,8 @@ def _legacy_dataset(run: dict[str, Any], definition: dict[str, Any], snapshot: d
             query_type = str(reason)
             expected = {
                 "behavior": "refuse",
+                "should_reject": True,
+                "reject_reason": reason,
                 "reason": reason,
                 "evidence": [],
                 "reference_answer": "",
@@ -337,6 +339,8 @@ def _build_non_rag_cases(definition: dict[str, Any], module: str) -> list[Any]:
         if not isinstance(case_input, dict) or not isinstance(expected, dict) or not isinstance(metadata, dict):
             raise ValueError("已发布非 RAG Golden 修订结构无效")
         question = _case_query(case_input, allow_turns=module == "cs")
+        if expected.get("behavior") == "refuse" and "should_reject" not in expected:
+            expected["should_reject"] = True
         cases.append(TestCase(
             id=str(row["case_id"]),
             question=question,
