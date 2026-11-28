@@ -1,0 +1,26 @@
+# Progress: Tier 14 RAG Chain 模块化解耦重构 (chain.py)
+
+- [x] 独立 Git 工作树 `agent-rag-chain` 创建完成（分支 `refactor/rag-chain-modular` @ `1418e78`）
+- [x] 配置环境与测试隔离准备（`.env` 注释 `GATEWAY_TRUST_SECRET`）
+- [x] 存量测试基线确认（5 个核心测试套件，共 67 项用例）
+- [x] AST 依赖与方法调用分析（1924 行大单体，涵盖三层记忆、检索器拼装、Evidence Gates、Claim 校验、流式生成与 Trace 问答全生命周期）
+- [x] Pipeline 阶段与专职子模块拆解（`backend/rag/chain_modules/`）：
+  - `prompts.py`: Prompt 模板常量、改写判定与提示词组装
+  - `streaming.py`: 流式 token 生成器 `_llm_stream`
+  - `metrics_helper.py`: 检索阶段指标计数与防线软降级记录
+  - `builder.py`: 检索器层叠组装、文档预算裁剪与 LCEL 链构建
+  - `gates.py`: Evidence Gate 评估包装与事件记录
+  - `verification.py`: 事实校验、Claim 比对与忠实度检测
+  - `lifecycle.py`: 问答全生命周期调度、执行、拒答与响应裁决
+  - `compat.py`: 测试向后兼容与 monkeypatch 穿透访问支持
+  - `__init__.py`: 专职子包统一聚合导出
+- [x] 门面瘦身与 100% 契约重导出：
+  - `backend/rag/chain.py` 从 1924 行精简至 346 行（消减 82.0%）；
+  - 导出并穿透兼容 `llm`, `get_context`, `set_context`, `ENABLE_HISTORY_AWARE_RETRIEVAL`, `ENABLE_TOKEN_STREAMING` 等全部历史符号与 monkeypatch；
+- [x] 架构守卫测试编写与 CI 清单更新：
+  - `backend/tests/rag/test_rag_chain_modular_architecture.py`（4 项测试全部通过）；
+  - 加入 `.github/workflows/rag_smoke.yml` 的定向测试回归清单；
+- [x] 本地全量回归验证：
+  - 架构守卫 + 存量 5 个核心测试文件共 67 项用例全部通过（`67 passed in 51.85s`）；
+  - `ruff check` 静态规范检查 100% 通过（All checks passed）；
+- [ ] PR 提交、CI 门禁与合并收尾

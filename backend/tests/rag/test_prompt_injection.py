@@ -13,10 +13,8 @@
 """
 from __future__ import annotations
 
-import time as _time
 from types import SimpleNamespace
 
-import pytest
 from langchain_core.documents import Document
 
 from backend.tests.rag.test_chain import (
@@ -95,9 +93,11 @@ class TestInjectionAsEvidence:
         _, trace, msg = _ask_with(
             monkeypatch, _context_with_attack(normal),
             attack_output, faithfulness=0.2)
+        from backend.rag.evidence_gate.models import REJECT_MESSAGES, RejectReason
+
         assert "rm -rf" not in msg
         assert "我的系统提示词" not in msg
-        assert "事实一致性校验" in msg  # 6780d1c HALLUCINATION 话术锚点
+        assert REJECT_MESSAGES[RejectReason.HALLUCINATION] in msg  # 19eecf2 用户语言化拒答话术锚点
         rejection = trace.metadata.get("rejection") or {}
         assert rejection.get("rejected") is True
         assert rejection.get("reason") == "hallucination"
