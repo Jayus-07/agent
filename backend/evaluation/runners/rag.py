@@ -556,7 +556,10 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             managed_retrieval = managed_case and not managed_answer
             subject = case.metadata.get("evaluation_subject")
             if subject and not subject["kb_allowed"]:
-                denied_expected = case.expected.get("should_reject") and case.expected.get("reject_reason") == "permission_denied"
+                denied_expected = bool(
+                    (case.expected.get("should_reject") or case.expected.get("behavior") == "refuse")
+                    and (case.expected.get("reject_reason") == "permission_denied" or case.expected.get("reason") == "permission_denied")
+                )
                 return EvalResult(case_id=case.id, module="rag", status="pass" if denied_expected else "fail",
                                   expected=case.expected, actual={"authorization": "kb_denied", "details": [], "evaluation_subject": subject},
                                   metrics={"permission_leak": 0.0}), None
@@ -1014,7 +1017,11 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         stage_metrics["generation"] = generation_metrics
 
                 # === Evaluator Provider 调用 ===
-                should_reject = case.expected.get("should_reject", False)
+                should_reject = bool(
+                    case.expected.get("should_reject", False)
+                    or case.expected.get("behavior") == "refuse"
+                    or case.metadata.get("query_type") in ("no_evidence", "permission_denied")
+                )
 
                 # 构建 Evaluator 上下文
                 eval_ctx: dict = {
@@ -1311,7 +1318,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     checks = check_assertions(_generated_answer, case.metadata.get("assertions", []))
                     generation_metrics["assertions_passed"] = float(all(checks))
                     passed = passed and all(checks)
-                if managed_answer and should_reject and _generated_answer:
+                if should_reject and _generated_answer:
                     from backend.evaluation.dataset.assertions import is_refusal
 
                     passed = passed and is_refusal(_generated_answer)
