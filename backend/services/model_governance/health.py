@@ -1,14 +1,18 @@
 """模型治理中心 - 健康探活、探针记录与人工状态置失效。"""
 from __future__ import annotations
 
-from typing import Any
 from collections.abc import Mapping
+from typing import Any
+
 from sqlalchemy import text
 
+from backend.infra.llm import registry_store as _real_registry_store
 from backend.memory.database import get_session as _real_get_session
 from backend.services.model_governance.base import DependencyProxy, _iso
+from backend.shared.logger import logger
 
 get_session = DependencyProxy("get_session", _real_get_session)
+registry_store = DependencyProxy("registry_store", _real_registry_store)
 
 
 async def _invalidate_manual_health(
