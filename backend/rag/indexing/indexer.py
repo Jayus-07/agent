@@ -126,17 +126,43 @@ def _apply_fixture_metadata(metadata: dict[str, Any], fixture_set: str | None) -
 
 
 def _processing_config_snapshot() -> dict[str, Any]:
-    from backend.config.rag import (
-        CHUNK_POLICY_VERSION,
-        EMBEDDING_BATCH_SIZE,
-        EMBEDDING_MODEL,
-        PARSER_VERSION,
+    """截取影响入库结果的非敏感配置，作为运行级版本快照。"""
+    from backend.config import model_roles, rag as rag_cfg
+    from backend.rag.preprocessing.taxonomy_spec import (
+        get_taxonomy,
+        metadata_rule_version,
     )
+    from backend.rag.preprocessing.parser.ocr import get_ocr_model_identity
+
+    role_snapshot = {
+        role: {
+            "value": str(model_roles.resolve_effective(role).get("value") or ""),
+            "source": str(model_roles.resolve_effective(role).get("source") or ""),
+        }
+        for role in ("metadata_extract", "question_gen", "table_describe", "ocr")
+    }
+    ocr_identity = get_ocr_model_identity()
     return {
-        "parser_version": PARSER_VERSION,
-        "chunk_policy_version": CHUNK_POLICY_VERSION,
-        "embedding_model": EMBEDDING_MODEL,
-        "embedding_batch_size": EMBEDDING_BATCH_SIZE,
+        "model_roles": role_snapshot,
+        # OCR 可能来自数据库专项/角色配置；快照必须使用实际运行时身份，
+        # 不能再把旧 env 默认值写成“本轮使用的模型”。
+        "ocr_provider": str(ocr_identity.provider or ""),
+        "ocr_model": str(ocr_identity.model_name or ""),
+        "ocr_model_revision": str(ocr_identity.model_revision or ""),
+        "ocr_config_source": str(ocr_identity.config_source or ""),
+        "ocr_config_revision": str(ocr_identity.config_revision or ""),
+        "taxonomy_version": get_taxonomy().version,
+        "rules_version": metadata_rule_version(),
+        "metadata_schema_fingerprint": str(
+            rag_cfg.METADATA_SCHEMA_FINGERPRINT or ""
+        ),
+        "question_gen_prompt_version": str(
+            rag_cfg.QUESTION_GEN_PROMPT_VERSION or ""
+        ),
+        "table_desc_prompt_version": str(
+            rag_cfg.TABLE_DESC_PROMPT_VERSION or ""
+        ),
+        "ocr_prompt_version": str(rag_cfg.OCR_PROMPT_VERSION or ""),
     }
 
 
