@@ -92,10 +92,10 @@ def _resolve_rerank_runtime_config(
         return {
             "model": _configured_rerank_model(),
             "billing_model": _configured_rerank_model(),
-            "api_key": "",
+            "api_key": os.getenv("RERANK_API_KEY", "") or os.getenv("DASHSCOPE_API_KEY", "") or "local-rerank-key",
             "api_format": RERANK_API_FORMAT,
-            "base_url": "",
-            "provider": "unknown",
+            "base_url": RERANK_BASE_URL,
+            "provider": "local_service" if RERANK_BASE_URL else "unknown",
         }
 
     credentials = credentials_mod.resolve_credentials(
@@ -327,8 +327,8 @@ def _backend_rerank_text(backend, doc) -> str:
 
 
 def _resolve_rerank_base() -> str:
-    """兼容入口：运行时地址必须来自数据库专项绑定。"""
-    return ""
+    """兼容入口：运行时地址优先来自数据库专项绑定，未配置时回退到 RERANK_BASE_URL。"""
+    return RERANK_BASE_URL or ""
 
 class DashScopeReranker(BaseDocumentCompressor):
     """云端 Reranker API 实现（直接 HTTP，无需 dashscope SDK）
@@ -359,6 +359,8 @@ class DashScopeReranker(BaseDocumentCompressor):
         resolved_format = api_format or RERANK_API_FORMAT
         resolved_model = model or _configured_rerank_model()
         resolved_base_url = (base_url or _resolve_rerank_base()).rstrip("/")
+        if not os.path.exists("/.dockerenv") and "host.docker.internal" in resolved_base_url:
+            resolved_base_url = resolved_base_url.replace("host.docker.internal", "127.0.0.1")
         endpoint = resolved_base_url + (
             _DASHSCOPE_RERANK_PATH if resolved_format == "dashscope" else _JINA_RERANK_PATH
         )
@@ -533,9 +535,11 @@ class DashScopeReranker(BaseDocumentCompressor):
                     on_dispatch()
                 metrics["provider_call_started"] = True
                 provider_started = time.monotonic()
+                is_local = any(h in self._endpoint for h in ("127.0.0.1", "localhost", "host.docker.internal"))
                 resp = requests.post(
                     self._endpoint, json=payload, headers=self._headers,
                     timeout=self.timeout if timeout is None else timeout,
+                    proxies={"http": None, "https": None} if is_local else None,
                 )
                 provider_elapsed = (time.monotonic() - provider_started) * 1000
                 metrics["provider_call_ms"] = round(provider_elapsed, 1)
