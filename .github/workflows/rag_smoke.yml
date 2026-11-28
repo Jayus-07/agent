@@ -176,6 +176,7 @@ jobs:
             backend/tests/api/test_auth_sso.py \
             backend/tests/api/test_admin_mcp_api.py::TestToolListPayload \
             backend/tests/api/test_admin_mcp_modular_architecture.py \
+            backend/tests/api/test_rbac_modular_architecture.py \
             tests/evaluation/test_seed_eval_bindings_verify.py \
             backend/tests/memory/test_golden_dataset_contract.py \
             backend/tests/travel/test_travel_runner_contract.py \
