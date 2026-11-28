@@ -226,7 +226,7 @@ export default function FailedTracesTab({ domain = 'all' }: { domain?: DomainFil
                       <Td>
                         <span className="block whitespace-nowrap">{timeShort(trace.timestamp)}</span>
                         <div className="mt-1 flex items-center gap-1.5">
-                          <span className="inline-block rounded bg-bg-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-secondary">
+                          <span className="inline-block rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-text-secondary">
                             {domainLabel(traceDomain)}
                           </span>
                           <span className="text-[11px] text-text-muted">{SOURCE_LABELS[trace.source || ''] || trace.source || '其他'}</span>
