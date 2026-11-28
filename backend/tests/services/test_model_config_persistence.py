@@ -1,6 +1,7 @@
 """模型配置治理写入必须在提前退出会话迭代器前显式提交。"""
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -433,12 +434,19 @@ async def test_list_model_health_sanitizes_legacy_provider_errors(monkeypatch):
     monkeypatch.setattr(
         model_config, "get_session", lambda: _session_stream(_HealthSession()),
     )
+    load_registry = AsyncMock(return_value=SimpleNamespace(
+        loaded=True,
+        providers=[{"id": "custom-provider", "billing": "subscription"}],
+    ))
+    monkeypatch.setattr(model_config.registry_store, "load_registry", load_registry)
     result = await model_config.ModelConfigService().list_model_health()
 
     assert result[0]["status"] == "auth_failed"
     assert result[0]["probeMode"] == "live_call"
+    assert result[0]["billing"] == "subscription"
     assert "鉴权失败" in result[0]["lastError"]
     assert "test-secret" not in repr(result)
+    load_registry.assert_awaited_once()
 
 
 @pytest.mark.asyncio
