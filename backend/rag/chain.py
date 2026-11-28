@@ -1,5 +1,4 @@
-"""
-LangChain LCEL 主 Chain
+"""LangChain LCEL 主 Chain 门面。
 
 流水线（外层先执行）:
   ① HistoryAware   — Query Understanding: 对话历史改写指代/省略
@@ -14,25 +13,25 @@ LangChain LCEL 主 Chain
   L2 会话: PostgreSQL 持久化 (via SessionRepository)
   L3 长期: PostgreSQL + pgvector (via MemoryRepository)
   MemoryManager 统一管理三层，chain 只持有引用。
-"""
-# 注：langchain_classic 的 chains/retrievers 工厂延迟到 _build_chains 内导入 ——
-# 它们顶层连带 langchain_text_splitters → sentence_transformers/transformers
-# （-X importtime 实测合计 ~17s），而 backend.rag.chain 在大量测试/路由模块
-# 的导入链上，模块级导入会让所有进程陪跑；仅真正构建 RAG 链时才需要。
 
+架构解耦说明：
+  底层实现已物理拆解至 backend.rag.chain_modules 子包：
+  - prompts: Prompt 模板常量与构建器
+  - streaming: _llm_stream 生成器
+  - metrics_helper: 检索阶段计数与防线软降级
+  - builder: 检索器与 LCEL 执行链构建器
+  - gates: Evidence Gates 门禁判定与检索包装
+  - verification: 事实校验、Claim 比对与忠实度检测
+  - lifecycle: 链路 Trace、会话准备、执行调度与响应收尾
+  本模块作为 100% 向后兼容门面，对外统一重新导出所有符号与 RAGChain 接口。
+"""
 from __future__ import annotations
+
+import time as _time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
-
-# (MultiQuery 已迁移至 retrieval/multi_query.py)
-# 注：langchain_core.prompts 也延迟 —— `from langchain_core.prompts import
-# ChatPromptTemplate` 会触发 prompts.base → output_parsers.base →
-# transformers/torch（~7s，langchain_core 1.4.x 行为）；prompt 构建
-# 只发生在 _build_chains 内，故下沉到 _build_*_prompt 助手里。
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
+    pass
 
 from backend.config import (
     ENABLE_HISTORY_AWARE_RETRIEVAL,
@@ -40,251 +39,88 @@ from backend.config import (
     EVIDENCE_TOKEN_BUDGET,
 )
 from backend.infra.llm import llm
-from backend.infra.llm.proxy import emit_stream_delta, extract_chunk_reasoning, extract_chunk_text
+from backend.infra.llm.proxy import (
+    emit_stream_delta,
+    extract_chunk_reasoning,
+    extract_chunk_text,
+)
+from backend.rag.chain_modules import (
+    _HISTORY_REWRITE_CUES,
+    DEFAULT_CONTEXTUALIZE_SYSTEM,
+    DEFAULT_DOCUMENT_TEMPLATE,
+    DEFAULT_QA_SYSTEM,
+    _build_contextualize_prompt,
+    _build_document_prompt,
+    _build_qa_prompt,
+    _build_retrieval_span_metrics,
+    _llm_stream,
+    _mark_gate_degraded,
+    _needs_history_rewrite,
+    build_rag_chains,
+    build_retrievers,
+    decision_from_injected,
+    emit_embedding_stats,
+    end_root_span,
+    evaluate_faithfulness,
+    execute_chain,
+    finish_error,
+    finish_response,
+    gate_wrap_retrieve,
+    handle_llm_reject,
+    prepare_session,
+    record_rag_metric,
+    record_retrieval_events,
+    record_runtime_prompt_usage,
+    register_prompt_reload_hooks,
+    reject,
+    remember_turn,
+    respond,
+    run_evidence_gates,
+    start_trace,
+    try_self_correct,
+    verify_answer,
+    verify_claims,
+)
 from backend.rag.citation import CitationFormatter
-from backend.rag.context import get_context, set_context
+from backend.rag.context import clear_context, get_context, set_context
 from backend.rag.evidence_gate import EvidenceGateController
 from backend.rag.evidence_gate.self_correction import SelfCorrectionStrategy
 from backend.rag.reranker import RerankCompressor
 from backend.rag.retrieval.retrievers import AdaptiveRetriever, ChunkLevelRetriever
 from backend.shared.logger import logger
 
+__all__ = [
+    "AdaptiveRetriever",
+    "ChunkLevelRetriever",
+    "CitationFormatter",
+    "DEFAULT_CONTEXTUALIZE_SYSTEM",
+    "DEFAULT_DOCUMENT_TEMPLATE",
+    "DEFAULT_QA_SYSTEM",
+    "ENABLE_HISTORY_AWARE_RETRIEVAL",
+    "ENABLE_TOKEN_STREAMING",
+    "EVIDENCE_TOKEN_BUDGET",
+    "EvidenceGateController",
+    "RAGChain",
+    "RerankCompressor",
+    "SelfCorrectionStrategy",
+    "_HISTORY_REWRITE_CUES",
+    "_build_contextualize_prompt",
+    "_build_document_prompt",
+    "_build_qa_prompt",
+    "_build_retrieval_span_metrics",
+    "_llm_stream",
+    "_mark_gate_degraded",
+    "_needs_history_rewrite",
+    "clear_context",
+    "emit_stream_delta",
+    "extract_chunk_reasoning",
+    "extract_chunk_text",
+    "get_context",
+    "llm",
+    "logger",
+    "set_context",
+]
 
-def _build_retrieval_span_metrics(context_docs: list) -> dict[str, int]:
-    """构造统一的检索阶段计数，供 Trace 与验收直接消费。"""
-    counts = {}
-    try:
-        counts = (get_context().meta or {}).get("_retrieval_counts") or {}
-    except Exception:  # noqa: BLE001 — 观测字段失败不阻断主链
-        logger.debug("读取检索计数失败", exc_info=True)
-
-    def _int_count(key: str) -> int:
-        try:
-            return max(int(counts.get(key, 0) or 0), 0)
-        except (TypeError, ValueError):
-            return 0
-
-    return {
-        "total_docs": len(context_docs),
-        "vector_count": _int_count("vector_count"),
-        "bm25_count": _int_count("bm25_count"),
-        "fused_count": _int_count("fused_count"),
-        "rerank_count": len(context_docs),
-    }
-
-
-def _llm_stream(msgs):
-    """generator function 包装：LCEL coerce 时走 RunnableGenerator，链上
-    .stream() 真正逐 chunk 拉取。直接传 llm（可调用代理，非 Runnable）会被
-    coerce 成 RunnableLambda——invoke 整段生成后只 yield 1 个整段 chunk，
-    打字机效果失效（2026-09-14）。
-
-    RunnableGenerator 的 transform 语义把"输入迭代器"（langchain 为 tracing
-    会包成 itertools._tee）传给本函数，invoke 语义传单个 PromptValue——
-    两种形态都归一成逐个 PromptValue 消费，否则真实模型会校验报错。
-    """
-    from collections.abc import Iterator
-    from backend.infra.llm.proxy import _last_call_meta_var
-
-    state = get_context()
-    state.generation_call_meta = {}
-    state.generation_input_chars = 0
-    inputs = msgs if isinstance(msgs, Iterator) else (msgs,)
-    for m in inputs:
-        # 只记录大小，不记录资料正文；流结束后在同一上下文读取代理结算信息。
-        if hasattr(m, "to_string"):
-            state.generation_input_chars = len(m.to_string())
-        elif isinstance(m, str):
-            state.generation_input_chars = len(m)
-        token = _last_call_meta_var.set({})
-        try:
-            yield from llm.stream(m)
-        finally:
-            state.generation_call_meta = dict(_last_call_meta_var.get() or {})
-            _last_call_meta_var.reset(token)
-
-
-# =====================================================
-# Prompt: 历史感知查询重写（DEFAULT fallback — 优先从 prompt_service 获取）
-# =====================================================
-
-DEFAULT_CONTEXTUALIZE_SYSTEM = """你是跨境电商知识库的查询重写助手。
-
-根据对话历史，将用户问题重新表述为独立的检索查询。
-
-规则:
-1. 如果用户使用代词（他、她、这个、那个、它），请替换为对话历史中的具体实体
-2. 如果问题已经独立完整，直接返回原问题
-3. 不要回答问题，只输出改写后的查询
-4. 保留所有专有名词、技术术语、业务词汇
-5. 不要添加解释或 markdown 格式"""
-
-# =====================================================
-# Prompt: QA 回答（DEFAULT fallback — 优先从 prompt_service 获取）
-# =====================================================
-
-DEFAULT_QA_SYSTEM = """你是电商企业知识库助手。你只能依据「资料」中明确提供的信息回答问题。
-
-## 核心规则
-
-1. **单证据原则**：每个事实、数字、日期、时效、条件，必须能由一个 Evidence 独立支持。禁止拼接多个 Evidence 推导原文不存在的新事实。
-
-2. **证据边界**：每条 Evidence 标注了 [Query]、[文档]、[章节]。不同 Query、不同章节的信息属于不同上下文，**禁止跨边界拼接**。
-
-3. **数字/时效零容忍**：所有数字、日期、百分比、SLA 必须与原文逐字一致。禁止修改、换算、推断。禁止将一条 Evidence 中的数字套用到另一条 Evidence。
-
-4. **信息不足时**：明确写「资料未提及」。禁止猜测、常识补充、相似流程推断。
-
-## 回答格式
-
-正文用 Markdown。多个要点必须用有序列表分点呈现（每点独占一行：`1. xxx [E1]` 换行 `2. xxx [E2]`），禁止把多个要点挤在同一段落。每个事实必须带 Evidence 引用 [En]（如 [E1]、[E2]）。
-
-资料充分时示例：
-```
-1. 通用售后流程：审核结果为 1-2 个工作日内反馈。[E1]
-2. 差评处理要求：48小时内给出具体解决方案。[E2]
-```
-
-信息不足时：
-```
-资料未提及。
-```
-
-正文末尾必须输出：
-- 可回答 → `<!--META{{"can_answer":true,"citations":["E1","E2"],"confidence":0.85}}-->`
-- 不可回答 → `<!--META{{"can_answer":false,"reason":"no_evidence","confidence":0.1}}-->`
-
-reason 取值：no_evidence / low_relevance / insufficient / out_of_scope
-
-资料:
-{context}"""
-
-DEFAULT_DOCUMENT_TEMPLATE = (
-    "[Evidence E{index}]\n"
-    "{query_label}"
-    "{doc_label}"
-    "{section_label}"
-    "{chunk_label}"
-    "{type_label}"
-    "{domain_label}"
-    "{page_content}"
-)
-
-
-# =====================================================
-# Fail-visible helper（R3）：防线软降级必须留痕，行为保持 fail-open
-# =====================================================
-
-def _mark_gate_degraded(layer: str, action: str, error, span=None) -> None:
-    """记录一次防线异常软降级：span 事件（如有 open span）+ Prometheus 计数。
-
-    只补可见性，不改变放行/拒答行为。span 为 None 时（无 open span 的
-    降级点，如 prompt 回退、实体校验忽略）只记指标。
-    """
-    try:
-        from backend.observability.metrics import rag_gate_degraded_total
-        rag_gate_degraded_total.labels(layer=layer).inc()
-    except Exception:  # noqa: BLE001
-        pass
-    if span is None:
-        return
-    try:
-        from backend.observability.tracer import trace_collector
-        trace_collector.add_event(
-            span, "gate_degraded", level="warn",
-            message=f"Gate 软降级: {layer}",
-            data={"layer": layer, "action": action, "error": str(error)[:200]},
-        )
-    except Exception:  # noqa: BLE001
-        pass
-
-
-# =====================================================
-# Prompt 构建器：优先从 prompt_service 获取，降级到 DEFAULT 常量
-# =====================================================
-
-# 历史感知改写只在问题确实依赖上下文时启用。原问题独立完整时跳过改写，
-# 既省一次 LLM 调用，也避免模型把知识库/平台名称扩写进检索 query。
-_HISTORY_REWRITE_CUES = (
-    "他", "她", "它", "这个", "那个", "这些", "那些", "该", "其", "此",
-    "上述", "前述", "刚才", "刚刚", "之前", "前面", "还有", "另外", "再",
-    "那", "那么", "继续", "同样", "换成", "改成", "呢",
-)
-
-
-def _needs_history_rewrite(question: str) -> bool:
-    """判断问题是否真的需要结合历史改写。
-
-    保守策略：只有出现代词、承接语或极短追问时才走 history-aware 改写；
-    独立完整的问题直接走 standalone 检索，防止改写模型引入原问题没有的
-    业务域/产品/组织词。
-    """
-    q = (question or "").strip()
-    if not q:
-        return False
-    if len(q) <= 5:
-        return True
-    return any(cue in q for cue in _HISTORY_REWRITE_CUES)
-
-
-def _build_contextualize_prompt() -> ChatPromptTemplate:
-    """从 prompt_service 构建查询重写 ChatPromptTemplate。"""
-    # 延迟导入（见文件顶部注释）
-    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-    system_text = DEFAULT_CONTEXTUALIZE_SYSTEM
-    human_text = "{input}"
-    try:
-        from backend.prompts.service import prompt_service
-        full = prompt_service.get_template_sync("rag.contextualize")
-        parts = full.split("---", 1)
-        if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
-            raise ValueError("rag.contextualize 缺少 system/human 分隔")
-        system_text, human_text = (part.strip() for part in parts)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("[RAGChain] rag.contextualize 回退内置默认（%s）", type(e).__name__)
-    return ChatPromptTemplate.from_messages([
-        ("system", system_text),
-        MessagesPlaceholder("chat_history"),
-        ("human", human_text),
-    ])
-
-
-def _build_qa_prompt() -> ChatPromptTemplate:
-    """从 prompt_service 构建 QA ChatPromptTemplate。"""
-    # 延迟导入（见文件顶部注释）
-    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-    system_text = DEFAULT_QA_SYSTEM
-    try:
-        from backend.prompts.service import prompt_service
-        full = prompt_service.get_template_sync("rag.qa")
-        parts = full.split("---", 1)
-        if len(parts) == 2:
-            system_text = parts[0].strip()
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"[RAGChain] prompt_service 不可用，rag.qa 回退内置默认: {e}")
-    return ChatPromptTemplate.from_messages([
-        ("system", system_text),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
-    ])
-
-
-def _build_document_prompt() -> PromptTemplate:
-    """从 prompt_service 构建证据格式化 PromptTemplate。"""
-    # 延迟导入（见文件顶部注释）
-    from langchain_core.prompts import PromptTemplate
-    template_str = DEFAULT_DOCUMENT_TEMPLATE
-    try:
-        from backend.prompts.service import prompt_service
-        template_str = prompt_service.get_template_sync("rag.document")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"[RAGChain] prompt_service 不可用，rag.document 回退内置默认: {e}")
-    return PromptTemplate.from_template(template_str)
-
-
-# =====================================================
-# Chain 构建器
-# =====================================================
 
 class RAGChain:
     """LangChain 高层封装的 RAG 管道，整合三层记忆系统。"""
@@ -305,18 +141,8 @@ class RAGChain:
         self.person_index = person_index or {}
         self._memory = memory_manager
         self._runtime_prompt_keys: list[str] = []
-        # ── PR-1.4: 策略对象（formatter 保留为实例字段；gate/corrector 迁移到 RequestContext）──
         self.formatter = CitationFormatter()
-        # ── RAGChain 自有状态 ──
-        # 决策中间态（_last_meta/_last_faithfulness/_last_query）已迁移到
-        # RequestContext（P1 并发隔离），见类底部 property；
-        # _last_sources 同批迁移（D1-6）：此前为单例实例属性，并发请求
-        # 互相覆盖串扰；现随请求上下文隔离，正式出口 = pipeline.ask_result
-        # 随返回值带回。属性名保留仅为兼容既有读取点。
         self._chains_dirty = False
-        # R0（2026-10-12）：最近一次检索的 embedding 统计兜底字段；权威读取
-        # 点是请求上下文 ctx.embedding_stats（并发安全），本字段只作直连
-        # 调试出口，避免与单例并发语义混淆。
         self._last_embedding_stats = None
 
         self._build_retrievers()
@@ -325,7 +151,6 @@ class RAGChain:
         logger.info("LangChain RAG Chain 初始化完成")
 
     # ── 决策中间态：随 RequestContext 隔离（contextvars），防单例并发串扰 ──
-    # 保留 _last_* 属性名仅为兼容既有测试/外部读取，实际存储于请求上下文。
     @property
     def _last_meta(self) -> dict:
         return get_context().meta
@@ -352,8 +177,6 @@ class RAGChain:
 
     @property
     def _last_sources(self) -> list:
-        # D1-6：请求级输出，正式出口 = pipeline.ask_result 随返回值带回；
-        # 本 property 仅为兼容既有读取点保留。
         return get_context().sources
 
     @_last_sources.setter
@@ -390,443 +213,99 @@ class RAGChain:
     def corrector(self, value) -> None:
         get_context().corrector = value
 
-    # =================================================
-    # Step A: 构建 BaseRetriever 实例
-    # =================================================
-
+    # ── 构建器委托 ──
     def _build_retrievers(self):
-        self.chunk_retriever_base = ChunkLevelRetriever(
-            doc_db=self.doc_db,
-            vectordb=self.vectordb,
-            chunk_retriever=self.chunk_retriever,
-            bm25=self.bm25,
-            person_index=self.person_index,
-        )
-
-    # =================================================
-    # Step B: 构建单链
-    # =================================================
+        build_retrievers(self)
 
     def _build_chains(self):
-        """构建完整的检索-生成链。
-
-        执行顺序（外层先执行）:
-
-          ① HistoryAware   — Query Understanding: 利用对话历史重写指代/省略
-          ② Rerank         — CrossEncoder:      全局重排序 + 阈值过滤（只在合并结果上执行一次）
-          ③ MultiQuery     — Query Expansion:   关键词检测复杂度 → LLM 多角度改写
-          ④ Adaptive       — Document Expansion: 同文档相邻 Chunk 扩展
-          ⑤ ChunkLevel     — Hybrid Retrieval:  向量 + BM25 混合检索
-          ⑥ LLM Generate   — 带引用标注 [1][2] 的最终回答
-        """
-        # 延迟导入（见模块顶部注释）：避开 sentence_transformers 导入链 ~17s
-        from langchain_classic.chains import (
-            create_history_aware_retriever,
-            create_retrieval_chain,
-        )
-        from langchain_classic.chains.combine_documents import (
-            create_stuff_documents_chain,
-        )
-        self._runtime_prompt_keys = ["rag.qa", "rag.document"]
-        # Citation Filter: 注入文档序号 + 自定义文档格式，使 LLM 可内联引用 [1][2]
-        def _index_docs(input_dict):
-            docs = input_dict.get("context", [])
-            # ── 文档级权限过滤（§4 权限范围消费方，2026-09-17）──
-            # 请求者未持有文档所需权限的证据不得进入生成上下文（防越权泄漏）。
-            # fail-safe：identity.permissions=None（未声明）→ 受限文档一律剔除；
-            # general 文档不受影响。确定性计算，与 KB 级授权同构。
-            try:
-                from backend.rag.context import get_context
-                from backend.rag.permissions import filter_documents_by_permission
-                try:
-                    from backend.observability.metrics import (
-                        rag_permission_filtered_total,
-                    )
-                except Exception:  # noqa: BLE001 — 指标缺失不阻断主流程
-                    class _Nop:
-                        def inc(self, _n=1):
-                            pass
-                    rag_permission_filtered_total = _Nop()
-                _user_perms = get_context().identity.permissions
-                _allowed = filter_documents_by_permission(docs, _user_perms)
-                _denied = len(docs) - len(_allowed)
-                if _denied:
-                    logger.info(
-                        f"[RAGChain] 权限过滤: 剔除 {_denied}/{len(docs)} 条越权证据"
-                        f"(user_permissions={sorted(_user_perms) if _user_perms is not None else None})"
-                    )
-                    rag_permission_filtered_total.inc(_denied)
-                    # 供拒答升级裁决（_reject）：短缺类拒答 + 剔除>0 →
-                    # answer_status=permission_denied，用户可见「有资料但无权限」
-                    get_context().permission_filtered = _denied
-                    docs = _allowed
-                    input_dict["context"] = docs
-            except Exception:  # noqa: BLE001 — 权限过滤故障必须安全拒绝
-                logger.error("[RAGChain] 权限过滤异常，拒绝全部证据", exc_info=True)
-                docs = []
-                input_dict["context"] = []
-            # ── 版本窗口过滤（§6 版本检索消费方，2026-09-17 R4）──
-            # 请求声明 as_of/current/all_versions 时，生效窗口不匹配的
-            # 版本链文档证据不得进入生成上下文（防旧版本答案冒充现行）。
-            # 非版本链文档恒可见；any（缺省）行为完全不变。确定性计算。
-            try:
-                from backend.rag.context import get_context as _gc
-                from backend.rag.versioning import (
-                    candidate_versions,
-                    is_version_visible,
-                    normalize_requirement,
-                    version_conflict_info,
-                )
-                try:
-                    from backend.observability.metrics import rag_version_filtered_total
-                except Exception:  # noqa: BLE001 — 指标缺失不阻断主流程
-                    class _NopV:
-                        def inc(self, _n=1):
-                            pass
-                    rag_version_filtered_total = _NopV()
-                _vreq = normalize_requirement(_gc().version_requirement)
-                if _vreq["type"] != "any":
-                    _metas = [d.metadata for d in docs]
-                    _v_allowed = [
-                        d for d in docs if is_version_visible(d.metadata, _vreq)
-                    ]
-                    _v_denied = len(docs) - len(_v_allowed)
-                    if _v_denied:
-                        logger.info(
-                            f"[RAGChain] 版本过滤: 剔除 {_v_denied}/{len(docs)} 条窗口不匹配证据"
-                            f"(requirement={_vreq['type']}"
-                            f"{':' + _vreq['date'] if _vreq['date'] else ''})"
-                        )
-                        rag_version_filtered_total.inc(_v_denied)
-                        docs = _v_allowed
-                        input_dict["context"] = docs
-                    # 跨文档多候选/冲突留证（§6 第 4/5 条）：trace 带候选清单
-                    # 与冲突描述，rejection 消费方（评测 runner）同源可读
-                    _v_event_data = {
-                        "requirement": _vreq,
-                        "candidates": candidate_versions([d.metadata for d in docs]),
-                        "conflicts": version_conflict_info([d.metadata for d in docs]),
-                        "filtered_out": _v_denied,
-                    }
-                    try:
-                        from backend.observability.tracer import trace_collector as _tc
-                        _v_trace = _tc.current()
-                        _v_span = None
-                        if _v_trace is not None and _v_trace.spans:
-                            for _sp in reversed(_v_trace.spans):
-                                if not _sp.end_time:
-                                    _v_span = _sp
-                                    break
-                            _v_span = _v_span or _v_trace.spans[-1]
-                        if _v_span is not None:
-                            _tc.add_event(
-                                _v_span, "version_filter", "info",
-                                f"requirement={_vreq['type']} kept={len(docs)} "
-                                f"candidates={len(_v_event_data['candidates'])}",
-                                data=_v_event_data,
-                            )
-                    except Exception:  # noqa: BLE001 — trace 故障不影响主流程
-                        logger.debug("[RAGChain] version_filter 事件写入失败", exc_info=True)
-            except Exception:  # noqa: BLE001 — 版本过滤故障不得中断主流程
-                logger.debug("[RAGChain] 版本过滤异常，退化为不过滤", exc_info=True)
-            # ── 证据 token 预算（P3 + 生产收口 B2）：预算内保留最高价值、
-            # 尽量多样的证据。有 rerank_score（真实 metadata，reranker 写入
-            # 同一 doc 对象）时走 RAGBudgeter 价值优先 + source 多样性；
-            # 无分（rerank 不可用/被阈值滤）整体回退原序从头保留 = 旧行为。
-            # kept 是非前缀子集，必须按下标映射回 docs（含 metadata）。
-            if EVIDENCE_TOKEN_BUDGET > 0 and docs:
-                page_texts = [d.page_content for d in docs]
-                rag_scores = [
-                    (d.metadata or {}).get("rerank_score") for d in docs]
-                rag_sources = [
-                    str((d.metadata or {}).get("source_file") or "")
-                    for d in docs]
-                if all(isinstance(s, (int, float)) for s in rag_scores):
-                    from backend.context_budget.rag_budgeter import (
-                        budget_rag_indices,
-                    )
-                    kept_idx, dropped = budget_rag_indices(
-                        page_texts, EVIDENCE_TOKEN_BUDGET,
-                        scores=[float(s) for s in rag_scores],
-                        sources=rag_sources)
-                else:
-                    from backend.context_budget.rag_budgeter import (
-                        budget_rag_indices,
-                    )
-                    kept_idx, dropped = budget_rag_indices(
-                        page_texts, EVIDENCE_TOKEN_BUDGET)
-                if dropped:
-                    docs = [docs[i] for i in kept_idx]
-                    input_dict["context"] = docs
-                    logger.info(
-                        f"[RAGChain] 证据 token 预算裁剪: 丢弃 {dropped} 个低价值文档 "
-                        f"(budget={EVIDENCE_TOKEN_BUDGET}, "
-                        f"score_aware={all(isinstance(s, (int, float)) for s in rag_scores)})")
-            for i, doc in enumerate(docs, 1):
-                doc.metadata["index"] = i
-                # ── Evidence 边界字段（非空才显示，不浪费 token）──
-                sq = doc.metadata.get("source_query", "")
-                doc.metadata["query_label"] = f"[Query: {sq}]\n" if sq else ""
-                doc.metadata["doc_label"] = f"[文档: {doc.metadata.get('source_file', '')}]\n"
-                section = doc.metadata.get("section_title", "")
-                doc.metadata["section_label"] = f"[章节: {section}]\n" if section else ""
-                cid = doc.metadata.get("chunk_id", "")
-                doc.metadata["chunk_label"] = f"[Chunk: {cid}]\n" if cid else ""
-                dt = doc.metadata.get("doc_type", "")
-                doc.metadata["type_label"] = f"[类型: {dt}]\n" if dt and dt != "general" else ""
-                bd = doc.metadata.get("business_domain", "")
-                doc.metadata["domain_label"] = f"[业务域: {bd}]\n" if bd and bd != "general" else ""
-            return input_dict
-
-        _stuff = create_stuff_documents_chain(
-            _llm_stream, _build_qa_prompt(),
-            document_prompt=_build_document_prompt(),
-            document_separator="\n\n---\n\n",
-        )
-        def _timed_stuff(inp):
-            from backend.observability.tracer import SpanKind, trace_collector
-            # ── 空检索短路：0 docs 时跳过 LLM（~4.8s），Gate 会拒答 ──
-            context_docs = inp.get("context", [])
-            # P0-1: 检索边界收口 — 调到本层时 context 已就绪（retriever 执行
-            # 完毕、LLM 生成尚未开始），此刻收口 "retrieval" span 才是真实
-            # 检索耗时。旧实现在外层 invoke 返回后才收口，把 LLM 生成的
-            # 十几秒全部计入了"检索"。
-            try:
-                retrieval_metrics = _build_retrieval_span_metrics(context_docs)
-                # Phase 5：span 上留剩余预算——「为什么慢/在哪被降级」可答
-                from backend.rag.retrieval_budget import current_budget
-
-                _budget = current_budget()
-                if _budget is not None:
-                    retrieval_metrics["budget_remaining_ms"] = round(
-                        max(_budget.remaining_ms(), 0), 1)
-                ret_span = trace_collector.end_open_span(
-                    "retrieval",
-                    metrics={"retrieved_chunks": len(context_docs),
-                             **retrieval_metrics})
-                # Phase 6：检索阶段长期时序（span 即真实检索边界）
-                if ret_span is not None:
-                    from backend.observability.metrics import record_rag_stage
-
-                    record_rag_stage("retrieve", ret_span.duration_ms)
-            except Exception:
-                logger.debug("[RAGChain] retrieval span 提前收口失败", exc_info=True)
-            try:
-                from backend.rag.context import get_context
-
-                request_state = get_context()
-                retrieval_degraded = bool(
-                    request_state.rerank_unavailable
-                    or request_state.vector_degraded
-                )
-            except Exception:  # noqa: BLE001 — 观测状态缺失不阻断主链
-                retrieval_degraded = False
-            if retrieval_degraded:
-                logger.info(
-                    "[RAGChain] 检索关键环节降级，跳过生成以避免误导用户"
-                )
-                try:
-                    from backend.observability.metrics import rag_short_circuit_total
-
-                    rag_short_circuit_total.labels(
-                        reason="retrieval_degraded",
-                    ).inc()
-                except Exception:  # noqa: BLE001
-                    pass
-                return (
-                    '<!--META{"can_answer":false,"reason":"no_evidence",'
-                    '"confidence":0.0}-->'
-                )
-            if not context_docs:
-                logger.info("[RAGChain] 空检索短路，跳过 LLM Generate")
-                try:
-                    from backend.observability.metrics import rag_short_circuit_total
-                    rag_short_circuit_total.labels(reason="empty_retrieval").inc()
-                except Exception:  # noqa: BLE001
-                    pass
-                return AIMessage(content="知识库暂无相关资料。")
-            # Gate 前置：检索层 Gate 已拒（实体覆盖/证据不足）→ 跳过 LLM 生成
-            gate_injected = (context_docs[0].metadata or {}).get("__evidence_gate_decision__") or {}
-            if gate_injected.get("gate_passed") is False:
-                logger.info(
-                    f"[RAGChain] Gate 前置拒答，跳过 LLM Generate: "
-                    f"reason={gate_injected.get('gate_reason')}")
-                try:
-                    from backend.observability.metrics import rag_short_circuit_total
-                    rag_short_circuit_total.labels(reason="evidence_gate").inc()
-                except Exception:  # noqa: BLE001
-                    pass
-                return AIMessage(content="知识库暂无相关资料。")
-            llm_span = trace_collector.start_span(
-                "llm_generate", name="LLM生成",
-                kind=SpanKind.LLM.value,
-                input={"question": inp.get("input", "")[:1000]},
-            )
-            try:
-                # ── P1 真 token 级流式：流式消费生成 chunk，边生成边经 sink
-                # 推给 SSE（TTFT 从"生成完"提前到"首 chunk 到达"）。
-                # 聚合后返回类型与 invoke 保持一致（当前版本
-                # create_stuff_documents_chain 返回 str，下游 strip_think
-                # 等仅接受 str）；开关关闭时走 invoke。
-                # META 拦截：<!--META...--> 尾部只进聚合（_verify 依赖），
-                # 不外发前端——MetaStreamFilter 处理跨 chunk 切分。
-                if ENABLE_TOKEN_STREAMING:
-                    from backend.rag.meta_stream_filter import MetaStreamFilter
-                    mfilter = MetaStreamFilter()
-                    is_message = False
-                    for chunk in _stuff.stream(inp):
-                        # 思考链增量（推理模型 reasoning_content）先于正文转发：
-                        # 走独立 thinking 事件供前端"已思考"面板，不混入回答正文
-                        reasoning = extract_chunk_reasoning(chunk)
-                        if reasoning:
-                            emit_stream_delta(reasoning, kind="thinking")
-                        text = extract_chunk_text(chunk)
-                        if not text:
-                            continue
-                        emit_text = mfilter.feed(text)
-                        if not isinstance(chunk, str) and hasattr(chunk, "content"):
-                            is_message = True
-                    tail = mfilter.flush()
-                    joined = mfilter.full
-                    r = AIMessage(content=joined) if is_message else joined
-                else:
-                    r = _stuff.invoke(inp)
-                # LCEL 在子上下文执行模型步，父 ContextVar 可能还是查询分类用量。
-                # 由模型步在请求态带回本次生成观测，不再次结算或写用量账本。
-                metrics = dict(get_context().generation_call_meta)
-                metrics["generation_input_chars"] = get_context().generation_input_chars
-                # P0-3: ContextVar 为空（跨线程丢失 / provider 未返回）时，
-                # 兜底从 response_metadata 提取；仍缺失则显式留痕，
-                # 让 token 采集失败可观测而非静默归零。
-                if not (metrics.get("total_tokens") or metrics.get("prompt_tokens")
-                        or metrics.get("completion_tokens")):
-                    tu = trace_collector.parse_tokens(r)
-                    if tu:
-                        metrics.update(tu)
-                        metrics["token_source"] = "response_metadata"
-                    else:
-                        metrics["token_source"] = "unavailable"
-                        try:
-                            from backend.observability.metrics import llm_usage_missing_total
-                            llm_usage_missing_total.inc()
-                        except Exception:
-                            pass
-                # 截断文本字段，避免大输出撑爆 trace。
-                # 注意：create_stuff_documents_chain 的返回值随 langchain 版本不同
-                # 可能是 AIMessage（.content）或 str（无 .content 属性）——
-                # 旧版返回 str 曾导致 completion_text 永远为空（RESPONSE 面板空白）。
-                if isinstance(r, str):
-                    completion_text = r[:1000]
-                elif hasattr(r, "content") and isinstance(r.content, str):
-                    completion_text = r.content[:1000]
-                elif hasattr(r, "content"):
-                    completion_text = str(r.content)[:1000]
-                if not completion_text:
-                    # 兜底：推理模型 thinking 开启时 content 为空（输出在
-                    # reasoning_content），记录思考链供审计而非静默留空
-                    reasoning = (getattr(r, "additional_kwargs", {}) or {}).get("reasoning_content", "")
-                    if reasoning:
-                        completion_text = f"[reasoning] {reasoning[:900]}"
-                if completion_text:
-                    metrics["completion_text"] = completion_text
-                logger.info(
-                    f"[RAGChain][diag] llm metrics keys={sorted(metrics.keys())} "
-                    f"ct_len={len(completion_text)} "
-                    f"r_type={type(r).__name__} "
-                    f"content_repr={repr(getattr(r, 'content', r))[:80]}")
-                trace_collector.end_span(llm_span, metrics=metrics)
-                # Phase 6：生成阶段长期时序
-                from backend.observability.metrics import record_rag_stage
-
-                record_rag_stage("generate", llm_span.duration_ms)
-                return r
-            except Exception:
-                trace_collector.end_span(llm_span, status="error")
-                from backend.observability.metrics import record_rag_stage
-
-                record_rag_stage("generate", llm_span.duration_ms)
-                raise
-        stuff_chain = RunnableLambda(_index_docs) | RunnableLambda(_timed_stuff)
-
-        # ── ⑤ Hybrid Retrieval（最内层：实际搜索）─────────
-        retriever = self.chunk_retriever_base
-
-        # ── ④ Adaptive: 同文档 Chunk 扩展 ──────────────
-        retriever = AdaptiveRetriever(
-            base_retriever=retriever,
-            doc_db=self.doc_db,
-        )
-
-        # ── ③ MultiQuery: 复杂度检测 → LLM 改写 ─────────
-        from backend.rag.retrieval.multi_query import MultiQueryRetriever
-        retriever = MultiQueryRetriever(base_retriever=retriever)
-        self._mq_retriever = retriever  # 供 tracer 读取 MultiQuery 状态
-
-        # ── ② Rerank: CrossEncoder 全局重排序（包在 MultiQuery 外层）──
-        # 变体先各自检索合并去重，重排只在合并结果上执行一次；
-        # 避免每个改写变体各自触发一次重排（2026-09-03 事故性能问题）
-        from langchain_classic.retrievers import ContextualCompressionRetriever
-        retriever = ContextualCompressionRetriever(
-            base_compressor=RerankCompressor(),
-            base_retriever=retriever,
-        )
-        self._rerank_wrapper = retriever  # Rerank 包装层（供测试/诊断断言装配顺序）
-
-        # ── Gate 前置：检索后、LLM 生成前执行 Evidence Gate（Gate 1+1.5+2）──
-        # Why: 原 Gate 排在 LLM 之后（_execute 里 invoke 后评估），拒答场景
-        # 白烧一次 LLM 调用（2~6s + token）。前置后拒答在 _timed_stuff 短路。
-        # decision 经 doc.metadata 注入传递（链内同步安全，不依赖 ContextVar）。
-        gate_retriever = RunnableLambda(self._gate_wrap_retrieve)
-
-        # ── ① HistoryAware: 对话历史改写（最外层，最先执行）─
-        # 双链策略：standalone 链跳过 HistoryAware LLM 调用，首轮对话省 ~1-2s。
-        # 此处 llm 走 invoke-only（改写问题），无需 _llm_stream 桥接；但注意
-        # 代理对象被 LCEL coerce 成 RunnableLambda 时流式/回调语义会静默丢失
-        # —— 新增任何"链上要流式"的 LCEL 集成点必须用 _llm_stream（见其注释）。
-        self.chain_standalone = create_retrieval_chain(gate_retriever, stuff_chain)
-        if ENABLE_HISTORY_AWARE_RETRIEVAL:
-            self._runtime_prompt_keys.append("rag.contextualize")
-            retriever = create_history_aware_retriever(
-                llm, gate_retriever, _build_contextualize_prompt()
-            )
-
-        self.chain = create_retrieval_chain(retriever, stuff_chain)
+        build_rag_chains(self)
 
     def _register_prompt_reload_hooks(self):
-        """注册 prompt 热加载钩子：版本发布时标记 chain 需要重建。"""
-        try:
-            from backend.prompts.service import prompt_service
-            for key in ("rag.qa", "rag.contextualize", "rag.document"):
-                prompt_service.register_reload_hook(key, self._mark_chains_dirty)
-        except Exception:
-            logger.debug("[RAGChain] prompt_service 不可用，跳过热加载注册",
-                         exc_info=True)
+        register_prompt_reload_hooks(self)
 
     def _mark_chains_dirty(self):
         self._chains_dirty = True
 
-    # =================================================
-    # Step C: 公共入口
-    # =================================================
+    # ── 检索与 Gate 委托 ──
+    def _gate_wrap_retrieve(self, payload):
+        return gate_wrap_retrieve(self, payload)
 
+    def _decision_from_injected(self, injected):
+        return decision_from_injected(injected)
+
+    def _run_evidence_gates(self, question: str, context_docs: list):
+        return run_evidence_gates(self, question, context_docs)
+
+    def _record_retrieval_events(self, ret_span, context_docs: list) -> None:
+        record_retrieval_events(ret_span, context_docs)
+
+    # ── 校验与评估委托 ──
+    def _verify(self, result: dict, question: str, session_id: str = "default") -> str:
+        return verify_answer(self, result, question, session_id)
+
+    def _verify_claims(self, answer: str, context_docs: list) -> str | None:
+        return verify_claims(answer, context_docs)
+
+    def _evaluate(self, answer: str, context_docs: list) -> str:
+        return evaluate_faithfulness(self, answer, context_docs)
+
+    # ── 生命周期与调度委托 ──
+    def _start(self, question: str, session_id: str):
+        return start_trace(self, question, session_id)
+
+    def _record_runtime_prompt_usage(self) -> None:
+        record_runtime_prompt_usage(self)
+
+    def _remember_turn(self, session_id: str, question: str, answer: str,
+                       trace=None, persist_memory: bool = True) -> None:
+        remember_turn(self, session_id, question, answer, trace, persist_memory)
+
+    def _emit_embedding_stats(self, stats) -> None:
+        emit_embedding_stats(stats)
+
+    def _record_rag_metric(self, status: str) -> None:
+        record_rag_metric(status)
+
+    def _handle_llm_reject(self, meta, trace, question, session_id, t_total,
+                           persist_memory: bool = True) -> str:
+        return handle_llm_reject(self, meta, trace, question, session_id, t_total, persist_memory)
+
+    def _reject(self, decision, layer: str, trace, t_total: float,
+                self_correction_attempted: bool = False) -> str:
+        return reject(self, decision, layer, trace, t_total, self_correction_attempted)
+
+    def _finish(self, trace, answer: str, t_total: float):
+        finish_response(self, trace, answer, t_total)
+
+    def _finish_error(self, trace, t_total: float):
+        finish_error(self, trace, t_total)
+
+    @staticmethod
+    def _end_root_span(trace, output: dict = None, metrics: dict = None,
+                       status: str = "success"):
+        end_root_span(trace, output, metrics, status)
+
+    def _try_self_correct(self, original_decision, trace, question, session_id, t_total):
+        return try_self_correct(self, original_decision, trace, question, session_id, t_total)
+
+    def _prepare(self, question: str, session_id: str) -> list:
+        return prepare_session(self, question, session_id)
+
+    def _execute(self, question: str, chat_history: list) -> dict:
+        return execute_chain(self, question, chat_history)
+
+    def _respond(self, result, trace, question, session_id, t_total,
+                 persist_memory: bool = True) -> str:
+        return respond(self, result, trace, question, session_id, t_total, persist_memory)
+
+    # ── 公共问答入口 ──
     def ask(self, question: str, session_id: str = "default",
             persist_memory: bool = True) -> str:
-        """RAGChain 入口：线性 3 段 — prepare → execute → respond。
-
-        每次调用先初始化请求级中间态（P1 并发隔离）：
-          - 决策状态（_last_meta/_last_faithfulness/mq_triggered）随 RequestContext
-            隔离：RAGChain 是进程级单例，实例字段会被并发请求互相覆盖；
-          - gate/corrector 每请求新建实例：复用实例会让 intent/risk_level/
-            retry_count 在并发请求间串扰（retry_count 还会跨请求累积）。
-        """
+        """RAGChain 入口：线性 3 段 — prepare → execute → respond。"""
         if self._chains_dirty:
             self._build_chains()
             self._chains_dirty = False
-        # ── R0/R1-A：请求级 embedding 总账（跨 attempt + 跨线程汇总）──────
-        # 生命周期 = 一次 ask（不是一次 _execute）：self-correction 会在同一
-        # 用户请求内再次 _execute，若按 attempt 开闭，先前的统计会被 end 掉、
-        # ctx.embedding_stats 被后一次覆盖。这里统一在 finally 汇总上报一次，
-        # 得到的是"本次问答一共出站几次/复用几次/唯一输入几个"的请求级口径。
+
         from backend.rag.embedding_singleton import (
             begin_embedding_request,
             end_embedding_request,
@@ -849,1076 +328,23 @@ class RAGChain:
                 result, trace, question, session_id, t_total,
                 persist_memory=persist_memory,
             )
-            # RAG 的 claim/fidelity/META gates 在 _respond 中收口；通过或拒答的
-            # 最终文本只能在此后进入答案 SSE，生成中的候选正文不外发。
             if ENABLE_TOKEN_STREAMING and answer:
                 emit_stream_delta(answer)
-            # 远端 RAG Trace 由代理随响应回链到主 Trace；本字段只用于内部
-            # 观测关联，不改变答案、引用或 Evidence Gate 决策。
             try:
                 get_context().meta["trace_id"] = trace.id
-            except Exception:  # noqa: BLE001 — trace 关联不能阻断最终答复
+            except Exception:  # noqa: BLE001
                 pass
-            # Phase 6：全链耗时长线（含 verify/gate）
-            import time as _time
-
             from backend.observability.metrics import record_rag_stage
-
             record_rag_stage("total", (_time.time() - t_total) * 1000)
             return answer
         except Exception:
             self._finish_error(trace, t_total)
-            import time as _time
-
             from backend.observability.metrics import record_rag_stage
-
             record_rag_stage("total", (_time.time() - t_total) * 1000)
             raise
         finally:
-            # 请求级 embedding 总账收口：无论成功/失败/自纠正，只上报一次。
             embedding_stats = end_embedding_request()
             if embedding_stats is not None:
                 self._last_embedding_stats = embedding_stats
                 report_embedding_request(embedding_stats)
                 self._emit_embedding_stats(embedding_stats)
-
-    def _start(self, question: str, session_id: str):
-        """开启 Trace + root span。
-
-        嵌入模式：若已在父 trace（如 agent）内调用，不创建独立子 trace，
-        而是在父 trace 中创建 "rag_skill" span 作为作用域根，所有 RAG span
-        自动嵌套其下。前端无需跳转子 trace 即可看到完整 RAG 链路。
-        """
-        import time as _time
-
-        from backend.observability.tracer import _scope_root_var, trace_collector
-        from backend.observability.tracer import get_external_child_trace_id
-        external_child_id = get_external_child_trace_id()
-        prev = trace_collector.current()
-        if prev is not None and not external_child_id:
-            trace = prev
-            trace._rag_embedded = True
-            trace_collector.start_span(
-                "rag_skill", name="RAG 智能问答", type="agent",
-                kind="skill", input={"question": question})
-            _scope_root_var.set("rag_skill")
-            logger.info(f"[RAGChain] 嵌入模式（父 trace={prev.id[:8]}）: {question[:60]}...")
-        else:
-            from backend.observability.tracer import (
-                WorkflowKind,
-                get_external_parent_trace_id,
-            )
-
-            trace = trace_collector.start(
-                question,
-                session_id,
-                parent_trace_id=get_external_parent_trace_id(),
-                trace_id=external_child_id,
-                workflow_name="rag_agent",
-                workflow_kind=WorkflowKind.RAG_QUERY.value,
-            )
-            trace._rag_embedded = False
-            trace_collector.start_span("root", parent_id=None,
-                                       name="RAG 智能问答", type="agent",
-                                       input={"question": question})
-            logger.info(f"[RAGChain] 收到问题: {question[:60]}... (session={session_id})")
-        self._record_runtime_prompt_usage()
-        return trace, _time.time()
-
-    def _record_runtime_prompt_usage(self) -> None:
-        """把本次 RAG 链实际依赖的 Prompt 版本写入当前 Trace。"""
-        try:
-            from backend.prompts.service import prompt_service
-
-            for key in self._runtime_prompt_keys:
-                prompt_service.record_template_usage_sync(key)
-        except Exception:  # noqa: BLE001 — 追踪失败不能阻断问答
-            logger.debug("[RAGChain] Prompt 运行版本记录失败", exc_info=True)
-
-    def _respond(self, result, trace, question, session_id, t_total,
-                 persist_memory: bool = True) -> str:
-        """统一决策：Gate 1+2(注入) → verify+evaluate → Gate 3 LLM 自报 → Self-Correction。
-
-        返回 answer 或 rejection msg。
-        """
-        # Gate 1+2: retrieval/rerank 已在 _execute 注入 decision
-        decision = result.get("__evidence_gate_decision__")
-        if decision is not None and not decision.passed:
-            answer = self._reject(decision, decision.layer or "retrieval",
-                                trace, t_total)
-            self._record_rag_metric("rejected")
-            return answer
-
-        # Citation + ClaimVerifier + Faithfulness
-        answer = self._verify(result, question, session_id)
-
-        # ── 程序化 Claim Verifier（确定性事实校验，LLM Judge 不能覆盖）──
-        answer = self._verify_claims(answer, result.get("context", []))
-        if answer is None:
-            # 数字/时效编造 → 零容忍，直接拒答
-            from backend.rag.evidence_gate import GateDecision, RejectReason
-            decision = GateDecision(
-                passed=False, reason=RejectReason.HALLUCINATION,
-                layer="claim_verify", score=0.0,
-                diagnostics={"reason": "numeric_fact_not_supported"},
-            )
-            answer = self._reject(decision, "claim_verify", trace, t_total)
-            self._record_rag_metric("rejected")
-            return answer
-
-        answer = self._evaluate(answer, result.get("context", []))
-
-        # ── Evaluation Gate: Faithfulness 低分拒答（程序化门槛，LLM 自报不能覆盖）──
-        # 修复：is_groundedness_acceptable 此前只定义未被调用，
-        # FAITHFULNESS_REJECT_SCORE / HIGH_RISK_REJECT_SCORE 一直未生效。
-        # 阈值从 config 传入（保持配置单一来源，函数签名的默认值仅作兜底）。
-        if self._last_faithfulness is not None:
-            from backend.config import (
-                FAITHFULNESS_REJECT_SCORE,
-                HIGH_RISK_REJECT_SCORE,
-            )
-            from backend.rag.evidence_gate import (
-                GateDecision,
-                RejectReason,
-                is_groundedness_acceptable,
-            )
-            acceptable, _ = is_groundedness_acceptable(
-                self._last_faithfulness.score,
-                risk_level=self.gate.risk_level,
-                low_threshold=FAITHFULNESS_REJECT_SCORE,
-                high_threshold=HIGH_RISK_REJECT_SCORE,
-            )
-            if not acceptable:
-                decision = GateDecision(
-                    passed=False, reason=RejectReason.HALLUCINATION,
-                    layer="evaluation", score=self._last_faithfulness.score,
-                    diagnostics={"reason": "faithfulness_below_threshold"},
-                )
-                answer = self._reject(decision, "evaluation", trace, t_total)
-                self._record_rag_metric("rejected")
-                return answer
-
-        # Gate 3: LLM 自报拒答 (META can_answer=False)
-        meta = self._last_meta or {}
-        if not meta.get("can_answer", True):
-            answer = self._handle_llm_reject(
-                meta, trace, question, session_id, t_total,
-                persist_memory=persist_memory,
-            )
-            self._record_rag_metric("rejected")
-            return answer
-
-        # 2026-08-11：NLI 推理超时 fallback 视为"有输出"（避免与拒答混淆）
-        if self._last_faithfulness and self._last_faithfulness.score >= 0.99:
-            self._record_rag_metric("fallback")
-        else:
-            self._record_rag_metric("hit")
-
-        partial_retrieval = any(
-            (doc.metadata or {}).get("_mq_partial")
-            or (doc.metadata or {}).get("_retrieval_partial")
-            for doc in result.get("context", [])
-        )
-        if partial_retrieval:
-            from backend.rag.evidence_gate.models import (
-                ANSWER_STATUS_RETRIEVAL_DEGRADED,
-            )
-
-            # 正文已经说明检索不完整；同时把同一终态带给 SSE/History 和 Trace，
-            # 让用户提示、会话恢复与排障记录不再只靠解析回答文案。
-            try:
-                get_context().meta["answer_status"] = (
-                    ANSWER_STATUS_RETRIEVAL_DEGRADED
-                )
-            except Exception:  # noqa: BLE001 — 状态留痕不能丢弃已有证据答案
-                logger.debug("RAG 部分检索状态写入请求上下文失败", exc_info=True)
-            try:
-                trace.metadata["answer_status"] = (
-                    ANSWER_STATUS_RETRIEVAL_DEGRADED
-                )
-            except Exception:  # noqa: BLE001 — Trace 留痕不能丢弃已有证据答案
-                logger.debug("RAG 部分检索状态写入 Trace 失败", exc_info=True)
-
-            answer = (
-                "提示：部分知识库检索路径未能完成，以下内容仅依据已检索到的资料，"
-                "可能不完整。\n\n"
-                + answer
-            )
-
-        self._remember_turn(
-            session_id, question, answer, trace=trace,
-            persist_memory=persist_memory,
-        )
-        self._finish(trace, answer, t_total)
-        return answer
-
-    def _remember_turn(self, session_id: str, question: str, answer: str,
-                       trace=None, persist_memory: bool = True) -> None:
-        """memory 唯一写点（2026-09-23 D1-5）。
-
-        仅在全部 Gate（EvidenceGate/ClaimVerifier/Faithfulness/META 自报）
-        通过、最终用户可见 answer 确定后调用一次。被 Gate 拒绝的 turn 不再
-        进入 L2/L3（此前被拒答案已随 _verify 写入并回注 prompt 污染后续
-        回答）；self-correction 复用本写点，同一 turn 只写最终版本一次。
-        """
-        # 父 Runner 是嵌入模式的唯一 Memory 写入者；独立 RAG 入口仍保留
-        # 原有写点，避免主图与 RAG 以同一 session 重复保存一轮问答。
-        if not persist_memory or (
-            trace is not None and getattr(trace, "_rag_embedded", False)
-        ):
-            return
-        if self._memory:
-            try:
-                from backend.core.request_context import get_current_product_id
-                identity = get_context().identity
-                user_id = (getattr(identity, "user_id", "") or "default")
-                self._memory.end_turn(session_id, question, answer,
-                                      user_id=user_id,
-                                      tenant_id=getattr(identity, "tenant_id", "") or "",
-                                      product=get_current_product_id(),
-                                      trace_id=str(getattr(trace, "id", "") or "") if trace is not None else "")
-            except Exception:
-                logger.debug("[RAGChain] memory end_turn 失败（不影响应答）",
-                             exc_info=True)
-
-    def _emit_embedding_stats(self, stats) -> None:
-        """把单请求 embedding 统计落到请求上下文 / Trace / 日志 / Prometheus。
-
-        R0 口径要求「调用次数、唯一输入数、复用次数」三者可读且与实际
-        provider 调用一致：同一份 stats 同时进 ctx.embedding_stats（供
-        pipeline / ask_result 读出）、trace event（供逐请求追溯）与
-        record_rag_stage("embedding", 累计出站耗时)（供 Grafana 长期时序）。
-        """
-        try:
-            get_context().embedding_stats = stats
-        except Exception:  # noqa: BLE001 — 观测旁路不影响主链
-            pass
-        if stats is None:
-            return
-        try:
-            from backend.observability.metrics import record_rag_stage
-
-            record_rag_stage("embedding", stats.duration_ms)
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            from backend.observability.tracer import trace_collector
-
-            trace = trace_collector.current()
-            span = trace.spans[-1] if trace is not None and trace.spans else None
-            if span is not None:
-                trace_collector.add_event(
-                    span, "embedding_stats", "info",
-                    "检索期 embedding 出站/复用统计",
-                    data=stats.as_dict(),
-                )
-        except Exception:  # noqa: BLE001 — Trace 旁路
-            pass
-        logger.info(
-            f"[RAGChain] embedding 统计: requested={stats.requested} "
-            f"computed={stats.computed} request_hits={stats.request_hits} "
-            f"process_hits={stats.process_hits} unique={stats.unique_inputs} "
-            f"out_ms={stats.duration_ms:.1f} dedup={stats.dedup_ratio:.2f}"
-        )
-
-    def _record_rag_metric(self, status: str) -> None:
-        """埋点 RAG 查询结果到运营指标（2026-08-11）。"""
-        try:
-            from backend.observability.metrics import record_rag_status
-            record_rag_status(status)
-        except Exception as e:
-            # 埋点失败不影响主流程（可观测降级），但必须留痕，不能静默吞掉
-            logger.debug(f"[RAGChain] 指标埋点失败: {e}", exc_info=True)
-
-    def _handle_llm_reject(self, meta, trace, question, session_id, t_total,
-                           persist_memory: bool = True) -> str:
-        """Gate 3（LLM 自报拒答）的统一处理。
-
-        先尝试 self-correction（改写 query 重试）——目的是把『资料确实没有』
-        和『检索没找对』区分开；重试仍失败或已用尽重试次数时，走统一拒答，
-        保证不生成无依据答案。self-correction 不能无限循环，
-        循环次数受 SelfCorrectionStrategy.retry_count 上限约束。
-        """
-        decision = self.gate.build_decision_from_meta(meta)
-
-        if self.corrector.can_retry():
-            retried = self._try_self_correct(decision, trace, question, session_id, t_total)
-            if retried is not None:
-                self._remember_turn(
-                    session_id, question, retried, trace=trace,
-                    persist_memory=persist_memory,
-                )
-                self._finish(trace, retried, t_total)
-                return retried
-
-        # self-correction 关闭 / 失败 / 重试用尽 → 拒答
-        attempted = self.corrector.retry_count > 0
-        return self._reject(decision, "generation", trace, t_total,
-                            self_correction_attempted=attempted)
-
-    def _reject(self, decision, layer: str, trace, t_total: float,
-                self_correction_attempted: bool = False) -> str:
-        """统一拒答路径。
-
-        所有 Gate 拒答（retrieval/rerank/claim_verify/generation）都走这里：
-        构造 RejectInfo → 写 trace（rejection metadata + root span 状态）→
-        完成 trace → 返回拒答消息。集中在一处是为了让拒答行为（消息格式、
-        trace 埋点、指标）保持一致，而不是散落在各 Gate 分支。
-        """
-        from backend.rag.evidence_gate import build_rejection_response
-        from backend.rag.evidence_gate.models import (
-            ANSWER_STATUS_PERMISSION_DENIED,
-            ANSWER_STATUS_RETRIEVAL_DEGRADED,
-            PERMISSION_FILTERED_MESSAGE,
-            resolve_answer_status,
-        )
-        # 权限区分裁决：短缺类拒答 + 本轮确有越权剔除 → 升级为
-        # 「存在相关资料但无权限」，避免用户把无权限误读成知识库没有
-        try:
-            request_state = get_context()
-            permission_filtered = int(request_state.permission_filtered or 0)
-            retrieval_degraded = bool(
-                request_state.rerank_unavailable or request_state.vector_degraded
-            )
-        except Exception:  # noqa: BLE001 — 上下文缺失按无剔除处理
-            permission_filtered = 0
-            retrieval_degraded = False
-        answer_status = resolve_answer_status(
-            getattr(decision, "reason", None), permission_filtered,
-            retrieval_degraded=retrieval_degraded,
-        )
-        msg, info = build_rejection_response(decision, layer,
-                                             self_correction_attempted=self_correction_attempted,
-                                             permission_filtered=permission_filtered)
-        if answer_status == ANSWER_STATUS_PERMISSION_DENIED:
-            msg = PERMISSION_FILTERED_MESSAGE
-        elif answer_status == ANSWER_STATUS_RETRIEVAL_DEGRADED:
-            msg = "这次查询没有完成，我暂时无法判断知识库里是否有相关资料。"
-        # 结构化拒答状态随 ctx.meta 流出：pipeline._snapshot_answer_meta →
-        # /ask meta / 工具 RAGMETA 标记 → done 帧 answer_status（前端指引）
-        try:
-            get_context().meta["answer_status"] = answer_status
-        except Exception:  # noqa: BLE001 — 状态标记失败不影响拒答话术本身
-            logger.debug("answer_status 写入请求上下文失败", exc_info=True)
-        # M9：拒答旁路落 security_events（category=RejectReason 枚举，可统计；软失败）
-        try:
-            from backend.security.events import record_security_event
-
-            record_security_event(
-                "EVIDENCE_REJECT",
-                category=str(getattr(decision, "reason", "") or "unknown"),
-                detail={"layer": layer,
-                        "self_correction_attempted": self_correction_attempted},
-            )
-        except Exception:
-            pass
-        try:
-            trace.metadata["rejection"] = info.to_dict()
-        except Exception:
-            logger.debug("trace metadata rejection 写入失败", exc_info=True)
-        # P1-8: 拒答详情单一事实源 = metadata.rejection（上方已写），
-        # root span 只留布尔索引位，不再三处冗余 reason/gate_layer。
-        metrics = {"rejected": True}
-        if self_correction_attempted:
-            metrics["self_correction"] = "attempted"
-        self._end_root_span(trace,
-            output={"answer_preview": msg[:200], "answer_len": len(msg)},
-            metrics=metrics)
-        self._finish(trace, msg, t_total)
-        logger.info(f"[RAGChain] 拒答 layer={layer} reason={info.reason}")
-        return msg
-
-    def _finish(self, trace, answer: str, t_total: float):
-        """统一 trace 收尾。"""
-        import time as _time
-
-        from backend.config.llm import LLM_MODEL
-        from backend.infra.llm.factory import get_llm_factory
-        from backend.observability.tracer import _scope_root_var, trace_collector
-        total_ms = int((_time.time() - t_total) * 1000)
-        self._end_root_span(trace,
-            output={"answer_preview": answer[:200], "answer_len": len(answer)},
-            metrics={"span_count": sum(1 for s in trace.spans if s.parent_id is not None)})
-        # 嵌入模式：清理 scope root，不 finish trace（属于父 trace）
-        if getattr(trace, '_rag_embedded', False):
-            _scope_root_var.set(None)
-            return
-        provider = ""
-        try:
-            # STOP C（身份链）：优先取本次调用的实际解析模型（请求覆盖 /
-            # fallback 接管后的 ResolvedModelContext），import 期常量
-            # LLM_MODEL 只是兜底 —— 否则 trace 头会把覆盖请求记成
-            # 启动默认模型（身份陈旧，STOP A P1-16）。
-            from backend.infra.llm.resolved_model import get_current_resolved_model
-
-            _ctx = get_current_resolved_model()
-            if _ctx is not None and _ctx.model_id:
-                trace_collector.finish(trace, answer, total_ms,
-                                       _ctx.model_id, _ctx.provider)
-                return
-            from backend.config import model_roles as _model_roles
-            from backend.infra.llm.models import resolve_provider as _resolve_provider
-
-            actual_model = str(_model_roles.resolve_effective("main").get("value")
-                               or LLM_MODEL)
-            provider = _resolve_provider(actual_model)
-            trace_collector.finish(trace, answer, total_ms, actual_model, provider)
-        except Exception:
-            logger.debug("LLM provider 检测失败", exc_info=True)
-            trace_collector.finish(trace, answer, total_ms, LLM_MODEL, provider)
-
-    def _finish_error(self, trace, t_total: float):
-        """异常路径收尾。
-
-        主流程异常时把 root span 标为 error 并完成 trace，
-        保证 Trace 不因异常而丢失（P0）。此函数自身在异常处理路径中，
-        收尾再失败时不覆盖原始异常，仅记录日志。
-        """
-        import time as _time
-
-        from backend.observability.tracer import _scope_root_var, trace_collector
-        try:
-            self._end_root_span(trace, status="error",
-                                metrics={"error": "pipeline_failed"})
-            if getattr(trace, '_rag_embedded', False):
-                _scope_root_var.set(None)
-                return
-            trace_collector.finish(trace, "[ERROR]",
-                                   int((_time.time() - t_total) * 1000), "", "")
-        except Exception as e:
-            logger.error("[RAGChain] error cleanup failed: %s", e, exc_info=True)
-
-    def _try_self_correct(self, original_decision, trace, question, session_id, t_total):
-        """Self-Correction：改写 query 重试。
-
-        Returns:
-            None    → 改写失败 / 仍拒答 (让 _handle_llm_reject 走兜底)
-            str     → 新答案 (成功) 或 重试后的拒答 msg
-        """
-        self.corrector.record_attempt(success=False)
-        reason_str = (original_decision.reason.value
-                      if original_decision.reason else "no_evidence")
-        new_query = self.corrector.try_rewrite(question, reason_str)
-        if new_query is None:
-            return None
-
-        try:
-            history = self._prepare(new_query, session_id)
-            result = self._execute(new_query, history)
-
-            # 仍拒答 (Gate 1+2) → 走 _handle_llm_reject 兜底
-            decision = result.get("__evidence_gate_decision__")
-            if decision is not None and not decision.passed:
-                return None
-
-            answer = self._verify(result, new_query, session_id)
-            # 二次生成同样必须过程序化 Claim 校验（数字/时效零容忍），
-            # 否则 self-correction 会成为绕过 ClaimVerifier 的旁路。
-            answer = self._verify_claims(answer, result.get("context", []))
-            if answer is None:
-                # 二次生成仍编造确定性事实 → 放弃，走 _handle_llm_reject 兜底拒答
-                return None
-            answer = self._evaluate(answer, result.get("context", []))
-            meta = self._last_meta or {}
-            if not meta.get("can_answer", True):
-                # LLM 二次拒答 → 走 _handle_llm_reject 兜底
-                return None
-            logger.info(f"[RAGChain] Self-Correction 救活: question={question[:60]}")
-            return answer
-        except Exception as e:
-            logger.warning(f"[Self-Correction] 重试失败: {e}")
-            return None
-
-    def _prepare(self, question: str, session_id: str) -> list:
-        """准备阶段：Memory 启动会话，返回 chat_history。"""
-        # D1-7：L1 检索按认证 user_id 隔离（context.identity 由 pipeline
-        # 从网关验签后的 Principal 回填）；空 = 直调/eval 无身份 → 保留
-        # 旧 "default" 兜底
-        identity = get_context().identity
-        user_id = getattr(identity, "user_id", "") or "default"
-        tenant_id = getattr(identity, "tenant_id", "") or ""
-        # ADR-0012 第 1 期（审计 #68）：product 由 ContextVar 解析（主图
-        # runner 已 bind；rag-service 由 /ask 入口 bind），记忆层唯一入口
-        # 据此解析命名空间——客服知识问答不再串入 agent 记忆。
-        from backend.core.request_context import get_current_product_id
-        l1 = (self._memory.start_session(session_id, question, user_id=user_id,
-                                         tenant_id=tenant_id,
-                                         product=get_current_product_id(),
-                                         timeout=1.5)
-              if self._memory else None)
-        return list(l1.messages) if l1 else []
-
-    def _execute(self, question: str, chat_history: list) -> dict:
-        """执行阶段：chain.invoke + MultiQuery 决策 trace + Retrieval Debug。
-
-        Evidence Gate 在 _execute 末尾统一编排（唯一执行点）：
-          - Gate 1: 优先读取 hybrid.py 已注入的 retrieval decision（快路径，
-            避免 Retriever 层与 Chain 层重复计算同一 Gate）；仅当空召回或
-            未注入（fallback 路径）时在此补跑一次，处理 NO_EVIDENCE。
-          - Gate 2: 基于 context 上的 rerank_score 跑 Rerank Gate。
-        拒答时把 GateDecision 写到 result["__evidence_gate_decision__"]，
-        上层 ask() 据此短路 verify/evaluate。
-
-        Returns:
-            dict 含 "context" / "answer" / "__evidence_gate_decision__" / 可选 "__rejected"
-        """
-        import time as _time
-
-        from backend.observability.tracer import trace_collector
-
-        # ── 记录 query 上下文（§D4 修复） ──
-        self._last_query = question
-        try:
-            from backend.rag.context import get_context
-            from backend.rag.retrieval.query_analyzer import QueryAnalyzer
-            qa_result = QueryAnalyzer().analyze(question)
-            get_context().query_analysis = qa_result
-            self.gate.set_query_analysis(qa_result)
-        except Exception as e:
-            # 查询分析失败不阻塞主链路（软降级），但需留痕以便定位
-            logger.debug(f"[RAGChain] QueryAnalyzer 分析失败: {e}", exc_info=True)
-            self.gate.set_query_analysis(None)
-
-        # ── retrieval span（挂在真实检索边界：_timed_stuff 收到 context 时
-        # 提前收口；此处的 end_span 仅在异常/短路等未收口路径兜底）──
-        from backend.observability.tracer import SpanName as _SpanName
-        ret_span = trace_collector.start_span(
-            "retrieval",
-            name=_SpanName.RETRIEVAL, type="retrieval",
-            kind="retrieval",
-            input={"question": question[:500]},
-        )
-
-        # ── 双链选择：无历史或问题本身独立时跳过 HistoryAware LLM 调用 ──
-        history_rewrite_used = (
-            bool(chat_history)
-            and _needs_history_rewrite(question)
-            and getattr(self, "chain", None) is not None
-        )
-        active_chain = self.chain if history_rewrite_used else self.chain_standalone
-        # ── Phase 5（spec §23/§24）：检索级 deadline 预算——入口生成一次，
-        # 下游（MQ 改写/fan-out/adaptive/synonym）统一 remaining_ms() 消费；
-        # 预算经 ContextVar 随 multi_query 的提交方快照进入变体任务。
-        # 预算耗尽不抛异常，各阶段按 §25 阶梯降级。
-        from backend.config.rag import RAG_RETRIEVAL_DEADLINE_MS
-        from backend.rag.retrieval_budget import (
-            clear_retrieval_budget,
-            start_retrieval_budget,
-        )
-
-        start_retrieval_budget(RAG_RETRIEVAL_DEADLINE_MS)
-        # R0/R1-A 的 embedding 总账在 ask() 生命周期开闭（见 RAGChain.ask）：
-        # _execute 会被 self-correction 在同一用户请求内二次调用，若在此处
-        # start/end 会把每一次尝试当成独立请求、后一次覆盖 ctx.embedding_stats
-        # （P1 审查）。这里只负责检索预算。
-        try:
-            result = active_chain.invoke({"input": question, "chat_history": chat_history})
-            if history_rewrite_used and not (
-                isinstance(result, dict) and result.get("context")
-            ):
-                # 历史改写后的 query 可能被扩写坏了；无证据时用原问题重试一次，
-                # 避免把“改写漂移”误判成知识库没有答案。
-                logger.info("[RAGChain] 历史改写检索无证据，回退原问题重试")
-                result = self.chain_standalone.invoke(
-                    {"input": question, "chat_history": []}
-                )
-        finally:
-            clear_retrieval_budget()
-
-        # ── 采集检索中间结果（正常路径 span 已提前收口，end_span 幂等跳过）──
-        context_docs = result.get("context", [])
-        self._record_retrieval_events(ret_span, context_docs)
-        trace_collector.end_span(ret_span, metrics={"total_docs": len(context_docs)})
-
-        # mq_check
-        mq_span = trace_collector.start_span("mq_check", name=_SpanName.MULTI_QUERY)
-        mq = getattr(self, '_mq_retriever', None)
-        triggered = mq._last_triggered if mq else False
-        from backend.rag.retrieval.multi_query import get_mq_mode
-        trace_collector.end_span(mq_span,
-            metrics={"triggered": triggered, "mode": get_mq_mode()},
-            status="skipped" if not triggered else "success")
-
-        # ── Evidence Gate 决策链 ────────────────────────────────
-        # Gate 已前置到检索后/LLM 前（_gate_wrap_retrieve，链内执行），
-        # 此处从 doc.metadata 反序列化决策结果，供 _respond 统一决策。
-        # 无注入（空召回等）→ 回退原 Gate 评估路径，保持空召回拒答行为。
-        injected = (context_docs[0].metadata.get("__evidence_gate_decision__")
-                    if context_docs else None)
-        if injected is not None:
-            result["__evidence_gate_decision__"] = self._decision_from_injected(injected)
-        else:
-            result["__evidence_gate_decision__"] = self._run_evidence_gates(
-                question, context_docs)
-        return result
-
-    def _gate_wrap_retrieve(self, payload):
-        """Gate 前置检索包装：调底层检索 → 执行 Evidence Gate → 注入 decision。
-
-        create_retrieval_chain / history_aware_retriever 的 retriever 槽位。
-        payload 兼容 dict（{"input": ...}）与 str 两种输入形态。
-        实体覆盖校验使用 self._last_query（原始用户问题）——history-aware
-        改写后的 query 不反映用户原始实体。
-        """
-        query = payload.get("input") if isinstance(payload, dict) else payload
-        docs = list(self._rerank_wrapper.invoke(query))
-        try:
-            from backend.rag.evidence_gate import is_evidence_gate_enabled
-            if is_evidence_gate_enabled() and docs:
-                question = self._last_query or (query if isinstance(query, str) else str(query))
-                decision = self._run_evidence_gates(question, docs)
-                if decision is not None:
-                    stamp = {
-                        "gate_passed": bool(decision.passed),
-                        "gate_layer": decision.layer or "retrieval",
-                        "gate_score": float(decision.score or 0.0),
-                        "gate_reason": (decision.reason.value if decision.reason else ""),
-                        **(decision.diagnostics or {}),
-                    }
-                    for d in docs:
-                        d.metadata["__evidence_gate_decision__"] = stamp
-        except Exception as e:  # noqa: BLE001
-            # Gate 前置失败 → 不拦截 docs，交由原兜底路径处理（软降级，留痕）
-            logger.warning(f"[RAGChain] Gate 前置评估失败，透传 docs: {e}", exc_info=True)
-            _mark_gate_degraded("pre_wrap", "passthrough", e)
-        return docs
-
-    def _decision_from_injected(self, injected):
-        """doc.metadata 注入的 decision dict → GateDecision 对象。
-
-        无注入（空 docs / Gate 关闭）→ 透传放行，与原 _run_evidence_gates
-        的兜底行为一致。
-        """
-        from backend.rag.evidence_gate import (
-            gate_retrieval_passthrough,
-            is_evidence_gate_enabled,
-        )
-        if injected is None or not is_evidence_gate_enabled():
-            return gate_retrieval_passthrough()
-        from backend.rag.evidence_gate import GateDecision, RejectReason
-        try:
-            return GateDecision(
-                passed=bool(injected.get("gate_passed")),
-                reason=(RejectReason(injected["gate_reason"])
-                        if injected.get("gate_reason") else None),
-                layer="retrieval",
-                score=float(injected.get("gate_score", 0.0)),
-                diagnostics={k: v for k, v in injected.items()
-                             if k not in ("gate_passed", "gate_layer",
-                                          "gate_score", "gate_reason")},
-            )
-        except Exception as e:
-            logger.warning(f"[RAGChain] Gate decision 反序列化失败，透传放行: {e}")
-            return gate_retrieval_passthrough()
-
-    def _run_evidence_gates(self, question: str, context_docs: list):
-        """两层 Gate（Retrieval + Rerank）的合并判定。
-
-        行为契约：
-          - 任一 Gate passed=False → 返回该 GateDecision
-          - 都通过 → 返回最后一个 passed=True 的 GateDecision
-          - 总开关关闭 / 任何异常 → 返回 passed=True (透传)
-        """
-        from backend.observability.tracer import SpanKind, trace_collector
-        from backend.rag.evidence_gate import (
-            GateDecision,
-            RejectReason,
-            assess_query_scope,
-            evidence_gate_rerank,
-            evidence_gate_retrieval,
-            gate_retrieval_passthrough,
-            is_evidence_gate_enabled,
-        )
-
-        if not is_evidence_gate_enabled():
-            return gate_retrieval_passthrough()
-
-        # ── Gate 1: Retrieval（hybrid.py 注入的 decision 作为快路径）──
-        gate_span = trace_collector.start_span(
-            "evidence_gate_retrieval", name="Evidence Gate - Retrieval",
-            kind=SpanKind.RETRIEVAL_GATE.value,
-        )
-
-        # Gate 0: 当前 RAG 不具备实时外部数据、凭据披露或越权操作能力时，
-        # 先按查询范围拒答，避免相似文档把不应回答的请求误判为有证据。
-        scope = assess_query_scope(question)
-        if scope.blocked:
-            scope_decision = GateDecision(
-                passed=False,
-                reason=RejectReason.NO_EVIDENCE,
-                layer="retrieval",
-                score=0.0,
-                diagnostics={
-                    "query_scope": "blocked",
-                    "query_scope_category": scope.category,
-                    "query_scope_reason": scope.reason,
-                },
-            )
-            trace_collector.end_span(
-                gate_span,
-                metrics=scope_decision.to_metrics(),
-                status="rejected",
-            )
-            return scope_decision
-
-        # 优先复用 hybrid.py 注入的 decision
-        injected = (context_docs[0].metadata.get("__evidence_gate_decision__")
-                    if context_docs else None)
-        gate1_degraded = False
-        if injected is not None:
-            # 序列化 → 反序列化为 GateDecision-like
-            from backend.rag.evidence_gate import GateDecision, RejectReason
-            try:
-                ret_decision = GateDecision(
-                    passed=bool(injected.get("gate_passed")),
-                    reason=(RejectReason(injected["gate_reason"])
-                            if injected.get("gate_reason") else None),
-                    layer="retrieval",
-                    score=float(injected.get("gate_score", 0.0)),
-                    diagnostics={k: v for k, v in injected.items()
-                                 if k not in ("gate_passed", "gate_layer",
-                                              "gate_score", "gate_reason")},
-                )
-            except Exception as e:
-                # 注入的 decision 反序列化失败 → 透传放行（软降级），留痕以便 trace 定位
-                logger.warning(f"[RAGChain] Gate 1 decision 反序列化失败，透传放行: {e}")
-                ret_decision = gate_retrieval_passthrough()
-                gate1_degraded = True
-                _mark_gate_degraded("gate1_deserialize", "passthrough", e, span=gate_span)
-        else:
-            # 没注入（空召回或 fallback 路径）→ 自己跑一次
-            try:
-                from backend.config import DOC_TYPE_COVERAGE_REQUIRED, VEC_MIN_SCORE
-                ret_decision = evidence_gate_retrieval(
-                    context_docs,
-                    query_analysis=self.gate.query_analysis,
-                    vec_min_score=VEC_MIN_SCORE,
-                    require_doc_type_coverage=DOC_TYPE_COVERAGE_REQUIRED,
-                )
-            except Exception as e:
-                # Gate 评估异常 → 透传放行（软降级），留痕；不放行拒答会误伤正常检索
-                logger.warning(f"[RAGChain] Gate 1 评估异常，透传放行: {e}", exc_info=True)
-                ret_decision = gate_retrieval_passthrough()
-                gate1_degraded = True
-                _mark_gate_degraded("gate1", "passthrough", e, span=gate_span)
-
-        # 异常放行标 skipped（与"评估成功通过"在 trace 上可区分；
-        # skipped 会被折叠进 root.metrics["skipped_stages"]，不影响聚合状态）
-        trace_collector.end_span(
-            gate_span, metrics=ret_decision.to_metrics(),
-            status=("skipped" if gate1_degraded
-                    else ("success" if ret_decision.passed else "rejected")))
-
-        if not ret_decision.passed:
-            return ret_decision
-
-        # ── Gate 1.5: 查询实体覆盖校验（P2，2026-08-21）──
-        # 主题相近但无答案：问题核心实体（含同义词闭包）不在召回文本中 →
-        # 改判拒答。异常不干预原判（软降级）。
-        # 2026-10-25 口径修正：hybrid 层已在 rerank 前全集上评估实体覆盖并
-        # 随 __evidence_gate_decision__ 注入（rerank 后子集覆盖面单调变窄，
-        # 此处重算必制造误拒——文档级标题 chunk 承载查询对文档的称呼实体，
-        # 常被 Rerank 淘汰，实测「信息安全管理制度」问答被
-        # missing=['信息安全'] 挡住正确召回）。注入含 entity_check 键时
-        # 直接采用（fail 拒答已在 Gate 1 经 gate_passed=False 生效）；
-        # 无注入（空召回/fallback/反序列化失败）时维持本层 rerank 后重算。
-        if context_docs:
-            try:
-                from backend.config import GATE_ENTITY_CHECK_ENABLED
-                if GATE_ENTITY_CHECK_ENABLED:
-                    _injected_diags = (ret_decision.diagnostics or {})
-                    _hybrid_checked = (
-                        injected is not None
-                        and _injected_diags.get("entity_check") in ("pass", "fail")
-                    )
-                    if _hybrid_checked:
-                        logger.debug(
-                            "[RAGChain] 实体覆盖校验沿用 hybrid 注入判定: "
-                            "entity_check=%s", _injected_diags.get("entity_check"))
-                    else:
-                        from backend.rag.evidence_gate import (
-                            GateDecision,
-                            RejectReason,
-                            find_missing_entities,
-                        )
-                        missing = find_missing_entities(question, context_docs)
-                        if missing:
-                            ret_decision = GateDecision(
-                                passed=False, reason=RejectReason.NO_EVIDENCE,
-                                layer="retrieval", score=ret_decision.score,
-                                diagnostics={**(ret_decision.diagnostics or {}),
-                                             "entity_check": "fail",
-                                             "missing_entities": missing[:5]},
-                            )
-                            logger.info(
-                                f"[RAGChain] 实体覆盖校验拒答: missing={missing[:5]}"
-                            )
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"[RAGChain] 实体覆盖校验异常，忽略: {e}")
-                _mark_gate_degraded("gate1_entity", "skip_check", e)
-
-        if not ret_decision.passed:
-            return ret_decision
-
-        # ── Gate 2: Rerank（基于 context 上的 rerank_score）──
-        from backend.rag.evidence_gate import risk_level_from_intent_and_doctype
-        try:
-            self.gate.set_risk_level(risk_level_from_intent_and_doctype(
-                self.gate.intent,
-                getattr(self.gate.query_analysis, "doc_types", []) or [],
-            ))
-        except Exception as e:
-            # 风险等级推导失败 → 保守按低风险处理（软降级），留痕
-            logger.debug(f"[RAGChain] 风险等级推导失败，按 low 处理: {e}", exc_info=True)
-            self.gate.set_risk_level("low")
-            _mark_gate_degraded("risk_level", "low_fallback", e)
-
-        rerank_span = trace_collector.start_span(
-            "evidence_gate_rerank", name="Evidence Gate - Rerank",
-            kind=SpanKind.RERANK_GATE.value,
-        )
-        rerank_degraded = False
-        try:
-            from backend.config import (
-                RERANK_HIGH_RISK_MIN_TOP1,
-                RERANK_MIN_AVG,
-                RERANK_MIN_GAP,
-                RERANK_MIN_TOP1,
-            )
-            rerank_decision = evidence_gate_rerank(
-                context_docs,
-                intent=self.gate.intent,
-                risk_level=self.gate.risk_level,
-                min_top1=RERANK_MIN_TOP1,
-                min_avg=RERANK_MIN_AVG,
-                min_gap=RERANK_MIN_GAP,
-                high_risk_min_top1=RERANK_HIGH_RISK_MIN_TOP1,
-            )
-        except Exception as e:
-            # Gate 2 评估异常 → 透传放行（软降级），留痕；不放行会误伤正常检索
-            logger.warning(f"[RAGChain] Gate 2 评估异常，透传放行: {e}", exc_info=True)
-            rerank_decision = gate_retrieval_passthrough()
-            rerank_degraded = True
-            _mark_gate_degraded("gate2", "passthrough", e, span=rerank_span)
-
-        trace_collector.end_span(
-            rerank_span,
-            metrics=rerank_decision.to_metrics(),
-            status=("skipped" if rerank_degraded
-                    else ("success" if rerank_decision.passed else "rejected")))
-
-        return rerank_decision
-
-    def _record_retrieval_events(self, ret_span, context_docs: list) -> None:
-        """采集检索各阶段的中间结果，写入 ret_span.events。"""
-        from backend.observability.tracer import trace_collector
-
-        # ── Event 1: Query Analyzer ──
-        try:
-            from backend.rag.context import get_context
-            pq = get_context().query_analysis
-            if pq is not None:
-                trace_collector.add_event(ret_span, "query_analyzer", "info",
-                    f"intent={pq.intent}, doc_types={pq.doc_types}",
-                    data={"intent": pq.intent, "doc_types": pq.doc_types,
-                          "metadata_filter": pq.to_metadata_filter()})
-        except Exception:
-            logger.debug("query_analysis span 记录失败", exc_info=True)
-
-        # ── Event 2: Rerank 结果 ──
-        rerank_scores = []
-        for doc in context_docs[:10]:
-            score = doc.metadata.get("rerank_score")
-            if score is not None:
-                rerank_scores.append({
-                    "chunk_id": doc.metadata.get("chunk_id", ""),
-                    "score": round(score, 4),
-                    "snippet": doc.page_content[:120],
-                    "source": doc.metadata.get("source_file", ""),
-                    "source_query": doc.metadata.get("source_query", ""),
-                    "doc_type": doc.metadata.get("doc_type", ""),
-                })
-        if rerank_scores:
-            trace_collector.add_event(ret_span, "rerank", "info",
-                f"top {len(rerank_scores)} scored chunks",
-                data={"scored": rerank_scores})
-
-        # ── Event 3: Final Context ──
-        trace_collector.add_event(ret_span, "final_context", "info",
-            f"{len(context_docs)} chunks → LLM",
-            data={"chunks": [{
-                "chunk_id": d.metadata.get("chunk_id", ""),
-                "source": d.metadata.get("source_file", ""),
-                "source_query": d.metadata.get("source_query", ""),
-                "doc_type": d.metadata.get("doc_type", ""),
-                "keywords": d.metadata.get("chunk_keywords", ""),
-                "snippet": d.page_content[:100],
-            } for d in context_docs[:8]]})
-
-    def _verify(self, result: dict, question: str, session_id: str = "default") -> str:
-        """验证阶段：剥离 think 块 + META 注释解析 + Citation 校验 + 格式化引用。
-
-        P1 改造：
-          - 解析 LLM 末尾 <!--META--> 注释，剥离出纯 Markdown
-          - META 信息存到 self._last_meta，让 ask() 后续判定拒答/放行
-        """
-        from backend.observability.tracer import trace_collector
-        from backend.rag.evidence_gate import parse_meta_comment
-
-        raw_answer = self.formatter.strip_think(result["answer"])
-        context_docs = result.get("context", [])
-
-        # ── P1: 解析 META 注释 ──
-        from backend.observability.tracer import SpanName as _SpanName
-        meta_span = trace_collector.start_span("meta_parse", name=_SpanName.META_PARSE)
-        cleaned_answer, meta = parse_meta_comment(raw_answer)
-        # 分点归一化：句号+序号边界补换行（提示词约束不住的同行要点，此处确定性修复）
-        cleaned_answer = self.formatter.normalize_point_layout(cleaned_answer)
-        self._last_meta = meta
-        trace_collector.end_span(meta_span,
-                                 metrics={"can_answer": meta.get("can_answer"),
-                                          "citations_count": len(meta.get("citations", [])) if meta else 0,
-                                          "confidence": meta.get("confidence")})
-
-        # ── Citation 校验（基于已剥离 META 的 cleaned_answer）──
-        citation_span = trace_collector.start_span(
-            "citation", name=_SpanName.CITATION)
-        if context_docs:
-            answer, verified_docs = self.formatter.verify_support(cleaned_answer, context_docs, question)
-        else:
-            answer = cleaned_answer
-            verified_docs = []
-        # 多源同事实出现不同数值时，确定性标注「存在不同说法」并保留双方引用；
-        # 不让一次 LLM 输出偶然只选择 top hit，亦不替用户静默裁决权威值。
-        answer = self.formatter.annotate_conflicts(answer, verified_docs, question)
-        # 事实来源必须匹配模型答案中的 chunk 引用；不复用按文件去重的 SourceCard。
-        self._last_citation_evidence = self.formatter.extract_citation_evidence(
-            verified_docs,
-            answer,
-        )
-        trace_collector.end_span(citation_span,
-                             metrics={"verified_citations": len(verified_docs),
-                                      "total_citations": len(context_docs),
-                                      # O4：最终真正进入引用/回答闭环的证据数，
-                                      # 与检索候选数区分，便于定位 Gate/引用过滤损耗。
-                                      "final_evidence_count": len(verified_docs)})
-        references = self.formatter.format_references(verified_docs, answer)
-        if references:
-            answer = answer + references
-        self._last_sources = self.formatter.extract_sources(verified_docs, answer)
-
-        # memory 写入已移出本函数（2026-09-23 D1-5）：此前在 ClaimVerifier /
-        # Faithfulness / META 拒答判定之前就 end_turn，被 Gate 拦截的答案
-        # 已持久化进 L2/L3 并回注后续 prompt；self-correction 再次 _verify
-        # 还会双写。现在唯一写点 = _remember_turn（全部 Gate 通过后调用）。
-
-        return answer
-
-    def _verify_claims(self, answer: str, context_docs: list) -> str | None:
-        """程序化 Claim 校验（非 LLM）。
-
-        确定性事实（数字+单位/日期/金额/时效）与引用 chunk 原文比对。
-        任一 claim 校验失败 → 返回 None（调用方拒答），LLM Judge 不能覆盖。
-
-        Returns:
-            answer（通过时原样返回）或 None（编造事实被拦截）。
-        """
-        from backend.observability.tracer import SpanName as _SpanName
-        from backend.observability.tracer import trace_collector
-        from backend.rag.evidence_gate.claim_verifier import verify_answer
-
-        claim_span = trace_collector.start_span(
-            "claim_verify", name=_SpanName.CLAIM_VERIFY)
-        try:
-            verifier = verify_answer(answer, context_docs)
-            trace_collector.end_span(claim_span,
-                metrics={"passed": verifier.passed,
-                         "failed_claims": len(verifier.failed_claims),
-                         "reason": verifier.reason})
-            if not verifier.passed:
-                logger.warning(
-                    f"[RAGChain] ClaimVerifier 拦截编造事实: {verifier.detail[:200]}"
-                )
-                return None
-            return answer
-        except Exception as e:
-            # 校验器异常不阻塞主流程（软失败），交给 LLM Judge 兜底
-            logger.warning(f"[RAGChain] ClaimVerifier 异常跳过: {e}")
-            trace_collector.end_span(claim_span, status="skipped",
-                                     metrics={"error": str(e)[:100]})
-            _mark_gate_degraded("claim_verify", "skip_check", e)
-            return answer
-
-    def _evaluate(self, answer: str, context_docs: list) -> str:
-        """评估阶段：Faithfulness 忠实性检测 + 自动剔除不可信句子。
-
-        默认关闭（ENABLE_FAITHFULNESS=false）。
-        开启后：检测 → 三级漏斗 → 返回安全答案。
-        结果同时存入 self._last_faithfulness 供外部读取。
-
-        LangGraph 迁移点：
-          当 rewrite 触发频率 > 10% 或需要并行多源验证时，
-          将 check_faithfulness + rewrite_claim 拆为独立 LangGraph 节点，
-          _evaluate() 改为返回 FaithfulnessResult 而非直接改写 answer。
-        """
-        import re
-
-        from backend.observability.tracer import SpanName as _SpanName
-        from backend.observability.tracer import trace_collector
-        self._last_faithfulness = None
-        # 预绑定：import 失败等早期异常路径下 except 引用未定义变量会二次炸
-        faith_span = None
-
-        try:
-            from backend.rag.guardrails import check_faithfulness
-
-            # 剥离 reference section（避免元数据行被误提取为 claim）
-            ref_match = re.search(r'\n---\n\s*\n###\s*参考文献\s*\n', answer)
-            answer_body = answer[:ref_match.start()] if ref_match else answer
-            ref_section = answer[ref_match.start():] if ref_match else ""
-
-            faith_span = trace_collector.start_span(
-                "faithfulness", name=_SpanName.EVALUATE)
-            self._last_faithfulness = check_faithfulness(answer_body, context_docs)
-            trace_collector.end_span(faith_span,
-                                 metrics={
-                                     "score": self._last_faithfulness.score,
-                                     "claims": self._last_faithfulness.total_claims,
-                                     "supported": self._last_faithfulness.supported_claims,
-                                     "unsupported": self._last_faithfulness.unsupported_claims,
-                                 })
-
-            # 如果有不可信 claim，用清洗后的答案（保留原 reference section）
-            if self._last_faithfulness.cleaned_answer and \
-               self._last_faithfulness.cleaned_answer != answer_body:
-                logger.warning(
-                    f"[RAGChain] 自动剔除 {self._last_faithfulness.unsupported_claims} 条不可信内容"
-                )
-                return self._last_faithfulness.cleaned_answer + ref_section
-            return answer
-        except Exception as e:
-            logger.warning(f"[RAGChain] Faithfulness 检测跳过: {e}")
-            if faith_span is not None:
-                trace_collector.end_span(faith_span, status="skipped",
-                                     metrics={"error": str(e)[:100]})
-            _mark_gate_degraded("faithfulness", "skip_check", e)
-            return answer
-
-    @staticmethod
-    def _end_root_span(trace, output: dict = None, metrics: dict = None,
-                       status: str = "success"):
-        """查找并结束 root span（parent_id=None 的那条）。
-
-        嵌入模式：结束 "rag_skill" span（而非父 trace 的 root）。
-        """
-        from backend.observability.tracer import trace_collector
-        if getattr(trace, '_rag_embedded', False):
-            for sp in trace.spans:
-                if sp.span_id == "rag_skill":
-                    trace_collector.end_span(sp, output=output, metrics=metrics, status=status)
-                    return
-            return
-        for sp in trace.spans:
-            if sp.parent_id is None:
-                trace_collector.end_span(sp, output=output, metrics=metrics, status=status)
-                return
