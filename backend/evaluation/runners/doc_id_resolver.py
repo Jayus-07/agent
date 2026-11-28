@@ -13,6 +13,9 @@ from pathlib import Path
 from backend.shared.logger import logger
 
 
+_COMMON_DOC_EXTS = {".md", ".docx", ".doc", ".pdf", ".txt", ".json", ".csv"}
+
+
 class DocIdResolver:
     """Bidirectional doc_id <-> filename resolution for evaluation.
 
@@ -144,13 +147,25 @@ class DocIdResolver:
         if actual_canon == expected_canon:
             return True
 
-        actual_base = Path(actual.replace("\\", "/")).name
-        expected_base = Path(expected.replace("\\", "/")).name
+        actual_path = Path(actual.replace("\\", "/"))
+        expected_path = Path(expected.replace("\\", "/"))
+        actual_base = actual_path.name
+        expected_base = expected_path.name
         # basename 相等即命中会把"同名不同 KB/部门"的文档误判为相关（虚增 recall）；
         # 仅当该文件名在 registry 中无歧义（只对应一个 doc_id）时才接受
         if (
             actual_base and expected_base and actual_base == expected_base
             and len(self._name_to_hashes.get(expected_base, set())) <= 1
+        ):
+            return True
+
+        # 同名同义格式匹配（如 faq_only.docx ↔ faq_only.md 属于同源文档的不同载体）
+        if (
+            actual_path.stem and expected_path.stem
+            and actual_path.stem == expected_path.stem
+            and len(actual_path.stem) >= 2
+            and actual_path.suffix.lower() in _COMMON_DOC_EXTS
+            and expected_path.suffix.lower() in _COMMON_DOC_EXTS
         ):
             return True
 

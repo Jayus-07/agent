@@ -111,9 +111,9 @@ RERANK_MODEL = _literal_model("rerank")
 # Rerank API 协议格式：
 #   dashscope → 阿里云百炼（endpoint = base + /services/rerank/text-rerank/text-rerank）
 #   jina      → Jina 兼容格式（SiliconFlow 等，endpoint = base + /rerank）
-# Rerank 协议与地址由数据库专项绑定推导；默认值只为旧 import 保留。
-RERANK_API_FORMAT = "dashscope"
-RERANK_BASE_URL = ""
+# Rerank 协议与地址由环境变量或数据库专项绑定推导。
+RERANK_API_FORMAT = os.getenv("RERANK_API_FORMAT", "dashscope")
+RERANK_BASE_URL = os.getenv("RERANK_BASE_URL", "")
 
 # Local Reranker 模型路径（仅在 ENV_MODE=local 时使用）
 RERANKER_MODEL_PATH = os.getenv(

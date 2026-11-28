@@ -141,7 +141,9 @@ class MetricRequirement:
 
     threshold=None 时从 DEFAULT_THRESHOLDS（含调用方覆盖）解析；
     ragas_conditional=True：evaluator_mode 含 ragas 时为 required，否则 optional
-    （RAGAS 分值只在启用 RAGAS 评估的 run 上作为门禁）。
+    （RAGAS 分值只在启用 RAGAS 评估的 run 上作为门禁）；
+    reject_conditional=True：评测集包含拒答负样本时为 required，纯正向单文档题集自适应为 optional；
+    live_conditional=True：在线真实执行模式下为 required，离线 sanity 数据集健全性模式自适应为 optional。
     """
 
     metric: str
@@ -149,6 +151,8 @@ class MetricRequirement:
     threshold: float | None = None
     direction: str = "higher"  # higher=越大越好 / lower=越小越好
     ragas_conditional: bool = False
+    reject_conditional: bool = False
+    live_conditional: bool = False
 
 
 @dataclass(frozen=True)
@@ -170,9 +174,24 @@ class ModuleGatePolicy:
     tier_gate: bool = False
 
 
-def _req(metric: str, dimension: str, threshold: float | None = None,
-         direction: str = "higher", ragas_conditional: bool = False) -> MetricRequirement:
-    return MetricRequirement(metric, dimension, threshold, direction, ragas_conditional)
+def _req(
+    metric: str,
+    dimension: str,
+    threshold: float | None = None,
+    direction: str = "higher",
+    ragas_conditional: bool = False,
+    reject_conditional: bool = False,
+    live_conditional: bool = False,
+) -> MetricRequirement:
+    return MetricRequirement(
+        metric=metric,
+        dimension=dimension,
+        threshold=threshold,
+        direction=direction,
+        ragas_conditional=ragas_conditional,
+        reject_conditional=reject_conditional,
+        live_conditional=live_conditional,
+    )
 
 
 _RAG_POLICY = ModuleGatePolicy(
@@ -181,8 +200,8 @@ _RAG_POLICY = ModuleGatePolicy(
         _req("pass_rate", "通过率"),
         _req("recall@5", "检索"),
         _req("mrr", "检索"),
-        _req("reject_accuracy", "安全"),
-        _req("false_answer_rate", "安全", direction="lower"),
+        _req("reject_accuracy", "安全", reject_conditional=True),
+        _req("false_answer_rate", "安全", direction="lower", reject_conditional=True),
     ),
     optional=(
         _req("top1_accuracy", "检索"),
@@ -210,9 +229,9 @@ _SQL_POLICY = ModuleGatePolicy(
     module="sql",
     required=(
         _req("pass_rate", "通过率"),
-        _req("router_hit", "路由"),
-        _req("safety_pass", "安全"),
-        _req("execution_match", "执行"),
+        _req("router_hit", "路由", live_conditional=True),
+        _req("safety_pass", "安全", live_conditional=True),
+        _req("execution_match", "执行", live_conditional=True),
     ),
     optional=(
         # eval-closure B1：与 RAG 同口径的表现阈值（optional，有值才裁决）
@@ -294,6 +313,7 @@ def _evaluate_requirement(
     th: dict[str, float],
     *,
     required: bool,
+    adaptive_reason: str = "",
 ) -> dict[str, Any]:
     """评估单条指标 → item dict。passed 三值：True/False/None(None=N/A)。"""
     item = {
@@ -323,7 +343,7 @@ def _evaluate_requirement(
                 ),
             })
         else:
-            item.update({"value": None, "reason": "模块未产出该指标"})
+            item.update({"value": None, "reason": adaptive_reason or "模块未产出该指标"})
         return item
 
     item["value"] = round(float(val), 4)
@@ -376,11 +396,24 @@ def _compute_single_module_gate(
     th: dict[str, float],
     tier_summaries: list[Any],
     ragas_mode: bool,
+    has_reject_cases: bool = True,
+    is_live: bool = True,
 ) -> list[dict[str, Any]]:
     policy = policy_for(module)
     items: list[dict[str, Any]] = []
     for req in policy.required:
-        items.append(_evaluate_requirement(req, metrics, th, required=True))
+        if req.reject_conditional and not has_reject_cases:
+            items.append(_evaluate_requirement(
+                req, metrics, th, required=False,
+                adaptive_reason="套件无拒答负样本，安全拒答门禁自适应跳过",
+            ))
+        elif req.live_conditional and not is_live:
+            items.append(_evaluate_requirement(
+                req, metrics, th, required=False,
+                adaptive_reason="离线模式未调用模型，该指标自适应跳过",
+            ))
+        else:
+            items.append(_evaluate_requirement(req, metrics, th, required=True))
     for req in policy.optional:
         if req.ragas_conditional:
             # 条件性 required：evaluator_mode 含 ragas 时按 required 判，
@@ -451,8 +484,19 @@ def compute_module_release_gate(
     module = str(getattr(report, "module", "") or "")
     ragas_mode = "ragas" in str((getattr(report, "metadata", None) or {}).get("evaluator_mode", "") or "")
     tier_summaries = list(getattr(report, "tier_summaries", None) or [])
-
     summaries = list(getattr(report, "summaries", None) or [])
+    run_mode = str(getattr(report, "mode", "unknown") or "unknown").lower()
+    is_live = run_mode == "live"
+
+    results = list(getattr(report, "results", None) or [])
+    has_reject_cases = any(
+        bool(
+            (getattr(r, "expected", {}) or {}).get("should_reject")
+            or (getattr(r, "expected", {}) or {}).get("behavior") == "refuse"
+            or (getattr(r, "actual", {}) or {}).get("should_reject")
+        )
+        for r in results
+    ) if results else True
 
     def _gate_metrics(s: Any) -> dict[str, Any]:
         # pass_rate 是 ModuleSummary 顶层字段，不在 aggregate_metrics 产物
@@ -472,7 +516,10 @@ def compute_module_release_gate(
 
     items: list[dict[str, Any]] = []
     for mod, metrics in targets:
-        mod_items = _compute_single_module_gate(mod, metrics, th, tier_summaries, ragas_mode)
+        mod_items = _compute_single_module_gate(
+            mod, metrics, th, tier_summaries, ragas_mode,
+            has_reject_cases=has_reject_cases, is_live=is_live,
+        )
         for it in mod_items:
             it["module"] = mod
         items.extend(mod_items)

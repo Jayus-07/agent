@@ -335,6 +335,9 @@ def build_eval_scope(
     )
 
 
+_COMMON_DOC_EXTS = {".md", ".docx", ".doc", ".pdf", ".txt", ".json", ".csv"}
+
+
 def _doc_id_match(actual_id: str, expected_set: set[str], resolver=None, kb_id: str = "", department: str = "") -> bool:
     """规范化比较 — 通过 resolver 桥接 hash doc_id ↔ filename。"""
     if actual_id in expected_set:
@@ -344,9 +347,21 @@ def _doc_id_match(actual_id: str, expected_set: set[str], resolver=None, kb_id: 
             if resolver.matches(actual_id, exp, kb_id, department):
                 return True
         return False
-    actual_base = Path(actual_id.replace("\\", "/")).name
+    actual_path = Path(actual_id.replace("\\", "/"))
+    actual_base = actual_path.name
+    actual_stem = actual_path.stem
+    actual_ext = actual_path.suffix.lower()
     for exp in expected_set:
-        if actual_base == Path(exp.replace("\\", "/")).name:
+        exp_path = Path(exp.replace("\\", "/"))
+        if actual_base == exp_path.name:
+            return True
+        if (
+            actual_stem
+            and actual_stem == exp_path.stem
+            and len(actual_stem) >= 2
+            and actual_ext in _COMMON_DOC_EXTS
+            and exp_path.suffix.lower() in _COMMON_DOC_EXTS
+        ):
             return True
     return False
 
