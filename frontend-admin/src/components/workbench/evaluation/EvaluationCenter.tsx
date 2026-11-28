@@ -173,7 +173,11 @@ export default function EvaluationCenter() {
             )}
           </div>
         )}
-        {activeTab === 'traces' && <div className="mx-auto max-w-[1200px] px-5 py-5"><FailedTracesTab /></div>}
+        {activeTab === 'traces' && (
+          <div className="mx-auto max-w-[1200px] px-5 py-5">
+            <FailedTracesTab domain={domain} />
+          </div>
+        )}
         {activeTab === 'runs' && (
           <div className="mx-auto max-w-[1200px] px-5 py-5">
             <RunsTab
