@@ -9,7 +9,13 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(navigation.query),
 }))
 vi.mock('./proto/DatasetsTab', () => ({ default: () => <div data-panel="datasets">数据集</div> }))
-vi.mock('./proto/FailedTracesTab', () => ({ default: () => <div data-panel="traces">失败 Trace</div> }))
+const tracesProps = vi.hoisted(() => ({ last: {} as Record<string, unknown> }))
+vi.mock('./proto/FailedTracesTab', () => ({
+  default: (props: { domain?: string }) => {
+    tracesProps.last = { domain: props.domain ?? null }
+    return <div data-panel="traces" data-domain={props.domain || ''}>失败 Trace</div>
+  },
+}))
 const runsProps = vi.hoisted(() => ({ last: {} as Record<string, unknown> }))
 vi.mock('./proto/RunsTab', () => ({ default: (props: { promptPrefill?: { key: string; version: string } | null; domain?: string }) => {
   runsProps.last = { promptPrefill: props.promptPrefill ?? null, domain: props.domain ?? null }
@@ -70,12 +76,18 @@ describe('EvaluationCenter', () => {
     expect(compare.container.querySelector('[data-panel="runs"]')).not.toBeNull()
     act(() => compare.root.unmount())
   })
-  it('失败 Trace 深链进入 Trace 功能区', () => {
-    navigation.query = 'tab=traces'
+  it('失败 Trace 深链进入 Trace 功能区并透传业务域', () => {
+    navigation.query = 'tab=traces&domain=sql'
     const traces = mount()
     expect(traces.container.querySelector('[data-panel="traces"]')).not.toBeNull()
+    expect(traces.container.querySelector('[data-panel="traces"]')?.getAttribute('data-domain')).toBe('sql')
     expect(traces.container.querySelector('[role="tabpanel"]')?.getAttribute('aria-label')).toBe('失败 Trace')
     act(() => traces.root.unmount())
+
+    navigation.query = 'tab=traces'
+    const defaultTraces = mount()
+    expect(defaultTraces.container.querySelector('[data-panel="traces"]')?.getAttribute('data-domain')).toBe('all')
+    act(() => defaultTraces.root.unmount())
   })
   it('Prompt 治理深链预填运行参数', () => {
     navigation.query = 'tab=runs&prompt=rag.qa&pv=23'
